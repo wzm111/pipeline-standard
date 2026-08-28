@@ -14,6 +14,7 @@ agents/                     5 个通用角色(软链到 ~/.claude/agents/)
 skills/pipeline/SKILL.md    /pipeline 斜杠命令:编排流程、两道人工闸口、规模分流、team 直聊
 hooks/pipeline-guard.sh     禁区硬拦截 hook(PreToolUse),流水线运行期间生效
 templates/PIPELINE.md       项目契约模板(❏ 占位符)
+templates/single-agent-pipeline.md  便携版:单 agent 顺序执行全流程(非 Claude Code 工具用)
 install.sh                  安装/同步脚本(软链 agents/skills/hooks 到 ~/.claude/)
 init-project.sh             项目接入脚本(拷契约模板 + 配 hook + gitignore,幂等)
 ```
@@ -31,6 +32,19 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 - **禁区硬拦截**:hook 在 `/pipeline` 运行期间(存在 `tmp/pipeline/.active` 标记)按 PIPELINE.md ⑤ 的 `pipeline-guard` 块拦截越界 Write/Edit,不依赖 prompt 自觉
 - **打回硬上限**:范围评审 ≤2 轮,测试 ≤3 轮,到顶停报
 
+## 非 Claude Code 工具:便携模式
+
+流水线分三层,前两层与工具无关——**PIPELINE.md 契约**(纯 markdown)与**角色 prompt**(自然语言纪律);锁死在 Claude Code 的只有编排执行层(subagent、skills、PreToolUse hook、team 直聊)。
+
+`templates/single-agent-pipeline.md` 是便携版:5 个角色串成单 agent 顺序执行,拷到任意 agentic 编码工具即可用(Codex `~/.codex/prompts/`、Gemini 自定义命令、Cursor 直接粘贴)。方法论、闸口、批次循环、打回上限与主版完全一致。
+
+Claude Code 版的独有优势(= 便携版的降级项):
+
+- **真角色隔离**:每角色独立 subagent 冷启动,tester 看不到 dev 的实现思路,对抗式找茬是真对抗;便携版同一上下文,靠纪律模拟
+- **批次并行**:qa 测上一批与 dev 开下一批墙钟重叠;便携版只能串行
+- **禁区硬拦截**:⑤ 白名单由 hook 机器执行,不靠 prompt 自觉;便携版无此保障
+- **打回直聊**:dev⇄qa teammate 互发消息,不经调度员上下文,省 token;便携版单上下文无此需求,但也失去上下文瘦身收益
+
 ## 使用
 
 1. 安装(每台机器一次):`git clone` 本仓库后 `bash install.sh`(只做软链 agents/skills/hooks 到 `~/.claude/`,不动其他配置)。
@@ -38,6 +52,7 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 3. 在项目的 Claude Code 会话里:`/pipeline <任务描述>`。
 4. 中间产物在项目的 `tmp/pipeline/`(plan.md + plan-<批次>.md / qa-report.md / release-notes.md)。同一项目同一时刻只跑一条 `/pipeline`(artifact 是单例,并行会互踩)。
 5. 流水线异常中断后若普通编辑被 hook 误拦,删除 `tmp/pipeline/.active` 即可。
+6. 非 Claude Code 工具(Codex/Gemini/Cursor 等)用便携模式(见上节),无需 install.sh。
 
 ## 角色工具箱(推荐)
 
