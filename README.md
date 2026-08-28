@@ -14,7 +14,8 @@ agents/                     5 个通用角色(软链到 ~/.claude/agents/)
 skills/pipeline/SKILL.md    /pipeline 斜杠命令:编排流程、两道人工闸口、规模分流、team 直聊
 hooks/pipeline-guard.sh     禁区硬拦截 hook(PreToolUse),流水线运行期间生效
 templates/PIPELINE.md       项目契约模板(❏ 占位符)
-install.sh                  安装/同步脚本
+install.sh                  安装/同步脚本(软链 agents/skills/hooks 到 ~/.claude/)
+init-project.sh             项目接入脚本(拷契约模板 + 配 hook + gitignore,幂等)
 ```
 
 ## 流程特性
@@ -59,4 +60,8 @@ git clone <本目录的远端地址> && cd pipeline-standard && bash install.sh
 
 ## 接入新项目
 
-复制 `templates/PIPELINE.md` 到项目根,逐项替换 ❏,加上 hook 配置,10 分钟完成接入。
+```bash
+bash init-project.sh /path/to/项目     # 或在项目目录里直接 bash <本目录>/init-project.sh
+```
+
+一条命令完成:拷贝 `templates/PIPELINE.md` 到项目根 + 合并写入 `.claude/settings.json` 禁区 hook + 确认 `.gitignore` 含 `/tmp/`。幂等,重复执行不覆盖已有文件。之后编辑 PIPELINE.md 逐项替换 ❏,即可 `/pipeline <任务描述>`。
