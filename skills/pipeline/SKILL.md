@@ -37,7 +37,10 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
    - 契约没声明的工具不装,不做多余动作
 5. skill 自检(契约 ② 声明了设计类 skill 时):
    - 探测 `~/.claude/skills/<name>/` 与项目 `.claude/skills/<name>/` 是否存在;存在 → 过
-   - 缺失且契约附了 git 来源 → `git clone <来源> ~/.claude/skills/<name>` 安装,装完确认目录存在
+   - 缺失且契约附了 git 来源 → 克隆到临时目录后安装(兼容两种仓库布局):
+     - 仓库根有 `SKILL.md` → 整体拷到 `~/.claude/skills/<name>/`
+     - 否则查仓库内 `.claude/skills/<name>/` 子目录 → 拷它到 `~/.claude/skills/<name>/`
+     - 两种都没有 → 按安装失败处理
    - 缺失且无来源/安装失败 → 告知用户,并在派发给 developer 的 prompt 里注明「该 skill 本轮不可用,降级按基线与规范处理」,**不因此中断流水线**
 
 ## 流程
