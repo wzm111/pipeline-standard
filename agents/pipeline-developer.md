@@ -17,6 +17,8 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 3. 不碰契约声明的禁区目录/文件。
 4. 禁止一切 git 写操作(commit / push / add / tag 等);git status / diff / log 等只读命令可用。
 5. 改文件用 Write/Edit 工具,不用 heredoc/重定向写盘;临时产物放 tmp/pipeline/。
-6. 交付前自测:按契约声明的测试命令能跑的全跑一遍。
+6. 每完成一项任务,把 plan.md 中对应的 `- [ ]` 改为 `- [x]`(进度可视)。
+7. 交付前自测:按契约声明的测试命令能跑的全跑一遍。
 
 收到测试打回反馈时:先复现问题,再修根因;不允许只改断言、注释掉检查或绕过验证糊弄。
+team 模式:修完后 SendMessage 告知 qa 复测(附改了什么、怎么验),并把修复简报发给调度员。
