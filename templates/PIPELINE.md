@@ -34,6 +34,24 @@
 
 > 约定:本节引用的外部 CLI(如 `fg-core`)由 /pipeline 启动时自检,缺失自动全局安装,装失败则跳过对应项并在测试报告注明,不阻断流水线。
 
+❏ 可选:推荐测试工具箱(按项目的测试面选用,取消注释并补执行目录;全局 CLI 型缺失时 /pipeline 自动安装,devDep 型需项目自行 `npm i -D`):
+
+```bash
+# ── 静态页 / UI ──
+# pnpm test:e2e          Playwright E2E + 多断点截图/横向溢出实测(devDep 型,日常批次 gate)
+# npx axe                @axe-core a11y 自动审计(devDep 型,日常/收口)
+# lhci autorun           Lighthouse CI 性能硬指标 LCP/CLS(全局 CLI @lhci/cli,里程碑收口用)
+#
+# ── API ──
+# curl -sf ...           接口冒烟:状态码/关键字段(系统自带,零成本,日常)
+# pnpm test:contract     响应体 schema 契约校验(zod/ajv,devDep 型,日常)
+# bru run                Bruno 接口集合回归,文本 collection 存仓库(全局 CLI @usebruno/cli)
+# schemathesis run <spec-url>   OpenAPI 驱动的对抗式 fuzz 边界/异常用例(收口;需后端暴露 spec)
+#
+# ── 性能 ──
+# k6 run <script>        压测(系统包,里程碑级)
+```
+
 ## ④ 上线方式
 
 - **人工执行**:发布工程师(E)只产出变更摘要、Conventional Commits 提交建议与人工待办;禁止任何 git 写操作与部署动作。

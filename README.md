@@ -38,6 +38,23 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 3. 中间产物在项目的 `tmp/pipeline/`(plan.md + plan-<批次>.md / qa-report.md / release-notes.md)。同一项目同一时刻只跑一条 `/pipeline`(artifact 是单例,并行会互踩)。
 4. 流水线异常中断后若普通编辑被 hook 误拦,删除 `tmp/pipeline/.active` 即可。
 
+## 测试工具箱(推荐)
+
+通用层不硬编码任何测试工具——由项目契约 ③ 声明,`/pipeline` 启动时自检、缺失自动安装(全局 CLI 型)。推荐按测试面选用,`templates/PIPELINE.md` ③ 节有同份注释清单可直接启用:
+
+| 测试面 | 工具 | 安装方式 | 建议场景 |
+| ------ | ---- | -------- | -------- |
+| 静态页/UI | Playwright(E2E/多断点截图) | 项目 devDep | 日常批次 gate |
+| 静态页/UI | @axe-core(a11y 审计) | 项目 devDep | 日常/收口 |
+| 静态页/UI | Lighthouse CI(LCP/CLS 硬指标) | 全局 `lhci` | 里程碑收口 |
+| API | curl / vitest+fetch(冒烟) | 系统自带 | 日常 |
+| API | zod/ajv(响应契约校验) | 项目 devDep | 日常 |
+| API | Bruno(集合回归,文本存仓库) | 全局 `bru` | 日常/收口 |
+| API | Schemathesis(OpenAPI 对抗 fuzz) | pip/brew | 收口,契合 tester 对抗式找茬 |
+| 性能 | k6(压测) | 系统包 | 里程碑级 |
+
+原则:日常批次 gate 只跑快反馈项(lint/typecheck/单测/E2E 冒烟),重工具(Lighthouse/fuzz/压测)声明为里程碑收口用,避免每次 run 都烧全量。
+
 ## 移植到新电脑
 
 ```bash
