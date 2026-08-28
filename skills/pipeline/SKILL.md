@@ -40,14 +40,14 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 开
 
 ### 第 3 步:开发 ⇄ 测试(team 直聊模式,≤3 轮)
 
-用 Agent 工具把两个角色起为**命名 teammate**,让它们直接对话,你只监控:
+首轮交接经由你,打回循环让两个 teammate 直接对话(SendMessage 会唤醒已完成的对端续上下文):
 
-1. 先起 `pipeline-developer`(命名 `dev`):按 plan.md 开发;完成后用 SendMessage 通知 `qa` 开始测试,并把完成简报发给你。
-2. 起 `pipeline-tester`(命名 `qa`):收到 dev 通知后按契约测试命令实测,报告写 `tmp/pipeline/qa-report.md`:
+1. 起 `pipeline-developer`(命名 `dev`):按 plan.md 开发;完成后**向你简报**(此时 qa 还不存在,不让它直接发消息)。
+2. 起 `pipeline-tester`(命名 `qa`):按契约测试命令实测,报告写 `tmp/pipeline/qa-report.md`:
    - `gate: FAIL` → qa 把失败清单(复现步骤 + 实际 vs 预期)直接 SendMessage 给 `dev` 修复,同时把 gate 结论简报给你
    - `gate: CONCERNS` → qa 停下等你;你把非阻断问题展示给用户裁决:**豁免 → 进第 4 步;不豁免 → 转交 dev 修复**
    - `gate: PASS` → 进第 4 步
-3. `dev` 收到打回 → 先复现再修,修完 SendMessage 通知 `qa` 复测,并给你修复简报。
+3. `dev` 收到打回 → 先复现再修,修完 SendMessage 通知 `qa` 复测,并给你修复简报。此后打回循环在 dev ⇄ qa 之间直聊,你只收简报。
 
 你的职责只是:**轮次计数(到 3 轮仍 FAIL → 停止汇报,附最新 qa-report.md)、CONCERNS 裁决、监督角色是否失联/跑偏**。
 

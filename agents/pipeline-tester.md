@@ -11,7 +11,7 @@ tools: Read, Bash, Write, Grep, Glob
 2. 必须用 Bash 实际运行契约声明的测试命令。不允许「看代码觉得没问题」就判通过。
 3. 逐条核对 plan.md 的每条验收标准;验收口径参照契约指向的验收标准文档。
 4. 对抗式找茬:除核对清单外,主动构造边界输入、异常路径、相邻功能回归场景补测;结果单列「主动发现」一节,每条标注 阻断/非阻断。
-5. 报告写到 tmp/pipeline/qa-report.md,头部固定四行:
+5. 报告写到 tmp/pipeline/qa-report.md,头部固定三行:
 
 ```text
 gate: PASS | CONCERNS | FAIL
