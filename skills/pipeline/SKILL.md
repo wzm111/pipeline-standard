@@ -27,6 +27,9 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
      | `bru` | `npm install -g @usebruno/cli` |
      | `schemathesis` | `pip install schemathesis`(或 `brew install schemathesis`) |
      | `k6` | `brew install k6` |
+     | `sg` | `npm install -g @ast-grep/cli` |
+     | `depcruise` | `npm install -g dependency-cruiser` |
+     | `gitleaks` | `brew install gitleaks` |
 
      速查表没有的 CLI → 尝试 `npm install -g <同名包>`,失败按降级处理
    - 契约声明的是**项目 devDep 型**工具(如 playwright、@axe-core/playwright)→ 不全局安装,提示该项目应自行 `npm i -D` 并接入 npm scripts,本轮跳过对应项并在 qa-report 说明

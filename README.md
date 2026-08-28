@@ -38,20 +38,25 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 3. 中间产物在项目的 `tmp/pipeline/`(plan.md + plan-<批次>.md / qa-report.md / release-notes.md)。同一项目同一时刻只跑一条 `/pipeline`(artifact 是单例,并行会互踩)。
 4. 流水线异常中断后若普通编辑被 hook 误拦,删除 `tmp/pipeline/.active` 即可。
 
-## 测试工具箱(推荐)
+## 角色工具箱(推荐)
 
-通用层不硬编码任何测试工具——由项目契约 ③ 声明,`/pipeline` 启动时自检、缺失自动安装(全局 CLI 型)。推荐按测试面选用,`templates/PIPELINE.md` ③ 节有同份注释清单可直接启用:
+通用层不硬编码任何工具——由项目契约 ③ 声明,`/pipeline` 启动时自检、缺失自动安装(全局 CLI 型)。求精不求多,每角色 1–2 个;`templates/PIPELINE.md` ③ 节有同份注释清单(含条件启用项)可直接启用:
 
-| 测试面 | 工具 | 安装方式 | 建议场景 |
+| 面/角色 | 工具 | 安装方式 | 建议场景 |
 | ------ | ---- | -------- | -------- |
-| 静态页/UI | Playwright(E2E/多断点截图) | 项目 devDep | 日常批次 gate |
-| 静态页/UI | @axe-core(a11y 审计) | 项目 devDep | 日常/收口 |
-| 静态页/UI | Lighthouse CI(LCP/CLS 硬指标) | 全局 `lhci` | 里程碑收口 |
-| API | curl / vitest+fetch(冒烟) | 系统自带 | 日常 |
-| API | zod/ajv(响应契约校验) | 项目 devDep | 日常 |
-| API | Bruno(集合回归,文本存仓库) | 全局 `bru` | 日常/收口 |
-| API | Schemathesis(OpenAPI 对抗 fuzz) | pip/brew | 收口,契合 tester 对抗式找茬 |
-| 性能 | k6(压测) | 系统包 | 里程碑级 |
+| 测试·静态页/UI | Playwright(E2E/多断点截图) | 项目 devDep | 日常批次 gate |
+| 测试·静态页/UI | @axe-core(a11y 审计) | 项目 devDep | 日常/收口 |
+| 测试·静态页/UI | Lighthouse CI(LCP/CLS 硬指标) | 全局 `lhci` | 里程碑收口 |
+| 测试·API | curl / vitest+fetch(冒烟) | 系统自带 | 日常 |
+| 测试·API | zod/ajv(响应契约校验) | 项目 devDep | 日常 |
+| 测试·API | Bruno(集合回归,文本存仓库) | 全局 `bru` | 日常/收口 |
+| 测试·API | Schemathesis(OpenAPI 对抗 fuzz) | pip/brew | 收口,契合 tester 对抗式找茬 |
+| 测试·性能 | k6(压测) | 系统包 | 里程碑级 |
+| 拆解/开发 | ast-grep(结构搜索/codemod,定位准省 token) | 全局 `sg` | 日常 |
+| 守门员 | dependency-cruiser(模块边界/依赖方向机器校验) | 项目 devDep+规则文件 | 收口 |
+| 发布 | gitleaks(提交前密钥泄露扫描) | 系统包 brew | 闸口 2 前,建议默认开 |
+
+条件启用(只进模板注释,不进主表):knip(死代码扫描,项目体量大后)、size-limit(bundle 体积门禁,有体积验收条时)、npm audit(依赖漏洞,零安装)。
 
 原则:日常批次 gate 只跑快反馈项(lint/typecheck/单测/E2E 冒烟),重工具(Lighthouse/fuzz/压测)声明为里程碑收口用,避免每次 run 都烧全量。
 
