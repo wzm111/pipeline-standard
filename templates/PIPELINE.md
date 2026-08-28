@@ -39,3 +39,9 @@
 - 流水线可写范围:❏ 目录;不可动:❏ 目录/文件。
 - 禁止引入的依赖/模式:❏。
 - 流水线中间产物统一放 `tmp/pipeline/`(确认 `tmp/` 已加入项目 .gitignore)。
+- **硬拦截(可选,推荐)**:项目 `.claude/settings.json` 按 pipeline-standard README 配置 PreToolUse hook 后,下面的机器可读块在 /pipeline 运行期间生效(白名单模式:只允许写列出的前缀;或改用 `deny-write` 黑名单模式):
+
+<!-- pipeline-guard:allow-write
+❏ src/
+❏ tmp/
+-->
