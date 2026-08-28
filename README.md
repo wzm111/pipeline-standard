@@ -35,7 +35,7 @@ install.sh                  安装/同步脚本
 {
   "hooks": {
     "PreToolUse": [
-      { "matcher": "Write|Edit|NotebookEdit",
+      { "matcher": "Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [{ "type": "command", "command": "bash ~/.claude/hooks/pipeline-guard.sh" }] }
     ]
   }
