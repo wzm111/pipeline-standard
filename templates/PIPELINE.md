@@ -18,7 +18,7 @@
 
 - 架构基线:❏ 架构文档路径(最高优先级的技术决策必须在此声明)
 - 工程约定:❏ 如项目根的 CLAUDE.md / CONTRIBUTING.md
-- UI 设计辅助(可选):❏ 声明 developer 可调用的设计类 skill(如 ui-ux-pro-max),处理视觉基线未覆盖的细节;不声明则 developer 不调任何 skill
+- UI 设计辅助(可选):❏ 声明 developer 可调用的设计类 skill(如 ui-ux-pro-max),处理视觉基线未覆盖的细节;不声明则 developer 不调任何 skill。可附 git 来源(缺失时 /pipeline 自动 clone 到 ~/.claude/skills/);无来源则缺失时降级不阻断
 - 其他规范:❏
 
 ## ③ 测试命令

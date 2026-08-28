@@ -46,7 +46,7 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 | ------ | ---- | -------- | -------- |
 | 守门员 | dependency-cruiser(模块边界/依赖方向机器校验) | 项目 devDep+规则文件 | 收口 |
 | 拆解/开发 | ast-grep(结构搜索/codemod,定位准省 token) | 全局 `sg` | 日常 |
-| 开发·设计辅助 | ui-ux-pro-max(设计 skill:风格/调色板/字体/UX 准则) | Claude skill,契约声明后 developer 可调 | UI 任务,基线未覆盖的细节 |
+| 开发·设计辅助 | ui-ux-pro-max(设计 skill:风格/调色板/字体/UX 准则) | Claude skill;契约 ② 声明后 developer 可调,缺失时自检 clone(附 git 来源)或降级 | UI 任务,基线未覆盖的细节 |
 | 测试·静态页/UI | Playwright(E2E/多断点截图) | 项目 devDep | 日常批次 gate |
 | 测试·静态页/UI | @axe-core(a11y 审计) | 项目 devDep | 日常/收口 |
 | 测试·静态页/UI | Lighthouse CI(LCP/CLS 硬指标) | 全局 `lhci` | 里程碑收口 |
