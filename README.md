@@ -33,10 +33,11 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 
 ## 使用
 
-1. 项目接入:`bash init-project.sh /path/to/项目`(拷契约模板 + 配 hook + gitignore,详见「接入新项目」一节),然后编辑项目根的 `PIPELINE.md` 逐项替换 ❏。契约随项目 git 管理。
-2. 在项目的 Claude Code 会话里:`/pipeline <任务描述>`。
-3. 中间产物在项目的 `tmp/pipeline/`(plan.md + plan-<批次>.md / qa-report.md / release-notes.md)。同一项目同一时刻只跑一条 `/pipeline`(artifact 是单例,并行会互踩)。
-4. 流水线异常中断后若普通编辑被 hook 误拦,删除 `tmp/pipeline/.active` 即可。
+1. 安装(每台机器一次):`git clone` 本仓库后 `bash install.sh`(只做软链 agents/skills/hooks 到 `~/.claude/`,不动其他配置)。
+2. 项目接入:`bash init-project.sh /path/to/项目`(拷契约模板 + 配 hook + gitignore,详见「接入新项目」一节),然后编辑项目根的 `PIPELINE.md` 逐项替换 ❏。契约随项目 git 管理。
+3. 在项目的 Claude Code 会话里:`/pipeline <任务描述>`。
+4. 中间产物在项目的 `tmp/pipeline/`(plan.md + plan-<批次>.md / qa-report.md / release-notes.md)。同一项目同一时刻只跑一条 `/pipeline`(artifact 是单例,并行会互踩)。
+5. 流水线异常中断后若普通编辑被 hook 误拦,删除 `tmp/pipeline/.active` 即可。
 
 ## 角色工具箱(推荐)
 
@@ -60,17 +61,6 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 条件启用(只进模板注释,不进主表):knip(死代码扫描,项目体量大后)、size-limit(bundle 体积门禁,有体积验收条时)、npm audit(依赖漏洞,零安装)。
 
 原则:日常批次 gate 只跑快反馈项(lint/typecheck/单测/E2E 冒烟),重工具(Lighthouse/fuzz/压测)声明为里程碑收口用,避免每次 run 都烧全量。
-
-## 移植到新电脑
-
-```bash
-# 方式一:git(推荐,先推到私有远端)
-git clone <本目录的远端地址> && cd pipeline-standard && bash install.sh
-
-# 方式二:直接拷贝整个目录后跑 install.sh
-```
-
-`install.sh` 只做软链(agents / skills / hooks),不动其他配置。API key、`settings.json` 等敏感/机器相关配置不属于本体系,无需迁移。
 
 ## 接入新项目
 
