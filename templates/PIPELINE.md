@@ -3,6 +3,9 @@
 > 通用流水线(`/pipeline`)在本项目的接入口。所有流水线角色开工前必读。
 > 本文件只声明「在哪、怎么验、什么不能碰」,具体内容以被引用的文档为准。
 > 接入时逐项替换 ❏ 处内容,删除本说明行。
+>
+> 🛠 本契约依赖流水线工具:**[pipeline-standard](https://github.com/wzm111/pipeline-standard)**
+> 新成员安装:`git clone` 该仓库后 `bash install.sh`(软链角色/命令/hook 到 ~/.claude/),本项目接入已由 `init-project.sh` 完成。
 
 ## ① 需求基线
 
