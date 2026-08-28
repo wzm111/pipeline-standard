@@ -29,23 +29,10 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 
 ## 使用
 
-1. 每个项目根放一个 `PIPELINE.md`(契约,五节:需求基线 / 架构规范 / 测试命令 / 上线方式 / 禁区边界),随项目 git 管理。模板见 `templates/PIPELINE.md`,复制后逐项替换 ❏ 即可。
-2. (推荐)项目 `.claude/settings.json` 配置禁区硬拦截 hook:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      { "matcher": "Write|Edit|MultiEdit|NotebookEdit",
-        "hooks": [{ "type": "command", "command": "bash ~/.claude/hooks/pipeline-guard.sh" }] }
-    ]
-  }
-}
-```
-
-3. 在项目的 Claude Code 会话里:`/pipeline <任务描述>`。
-4. 中间产物在项目的 `tmp/pipeline/`(plan.md / qa-report.md / release-notes.md)。同一项目同一时刻只跑一条 `/pipeline`(artifact 是单例,并行会互踩)。
-5. 流水线异常中断后若普通编辑被 hook 误拦,删除 `tmp/pipeline/.active` 即可。
+1. 项目接入:`bash init-project.sh /path/to/项目`(拷契约模板 + 配 hook + gitignore,详见「接入新项目」一节),然后编辑项目根的 `PIPELINE.md` 逐项替换 ❏。契约随项目 git 管理。
+2. 在项目的 Claude Code 会话里:`/pipeline <任务描述>`。
+3. 中间产物在项目的 `tmp/pipeline/`(plan.md / qa-report.md / release-notes.md)。同一项目同一时刻只跑一条 `/pipeline`(artifact 是单例,并行会互踩)。
+4. 流水线异常中断后若普通编辑被 hook 误拦,删除 `tmp/pipeline/.active` 即可。
 
 ## 移植到新电脑
 
