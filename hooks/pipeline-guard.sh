@@ -18,6 +18,11 @@
 # 依赖:python3(macOS 自带);无 python3 时退化为放行并告警。
 set -u
 
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "[pipeline-guard] 警告:未找到 python3,禁区拦截失效,本次放行" >&2
+  exit 0
+fi
+
 INPUT=$(cat)
 
 # --- 提取 cwd 与目标路径(路径可能含空格,分开提取) ---
