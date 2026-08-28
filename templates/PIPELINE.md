@@ -50,6 +50,16 @@
 #
 # ── 性能 ──
 # k6 run <script>        压测(系统包,里程碑级)
+#
+# ── 角色工具 ──
+# sg scan                ast-grep 结构搜索/codemod:B 拆解定位涉及文件、C 批量改写(全局 CLI @ast-grep/cli,日常)
+# depcruise --validate   模块边界/依赖方向校验:A 验收「无违规」机器化(devDep 型 dependency-cruiser + 规则文件存仓库,收口)
+# gitleaks detect        提交前密钥泄露扫描:E 闸口 2 前执行(系统包 brew,建议默认开)
+#
+# ── 条件启用(项目需要时再开) ──
+# npx knip               死代码/未用导出/未用依赖扫描(项目体量大后,收口,零安装)
+# npx size-limit         bundle 体积预算硬门禁(有体积验收条时,devDep 型)
+# npm audit              依赖漏洞扫描(收口,零安装)
 ```
 
 ## ④ 上线方式
