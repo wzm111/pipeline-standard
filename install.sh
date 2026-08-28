@@ -23,7 +23,10 @@ done
 cat <<'NOTE'
 完成。Claude Code 新会话生效,触发方式:/pipeline <任务描述>
 
-禁区硬拦截(可选,推荐):在项目的 .claude/settings.json 加入:
+接入新项目(拷契约模板 + 配 hook + gitignore):
+  bash init-project.sh /path/to/项目
+
+禁区硬拦截的手动配置方式(一般不需要,init-project.sh 已代办):
 {
   "hooks": {
     "PreToolUse": [
