@@ -17,9 +17,19 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
    - **小任务**(预计改动 ≤2 个文件、无新依赖、不涉及新目录):走快速通道——跳过第 2 步范围评审,其余不变。
    - **标准任务**:走全流程。
 4. 工具自检(契约声明的外部 CLI 缺失时自动安装):
-   - 扫描 PIPELINE.md ③ 测试命令里引用的外部 CLI(当前实例:`fg-core` = frontend-guardian)
-   - 逐个 `command -v <cli>` 探测;已装 → 过
-   - 缺失 → 告知用户并自动安装(`fg-core` 用 `npm install -g frontend-guardian-core`),装完跑 `--help` 验证可用
+   - 扫描 PIPELINE.md ③ 测试命令里引用的外部 CLI,逐个 `command -v <cli>` 探测;已装 → 过
+   - 缺失 → 告知用户并按「已知工具速查」自动安装,装完跑 `--help` 验证可用:
+
+     | CLI | 安装命令 |
+     | --- | -------- |
+     | `fg-core` | `npm install -g frontend-guardian-core` |
+     | `lhci` | `npm install -g @lhci/cli` |
+     | `bru` | `npm install -g @usebruno/cli` |
+     | `schemathesis` | `pip install schemathesis`(或 `brew install schemathesis`) |
+     | `k6` | `brew install k6` |
+
+     速查表没有的 CLI → 尝试 `npm install -g <同名包>`,失败按降级处理
+   - 契约声明的是**项目 devDep 型**工具(如 playwright、@axe-core/playwright)→ 不全局安装,提示该项目应自行 `npm i -D` 并接入 npm scripts,本轮跳过对应项并在 qa-report 说明
    - 安装失败(断网/权限不足)→ 明确告知用户,并在派发给 tester 的 prompt 里注明「该工具本轮不可用,跳过对应扫描项,在 qa-report 说明」,**不因此中断流水线**(核心测试命令不受影响)
    - 契约没声明的工具不装,不做多余动作
 
