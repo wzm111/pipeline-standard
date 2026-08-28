@@ -44,6 +44,8 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 
 | 面/角色 | 工具 | 安装方式 | 建议场景 |
 | ------ | ---- | -------- | -------- |
+| 守门员 | dependency-cruiser(模块边界/依赖方向机器校验) | 项目 devDep+规则文件 | 收口 |
+| 拆解/开发 | ast-grep(结构搜索/codemod,定位准省 token) | 全局 `sg` | 日常 |
 | 测试·静态页/UI | Playwright(E2E/多断点截图) | 项目 devDep | 日常批次 gate |
 | 测试·静态页/UI | @axe-core(a11y 审计) | 项目 devDep | 日常/收口 |
 | 测试·静态页/UI | Lighthouse CI(LCP/CLS 硬指标) | 全局 `lhci` | 里程碑收口 |
@@ -52,8 +54,6 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 | 测试·API | Bruno(集合回归,文本存仓库) | 全局 `bru` | 日常/收口 |
 | 测试·API | Schemathesis(OpenAPI 对抗 fuzz) | pip/brew | 收口,契合 tester 对抗式找茬 |
 | 测试·性能 | k6(压测) | 系统包 | 里程碑级 |
-| 拆解/开发 | ast-grep(结构搜索/codemod,定位准省 token) | 全局 `sg` | 日常 |
-| 守门员 | dependency-cruiser(模块边界/依赖方向机器校验) | 项目 devDep+规则文件 | 收口 |
 | 发布 | gitleaks(提交前密钥泄露扫描) | 系统包 brew | 闸口 2 前,建议默认开 |
 
 条件启用(只进模板注释,不进主表):knip(死代码扫描,项目体量大后)、size-limit(bundle 体积门禁,有体积验收条时)、npm audit(依赖漏洞,零安装)。
