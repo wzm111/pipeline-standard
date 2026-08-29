@@ -12,7 +12,9 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
 1. 读项目根的 `PIPELINE.md`。
    - 不存在 → 停止,告诉用户「本项目还未接入流水线」,契约模板见 pipeline-standard 的 `templates/PIPELINE.md`,等其补齐后再来。
    - 存在 → 记住其中声明的需求基线、规范、测试命令、禁区,后续每个角色的 prompt 里都要带上「先读 PIPELINE.md」。
-2. 创建运行标记:`mkdir -p tmp/pipeline && touch tmp/pipeline/.active`(启用禁区硬拦截)。**流程无论以何种方式结束(完成/打回到顶/用户中止),都要 `rm -f tmp/pipeline/.active`**,否则会影响普通会话的写操作。
+2. 运行标记与断点:
+   - `mkdir -p tmp/pipeline && touch tmp/pipeline/.active`(启用禁区硬拦截)。**流程无论以何种方式结束(完成/打回到顶/用户中止),都要 `rm -f tmp/pipeline/.active`**,否则会影响普通会话的写操作。
+   - `tmp/pipeline/state.md` 存在且 status 非 done → 上次 run 未完成,向用户确认「续跑(现场在 state.md)还是新开」;新开 → 旧 state.md 改名 `state-<日期>.md` 留档。随后初始化本次 state.md(status / stage / batches / pending / next 五要素)。
 3. 规模分流(依据任务描述预判,拿不准就问用户):
    - **小任务**(预计改动 ≤2 个文件、无新依赖、不涉及新目录):走快速通道——跳过第 2 步范围评审,其余不变。
    - **标准任务**:走全流程。
@@ -41,7 +43,9 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
      - 仓库根有 `SKILL.md` → 整体拷到 `~/.claude/skills/<name>/`
      - 否则查仓库内 `.claude/skills/<name>/` 子目录 → 拷它到 `~/.claude/skills/<name>/`
      - 两种都没有 → 按安装失败处理
+   - **拷贝安装前先做安全扫描**:Grep 克隆内容(SKILL.md 及附带脚本)的可疑模式——`curl`/`wget` 管道执行、`base64 -d`、向声明外域名外发数据、读写 `~/.claude/skills/<name>/` 之外的路径、访问 `~/.ssh`/`~/.aws` 等敏感目录。命中 → 不安装,告知用户「该 skill 内容可疑,请人工审查后手动安装」,按降级处理
    - 缺失且无来源/安装失败 → 告知用户,并在派发给 developer 的 prompt 里注明「该 skill 本轮不可用,降级按基线与规范处理」,**不因此中断流水线**
+6. 通知通道(契约声明了通知 webhook 时):URL 从环境变量读(如 `FEISHU_WEBHOOK_URL`),未设置 → 静默跳过不阻断。三个触发时机各发一条纯文本(curl,内容=项目目录名 + 当前阶段 + 在等用户做什么):①闸口 1 等待确认;②CONCERNS 待裁决;③打回到顶或闸口 2 完成。除此之外不刷屏。
 
 ## 流程
 
@@ -51,7 +55,7 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
 - 返回**计划**(`tmp/pipeline/plan.md`;按批次组织时另有 `plan-<批次>.md` 详情文件)→ 进闸口 1。
 
 ### 闸口 1:计划确认(人工)
-把计划摘要展示给用户,**必须附带规模信息**:任务总数、批次数、预估时长量级(由 planner 写在计划头部)。里程碑级计划同时展示 planner 的「拆分建议」(本次跑哪几批、其余如何分次跑),由用户决定整体跑还是切片跑。**等用户明确确认后才继续**。用户有修改意见时,把意见交给 `pipeline-planner` 修订 plan.md 后再次展示确认——调度员不直接改计划。
+把计划摘要展示给用户,**必须附带规模信息**:任务总数、批次数、预估时长量级(由 planner 写在计划头部)。里程碑级计划同时展示 planner 的「拆分建议」(本次跑哪几批、其余如何分次跑),由用户决定整体跑还是切片跑。附一句:可为本 run 设上限(时长或批次数),不设则不限;设了就记入 state.md,此后表格式快照对照预算,≈80% 时主动预警并请示继续/收口。**等用户明确确认后才继续**。用户有修改意见时,把意见交给 `pipeline-planner` 修订 plan.md 后再次展示确认——调度员不直接改计划。
 
 ### 第 2 步:范围评审(Agent A,≤2 轮;小任务跳过)
 调 `pipeline-scope-guardian` 评审 plan.md:
@@ -89,7 +93,7 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
 `pipeline-releaser` 产出 `tmp/pipeline/release-notes.md`(变更摘要 + Conventional Commits 建议 + 人工待办)。
 
 ### 闸口 2:提交与上线(人工)
-先落复盘:把本次 run 的**既有信息**(转述,不额外读文件)写入 `tmp/pipeline/retro.md`——任务数/批次数、计划 ETA vs 实际时长、每批打回轮次、CONCERNS 次数与裁决结果、自检缺装项、一行经验(偏差最大的是什么)。随后展示 release-notes.md 摘要 + retro.md 摘要。**删除运行标记 `rm -f tmp/pipeline/.active`**。git 提交、追踪矩阵打勾、部署由用户手工执行——流水线到此结束。
+先落复盘:把本次 run 的**既有信息**(转述,不额外读文件)写入 `tmp/pipeline/retro.md`——任务数/批次数、计划 ETA vs 实际时长、每批打回轮次、CONCERNS 次数与裁决结果、自检缺装项、一行经验(偏差最大的是什么)。state.md 的 status 置 done。随后展示 release-notes.md 摘要 + retro.md 摘要。**删除运行标记 `rm -f tmp/pipeline/.active`**。git 提交、追踪矩阵打勾、部署由用户手工执行——流水线到此结束。
 
 ## 纪律
 
@@ -97,4 +101,5 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
 - 一个项目同一时刻只跑一条流水线:`tmp/pipeline/` 下的 artifact 是单例,并行触发会互相覆盖。
 - 角色之间只传 artifact 文件路径 + 结构化结论(第 3 步 team 直聊除外),不转发长篇对话。
 - 任何角色超时/崩溃,向用户报告当前阶段与已有产出,不要静默重试超过 1 次。
-- 任何提前停止的分支,结束前都必须删除 `tmp/pipeline/.active`。
+- state.md 维护:阶段切换、每批 gate 出结果、等待用户(闸口/裁决)、异常停止前都要更新(五要素,转述既有信息不额外读文件)。
+- 任何提前停止的分支,结束前都必须删除 `tmp/pipeline/.active` 并把 state.md 置 aborted 写明现场——续跑靠它自恢复。
