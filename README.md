@@ -1,5 +1,9 @@
 # pipeline-standard — 通用研发流水线标准
 
+![GitHub stars](https://img.shields.io/github/stars/wzm111/pipeline-standard?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
+![Last commit](https://img.shields.io/github/last-commit/wzm111/pipeline-standard?style=flat-square)
+
 端到端「需求 → 开发 → 测试 → 上线」多角色流水线,方法论通用,项目差异由项目根的 `PIPELINE.md` 契约注入。
 
 ## 组成
@@ -52,23 +56,35 @@ flowchart LR
 
 ## 流程特性
 
+### 核心流程
+
 - **澄清前置**:planner 发现实质性歧义先提问,不带着猜测拆计划
 - **规模分流**:小任务(≤2 文件、无新依赖)走快速通道,跳过范围评审
 - **批次级循环**:任务 >8 个时计划按批次组织(每批 ≤10 任务,plan.md 索引 + plan-<批次>.md 详情),每批 dev 交付即测;qa 测上一批与 dev 开下一批**并行重叠**,fail-fast 不攒到最后,单批打回 ≤3 轮
-- **批次进度简报**:每批 gate 向用户一行简报(进度 N/M + gate + 下一步);阶段转换(过半/全批交付/异常停止)再发**表格式快照**(批次状态+实测节奏+修正 ETA),长跑进度始终可见
-- **闸口 1 ETA**:计划头部带任务数/批次数/预估时长量级;里程碑级计划附「拆分建议」,人工决定整体跑还是切片跑
 - **team 直聊**:开发⇄测试打回循环由两个 teammate 直接 SendMessage,调度员只监控轮次与裁决,不经手中转(省上下文;异常时回退中转模式)
+- **闸口 1 ETA**:计划头部带任务数/批次数/预估时长量级;里程碑级计划附「拆分建议」,人工决定整体跑还是切片跑
+- **QA gate 三态**:`PASS / CONCERNS / FAIL`;CONCERNS 的非阻断问题交人工裁决豁免与否
+- **禁区硬拦截**:hook 在 `/pipeline` 运行期间(存在 `tmp/pipeline/.active` 标记)按 PIPELINE.md ⑤ 的 `pipeline-guard` 块拦截越界 Write/Edit,不依赖 prompt 自觉
+- **打回硬上限**:范围评审 ≤2 轮,测试 ≤3 轮,到顶停报
+
+### 效率与成本
+
+- **批次进度简报**:每批 gate 向用户一行简报(进度 N/M + gate + 下一步);阶段转换(过半/全批交付/异常停止)再发**表格式快照**(批次状态+实测节奏+修正 ETA),长跑进度始终可见
 - **上下文瘦身**:plan 按批拆文件、demo/大文档按需切片检索,控制各角色冷启动读入量
 - **复测收敛**:打回复测只覆盖修复项 + 影响面 + 快速命令层,首轮已过的重命令不重复跑——打回轮次不再烧全量 token
 - **模型分级**:tester 默认 sonnet、releaser 默认 haiku(角色 frontmatter 声明),重判断力角色跟随主会话模型
-- **复盘闭环**:闸口 2 落 `tmp/pipeline/retro.md`(规模 / ETA vs 实际 / 打回轮次),下次 run 拆解时 planner 读取校准预估
+- **Ponytail 编码纪律**:developer 遵循「最少代码原则」——优先复用现有实现/一行能解不写十行/不添加计划外抽象;测试、类型安全、可访问性、安全边界不许精简
+
+### 可靠性与恢复
+
 - **断点自恢复**:调度员全程维护 `tmp/pipeline/state.md`(stage/批次/待办/下一步),中断续跑读文件自恢复,不靠口头描述现场
 - **预算上限**:闸口 1 可设时长/批次上限,快照对照,≈80% 主动预警
 - **skill 安全扫描**:声明式 skill 自动 clone 安装前扫可疑模式(管道执行/外联/越权读写),命中拒装转人工
 - **可选通知**:契约声明 webhook(URL 走环境变量)后,闸口等待/待裁决/完成三时机推送,未设静默跳过
-- **QA gate 三态**:`PASS / CONCERNS / FAIL`;CONCERNS 的非阻断问题交人工裁决豁免与否
-- **禁区硬拦截**:hook 在 `/pipeline` 运行期间(存在 `tmp/pipeline/.active` 标记)按 PIPELINE.md ⑤ 的 `pipeline-guard` 块拦截越界 Write/Edit,不依赖 prompt 自觉
-- **打回硬上限**:范围评审 ≤2 轮,测试 ≤3 轮,到顶停报
+
+### 复盘闭环
+
+- **复盘闭环**:闸口 2 落 `tmp/pipeline/retro.md`(规模 / ETA vs 实际 / 打回轮次),下次 run 拆解时 planner 读取校准预估
 
 ## 非 Claude Code 工具:便携模式
 
@@ -122,3 +138,14 @@ bash init-project.sh /path/to/项目     # 或在项目目录里直接 bash <本
 ```
 
 一条命令完成:拷贝 `templates/PIPELINE.md` 到项目根 + 合并写入 `.claude/settings.json` 禁区 hook + 确认 `.gitignore` 含 `/tmp/`。幂等,重复执行不覆盖已有文件。之后编辑 PIPELINE.md 逐项替换 ❏,即可 `/pipeline <任务描述>`。
+
+## 最近更新
+
+- **v3.5.1**: developer 角色引入 Ponytail 编码纪律（最少代码原则）
+- **v3.5**: P1 四件套——state.md 断点自恢复 / skill 克隆安全扫描 / 可选 webhook 通知 / 预算上限
+- **v3.4**: P0 三件套——复测范围收敛 / retro.md 复盘闭环 / 模型分级（tester=sonnet, releaser=haiku）
+- **v3.3**: 便携模式（单 agent 降级版）+ README 流程图
+
+## License
+
+MIT
