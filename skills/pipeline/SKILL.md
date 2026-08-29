@@ -69,7 +69,7 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
    - 起(或唤醒)`pipeline-tester`(命名 `qa`)测该批——首轮 qa 还不存在,由你起并交接(传批次计划文件路径);后续批次直接 SendMessage 唤醒它续上下文。
    - 让 `dev` 继续开发下一批,**不等待 qa 结果**(测上一批与开下一批并行重叠)。
 3. qa 按「测试范围 = 该批任务 + 验收标准」实测,报告写 `tmp/pipeline/qa-report.md`(`batch:` 行注明批次):
-   - `gate: FAIL` → qa 把失败清单(复现步骤 + 实际 vs 预期)直接 SendMessage 给 `dev`;dev 暂停手头批次、优先修复被打回的批次,修完 SendMessage qa 复测。打回循环在 dev ⇄ qa 之间直聊,你只收简报。
+   - `gate: FAIL` → qa 把失败清单(复现步骤 + 实际 vs 预期)直接 SendMessage 给 `dev`;dev 暂停手头批次、优先修复被打回的批次,修完 SendMessage qa 复测。打回循环在 dev ⇄ qa 之间直聊,你只收简报。复测走收敛范围(修复项 + 影响面 + 快速命令层),不整批重跑。
    - `gate: CONCERNS` → qa 停下等你;你把非阻断问题展示给用户裁决:**豁免 → 该批封版;不豁免 → 转交 dev 修复**。
    - `gate: PASS` → 该批封版。
 4. 进度可见性(两档,都是把已有信息转述给用户,不额外读文件):
@@ -89,7 +89,7 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
 `pipeline-releaser` 产出 `tmp/pipeline/release-notes.md`(变更摘要 + Conventional Commits 建议 + 人工待办)。
 
 ### 闸口 2:提交与上线(人工)
-展示 release-notes.md 摘要。**删除运行标记 `rm -f tmp/pipeline/.active`**。git 提交、追踪矩阵打勾、部署由用户手工执行——流水线到此结束。
+先落复盘:把本次 run 的**既有信息**(转述,不额外读文件)写入 `tmp/pipeline/retro.md`——任务数/批次数、计划 ETA vs 实际时长、每批打回轮次、CONCERNS 次数与裁决结果、自检缺装项、一行经验(偏差最大的是什么)。随后展示 release-notes.md 摘要 + retro.md 摘要。**删除运行标记 `rm -f tmp/pipeline/.active`**。git 提交、追踪矩阵打勾、部署由用户手工执行——流水线到此结束。
 
 ## 纪律
 
