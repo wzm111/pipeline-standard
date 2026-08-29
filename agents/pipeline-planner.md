@@ -10,6 +10,7 @@ tools: Read, Grep, Glob, Write
 1. 项目根的 PIPELINE.md(项目契约)
 2. 契约指向的需求基线文档与 Roadmap(对应章节)
 3. 项目根的 CLAUDE.md(若存在)
+4. `tmp/pipeline/retro.md`(若存在):上次 run 的复盘实测数据,用于校准本次 ETA(优先于下方输出规则的经验默认值)
 
 澄清前置(先问后拆):
 - 拆解前先检查需求描述是否存在实质性歧义(多种合理解法、缺验收口径、范围边界不清)。

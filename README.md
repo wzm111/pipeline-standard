@@ -59,6 +59,9 @@ flowchart LR
 - **闸口 1 ETA**:计划头部带任务数/批次数/预估时长量级;里程碑级计划附「拆分建议」,人工决定整体跑还是切片跑
 - **team 直聊**:开发⇄测试打回循环由两个 teammate 直接 SendMessage,调度员只监控轮次与裁决,不经手中转(省上下文;异常时回退中转模式)
 - **上下文瘦身**:plan 按批拆文件、demo/大文档按需切片检索,控制各角色冷启动读入量
+- **复测收敛**:打回复测只覆盖修复项 + 影响面 + 快速命令层,首轮已过的重命令不重复跑——打回轮次不再烧全量 token
+- **模型分级**:tester 默认 sonnet、releaser 默认 haiku(角色 frontmatter 声明),重判断力角色跟随主会话模型
+- **复盘闭环**:闸口 2 落 `tmp/pipeline/retro.md`(规模 / ETA vs 实际 / 打回轮次),下次 run 拆解时 planner 读取校准预估
 - **QA gate 三态**:`PASS / CONCERNS / FAIL`;CONCERNS 的非阻断问题交人工裁决豁免与否
 - **禁区硬拦截**:hook 在 `/pipeline` 运行期间(存在 `tmp/pipeline/.active` 标记)按 PIPELINE.md ⑤ 的 `pipeline-guard` 块拦截越界 Write/Edit,不依赖 prompt 自觉
 - **打回硬上限**:范围评审 ≤2 轮,测试 ≤3 轮,到顶停报
@@ -81,7 +84,7 @@ Claude Code 版的独有优势(= 便携版的降级项):
 1. 安装(每台机器一次):`git clone` 本仓库后 `bash install.sh`(只做软链 agents/skills/hooks 到 `~/.claude/`,不动其他配置)。
 2. 项目接入:`bash init-project.sh /path/to/项目`(拷契约模板 + 配 hook + gitignore,详见「接入新项目」一节),然后编辑项目根的 `PIPELINE.md` 逐项替换 ❏。契约随项目 git 管理。
 3. 在项目的 Claude Code 会话里:`/pipeline <任务描述>`。
-4. 中间产物在项目的 `tmp/pipeline/`(plan.md + plan-<批次>.md / qa-report.md / release-notes.md)。同一项目同一时刻只跑一条 `/pipeline`(artifact 是单例,并行会互踩)。
+4. 中间产物在项目的 `tmp/pipeline/`(plan.md + plan-<批次>.md / qa-report.md / release-notes.md / retro.md)。同一项目同一时刻只跑一条 `/pipeline`(artifact 是单例,并行会互踩)。
 5. 流水线异常中断后若普通编辑被 hook 误拦,删除 `tmp/pipeline/.active` 即可。
 6. 非 Claude Code 工具(Codex/Gemini/Cursor 等)用便携模式(见上节),无需 install.sh。
 
