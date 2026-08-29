@@ -19,6 +19,37 @@ install.sh                  安装/同步脚本(软链 agents/skills/hooks 到 ~
 init-project.sh             项目接入脚本(拷契约模板 + 配 hook + gitignore,幂等)
 ```
 
+## 流程
+
+主流程(两道人工闸口):
+
+```mermaid
+flowchart TD
+    S["/pipeline 任务描述"] --> P["前置:读 PIPELINE.md 契约<br>规模分流 · 工具自检 · skill 自检"]
+    P --> B["① 拆解 · planner<br>实质歧义先出待澄清清单"]
+    B --> G1{"闸口 1 · 计划确认(人工)<br>附任务数 / 批次数 / 预估时长"}
+    G1 -- "修改意见" --> B
+    G1 -- "确认" --> A1["② 范围评审 · scope-guardian<br>≤2 轮,小任务跳过"]
+    A1 -- "打回" --> B
+    A1 -- "通过" --> L["③ 批次级开发⇄测试循环<br>developer · tester(详见下图)"]
+    L --> A2["④ 验收 · scope-guardian<br>对照验收标准 + qa 报告"]
+    A2 --> E["⑤ 上线建议 · releaser<br>release-notes.md,不动 git"]
+    E --> G2["闸口 2 · 提交上线(人工)<br>删 .active · git 提交 · 矩阵打勾 · 部署"]
+```
+
+第 3 步的批次级并行循环(qa 测上一批与 dev 开下一批墙钟重叠):
+
+```mermaid
+flowchart LR
+    D1["dev 交付批次 N"] --> QA["qa 实测批次 N<br>范围外报错归为观察,不判 FAIL"]
+    D1 -. "不等待 · 并行" .-> D2["dev 继续批次 N+1"]
+    QA -- "PASS 封版" --> NEXT["批次 N+1 交付后<br>进入下一轮循环"]
+    D2 --> NEXT
+    QA -- "FAIL" --> FIX["失败清单直发 dev:<br>暂停 N+1,先修 N(≤3 轮)"]
+    FIX --> QA
+    QA -- "CONCERNS" --> HU["人工裁决:<br>豁免封版 / 回 dev 修复"]
+```
+
 ## 流程特性
 
 - **澄清前置**:planner 发现实质性歧义先提问,不带着猜测拆计划
