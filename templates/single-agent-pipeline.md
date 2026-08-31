@@ -6,6 +6,20 @@
 >
 > 本文件是 `agents/*.md` 的蒸馏版,只保留核心纪律;完整角色定义见同仓库 `agents/` 目录。
 
+## 项目契约摘要(使用本文件前必须替换以下 ❏)
+
+本文件是通用模板,接入具体项目前请把下列占位符替换为该项目真实信息;未替换前不要直接用于生产任务:
+
+- **项目名**: ❏ 例如 `my-project`
+- **可写目录/文件白名单**: ❏ 例如 `src/`, `config/`, `package.json`(`templates/PIPELINE.md` ⑤ 节格式)
+- **禁区(绝对不可碰)**: ❏ 例如 `.env`, `secrets/`, `dist/`, 上游 git 写操作
+- **测试命令**: ❏ 例如 `npm run lint && npm run typecheck && npm test`
+- **上线方式**: ❏ 例如 人工 `git add`/`git commit`/`git push`,Vercel 自动部署
+- **外部 CLI/Skill 依赖**: ❏ 例如 `sg`, `lhci`, `ui-ux-pro-max`(完整安装命令见 `tools/quick-install.md`)
+- **需求基线文档**: ❏ 例如 `PRD.md`, `README.md` 需求章节,或 Issue 链接
+
+> 提示:把替换后的本文件保存到项目自定义命令目录(如 `~/.codex/prompts/pipeline.md`),并在每次触发时把任务描述附到末尾。
+
 ## 用法
 
 把本文件接入所用工具的自定义命令机制,触发时附带任务描述:

@@ -6,7 +6,7 @@
 #      无标记 = 普通会话,直接放行。
 #   2. 启用时读项目根 PIPELINE.md 里的机器可读块:
 #        <!-- pipeline-guard:allow-write          ← 白名单模式:只允许这些前缀
-#        esim-retail-www/
+#        src/
 #        tmp/
 #        -->
 #      或
@@ -36,23 +36,50 @@ if [ -z "${CWD:-}" ]; then CWD="$(pwd)"; fi
 MARKER="$CWD/tmp/pipeline/.active"
 if [ ! -f "$MARKER" ]; then exit 0; fi
 
-# --- Bash 命令:流水线期间禁止 git 写操作 ---
+# --- Bash 命令:流水线期间禁止写/删/改操作 ---
 if [ "$TOOL_NAME" = "Bash" ]; then
   CMD=$(printf '%s' "$INPUT" | python3 -c 'import sys,json; t=json.load(sys.stdin).get("tool_input") or {}; print(t.get("command") or "")' 2>/dev/null)
   if [ -n "$CMD" ]; then
-    GIT_WRITE_SUB=$(printf '%s' "$CMD" | python3 -c '
-import sys, re
-cmd = sys.stdin.read()
-m = re.search(r"\bgit(?:\s+-[a-zA-Z]+(?:\s+\S+)?)*\s+(add|commit|push|tag|reset|merge|checkout\s+-b|restore|revert|cherry-pick|rebase|pull|stash|rm|mv|branch)\b", cmd, re.I)
-if m:
-    print(m.group(1).lower())
+    BLOCK_REASON=$(printf '%s' "$CMD" | python3 -c '
+import sys, re, shlex
+cmd = sys.stdin.read().strip()
+
+# 1. git 写子命令
+git_write = re.search(r"\bgit(?:\s+-[a-zA-Z]+(?:\s+\S+)?)*\s+(add|commit|push|tag|reset|merge|checkout\s+-b|restore|revert|cherry-pick|rebase|pull|stash|rm|mv|branch)\b", cmd, re.I)
+if git_write:
+    print("git-" + git_write.group(1).lower())
+    sys.exit(0)
+
+# 2. 常见文件破坏命令(允许在 tmp/ 内操作)
+dangerous = re.search(r"\b(rm|cp|mv|touch)\s+(-\S+\s+)?(\S+)", cmd, re.I)
+if dangerous:
+    target = dangerous.group(3) or ""
+    safe_prefixes = ("tmp/", "/tmp/", "/dev/null")
+    if not any(target.startswith(p) for p in safe_prefixes):
+        print("cmd-" + dangerous.group(1).lower())
+        sys.exit(0)
+
+# 3. 重定向写(> / >> / 1> 等),放行 tmp/ 与 /dev 安全目标
+try:
+    tokens = shlex.split(cmd)
+except ValueError:
+    tokens = cmd.split()
+for i, token in enumerate(tokens):
+    if token in (">", ">>", "1>", "1>>", "2>", "2>>"):
+        target = tokens[i+1] if i+1 < len(tokens) else ""
+        safe_prefixes = ("tmp/", "/tmp/", "/dev/null", "/dev/stdout", "/dev/stderr")
+        if not any(target.startswith(p) for p in safe_prefixes):
+            print("redirect-" + token)
+            sys.exit(0)
+
+sys.exit(1)
 ' 2>/dev/null)
-    if [ -n "$GIT_WRITE_SUB" ]; then
-      echo "[pipeline-guard] 拦截:流水线运行期间禁止通过 Bash 执行 git 写操作($GIT_WRITE_SUB)。请在闸口 2 由人类手工执行,或把建议命令写进 release-notes.md。" >&2
+    if [ -n "$BLOCK_REASON" ]; then
+      echo "[pipeline-guard] 拦截:流水线运行期间禁止通过 Bash 执行写/删操作($BLOCK_REASON)。请在闸口 2 由人类手工执行,或把建议命令写进 release-notes.md。" >&2
       exit 2
     fi
   fi
-  # Bash 非 git 写操作:直接放行
+  # Bash 只读/安全命令:放行
   exit 0
 fi
 
@@ -94,6 +121,10 @@ match() {
   local rel="$1"
   while IFS= read -r p; do
     [ -z "$p" ] && continue
+    # 规范化目录边界:普通前缀不以 / 结尾时自动补 /,避免 src 误匹配 src2/
+    if [[ "$p" != */ && "$p" != *\\* ]]; then
+      p="${p}/"
+    fi
     case "$rel" in "$p"*) return 0 ;; esac
   done <<< "$PATTERNS"
   return 1
