@@ -48,13 +48,22 @@ else:
     print(f"已写入 hook: {path}")
 PYEOF
 
-# ③ .gitignore 含 /tmp/
+# ③ .gitignore 含 pipeline 相关临时产物
 GITIGNORE="$TARGET/.gitignore"
-if [ -f "$GITIGNORE" ] && grep -qE '^/?tmp/?$' "$GITIGNORE"; then
-  echo "跳过: .gitignore 已含 tmp/"
+NEEDLE='^# pipeline-standard guard'
+if [ -f "$GITIGNORE" ] && grep -qE "$NEEDLE" "$GITIGNORE" ]; then
+  echo "跳过: .gitignore 已含 pipeline-standard guard 块"
 else
-  printf '\n# pipeline 中间产物\n/tmp/\n' >> "$GITIGNORE"
-  echo "已追加: .gitignore ← /tmp/"
+  cat >> "$GITIGNORE" <<EOF
+
+# pipeline-standard guard
+/tmp/
+/.frontend-guardian/
+/tmp-*/
+*.log
+# .claude/settings.json 通常需入库,不要整目录忽略;如产生临时文件请单独追加
+EOF
+  echo "已追加: .gitignore ← pipeline-standard guard 块"
 fi
 
 echo ""

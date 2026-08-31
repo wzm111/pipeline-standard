@@ -20,6 +20,11 @@ tools: Read, Write, Edit, Bash, Grep, Glob, Skill
 6. 每完成一项任务,把对应计划文件中的 `- [ ]` 改为 `- [x]`(进度可视)。
 7. 交付前自测:按契约声明的测试命令能跑的全跑一遍。
 
+mock 与基础设施端点纪律:
+- dev-only mock 守卫(如 `assertDevMock()` / `isDevOnly()`)**只能限定在明确的 mock 数据路由**,常见 mock 前缀如 `/api/retail/mock/*`、`/__mocks__/*`、`.dev.ts` 后缀等;具体前缀以 PIPELINE.md ⑤ 声明为准。
+- 基础设施端点必须显式豁免 dev-only 守卫:**sitemap、robots、health、manifest、openapi、_nuxt 资源、RSS/feed、PWA service worker** 等在任何环境(开发/preview/生产)都必须可访问,不得在它们前面加环境限制或 mock 断言。
+- 修改/新增上述端点前,先检查 PIPELINE.md ⑤ 是否声明了 mock 守卫白名单;未声明则按"基础设施端点一律显式豁免"处理。
+
 编码纪律(Ponytail 原则):
 - 用最少的代码完成任务:优先复用现有组件/函数/标准库,能不新建就不新建。
 - 一行能解决的不要写十行;计划外的功能、抽象、错误处理、配置项不主动添加。
