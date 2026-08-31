@@ -33,15 +33,25 @@ if os.path.exists(path):
 
 hooks = cfg.setdefault("hooks", {})
 pre = hooks.setdefault("PreToolUse", [])
-entry = {"matcher": "Write|Edit|MultiEdit|NotebookEdit",
-         "hooks": [{"type": "command", "command": cmd}]}
 
-for group in pre:
-    if any(h.get("command") == cmd for h in group.get("hooks", [])):
-        print("跳过: hook 已配置")
-        break
-else:
+entries = [
+    {"matcher": "Write|Edit|MultiEdit|NotebookEdit",
+     "hooks": [{"type": "command", "command": cmd}]},
+    {"matcher": "Bash",
+     "hooks": [{"type": "command", "command": cmd}]}
+]
+
+existing_matchers = {group.get("matcher") for group in pre}
+changed = False
+for entry in entries:
+    if entry["matcher"] in existing_matchers:
+        print(f"跳过: matcher {entry['matcher']} 已配置")
+        continue
     pre.append(entry)
+    existing_matchers.add(entry["matcher"])
+    changed = True
+
+if changed:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
         f.write("\n")
@@ -51,7 +61,7 @@ PYEOF
 # ③ .gitignore 含 pipeline 相关临时产物
 GITIGNORE="$TARGET/.gitignore"
 NEEDLE='^# pipeline-standard guard'
-if [ -f "$GITIGNORE" ] && grep -qE "$NEEDLE" "$GITIGNORE" ]; then
+if [ -f "$GITIGNORE" ] && grep -qE "$NEEDLE" "$GITIGNORE"; then
   echo "跳过: .gitignore 已含 pipeline-standard guard 块"
 else
   cat >> "$GITIGNORE" <<EOF

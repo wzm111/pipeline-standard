@@ -14,7 +14,15 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
    - 存在 → 记住其中声明的需求基线、规范、测试命令、禁区,后续每个角色的 prompt 里都要带上「先读 PIPELINE.md」。
 2. 运行标记与断点:
    - `mkdir -p tmp/pipeline && touch tmp/pipeline/.active`(启用禁区硬拦截)。**流程无论以何种方式结束(完成/打回到顶/用户中止),都要 `rm -f tmp/pipeline/.active`**,否则会影响普通会话的写操作。
-   - `tmp/pipeline/state.md` 存在且 status 非 done → 上次 run 未完成,向用户确认「续跑(现场在 state.md)还是新开」;新开 → 旧 state.md 改名 `state-<日期>.md` 留档。随后初始化本次 state.md(status / stage / batches / pending / next 五要素)。
+   - `tmp/pipeline/state.md` 存在且 status 非 done → 上次 run 未完成,向用户确认「续跑(现场在 state.md)还是新开」;新开 → 旧 state.md 改名 `state-<日期>.md` 留档。随后初始化本次 state.md(status / stage / batches / pending / next 五要素),示例:
+
+     ```markdown
+     status: running
+     stage: gate-1
+     batches: A,B,C
+     pending: A
+     next: 等待用户确认闸口 1
+     ```
    - `tmp/pipeline/rulings.md` 存在 → 读入已有裁决记录;续跑时遇到相同批次/相同问题,直接按文件结论执行,不再重复询问用户。
 3. 规模分流(依据任务描述预判,拿不准就问用户):
    - **小任务**(预计改动 ≤2 个文件、无新依赖、不涉及新目录):走快速通道——跳过第 2 步范围评审,其余不变。

@@ -31,6 +31,8 @@ cat <<'NOTE'
   "hooks": {
     "PreToolUse": [
       { "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [{ "type": "command", "command": "bash ~/.claude/hooks/pipeline-guard.sh" }] },
+      { "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "bash ~/.claude/hooks/pipeline-guard.sh" }] }
     ]
   }
