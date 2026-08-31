@@ -22,7 +22,13 @@ fi
 HOOK_CMD='bash ~/.claude/hooks/pipeline-guard.sh'
 mkdir -p "$TARGET/.claude"
 SETTINGS="$TARGET/.claude/settings.json"
-python3 - "$SETTINGS" "$HOOK_CMD" <<'PYEOF'
+
+merge_settings_json() {
+  local path="$1" cmd="$2"
+
+  # 优先用 python3, 其次用 jq, 都没有则降级为手动提示
+  if command -v python3 >/dev/null 2>&1; then
+    if python3 - "$path" "$cmd" <<'PYEOF'
 import json, sys, os
 
 path, cmd = sys.argv[1], sys.argv[2]
@@ -57,6 +63,63 @@ if changed:
         f.write("\n")
     print(f"已写入 hook: {path}")
 PYEOF
+    then
+      return 0
+    fi
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    local tmp="${path}.tmp"
+    local jq_ok=0
+    if [ -f "$path" ]; then
+      jq --arg cmd "$cmd" '
+        .hooks.PreToolUse //= [] |
+        if (.hooks.PreToolUse | map(select(.matcher == "Write|Edit|MultiEdit|NotebookEdit")) | length) == 0 then
+          .hooks.PreToolUse += [{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":$cmd}]}]
+        else . end |
+        if (.hooks.PreToolUse | map(select(.matcher == "Bash")) | length) == 0 then
+          .hooks.PreToolUse += [{"matcher":"Bash","hooks":[{"type":"command","command":$cmd}]}]
+        else . end
+      ' "$path" > "$tmp" && jq_ok=1
+    else
+      echo '{}' | jq --arg cmd "$cmd" '
+        .hooks.PreToolUse //= [] |
+        if (.hooks.PreToolUse | map(select(.matcher == "Write|Edit|MultiEdit|NotebookEdit")) | length) == 0 then
+          .hooks.PreToolUse += [{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":$cmd}]}]
+        else . end |
+        if (.hooks.PreToolUse | map(select(.matcher == "Bash")) | length) == 0 then
+          .hooks.PreToolUse += [{"matcher":"Bash","hooks":[{"type":"command","command":$cmd}]}]
+        else . end
+      ' > "$tmp" && jq_ok=1
+    fi
+    if [ "$jq_ok" -eq 1 ]; then
+      mv "$tmp" "$path"
+      echo "已写入 hook: $path (via jq)"
+      return 0
+    fi
+    rm -f "$tmp"
+    return 1
+  fi
+
+  return 1
+}
+
+if ! merge_settings_json "$SETTINGS" "$HOOK_CMD"; then
+  echo "跳过: 未找到 python3 或 jq, 无法自动合并 .claude/settings.json" >&2
+  echo "请手动在项目根创建/编辑 $SETTINGS, 添加以下 PreToolUse 配置:" >&2
+  cat <<EOF
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [{ "type": "command", "command": "$HOOK_CMD" }] },
+      { "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "$HOOK_CMD" }] }
+    ]
+  }
+}
+EOF
+fi
 
 # ③ .gitignore 含 pipeline 相关临时产物
 GITIGNORE="$TARGET/.gitignore"

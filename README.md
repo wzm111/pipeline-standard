@@ -113,22 +113,7 @@ Claude Code 版的独有优势(= 便携版的降级项):
 
 ## 角色工具箱(推荐)
 
-通用层不硬编码任何工具——由项目契约 ③ 声明,`/pipeline` 启动时自检、缺失自动安装(全局 CLI 型)。求精不求多,每角色 1–2 个;`templates/PIPELINE.md` ③ 节有同份注释清单(含条件启用项)可直接启用:
-
-| 面/角色 | 工具 | 安装方式 | 建议场景 |
-| ------ | ---- | -------- | -------- |
-| 守门员 | dependency-cruiser(模块边界/依赖方向机器校验) | 项目 devDep+规则文件 | 收口 |
-| 拆解/开发 | ast-grep(结构搜索/codemod,定位准省 token) | 全局 `sg` | 日常 |
-| 开发·设计辅助 | ui-ux-pro-max(设计 skill:风格/调色板/字体/UX 准则) | Claude skill;契约 ② 声明后 developer 可调,缺失时自检 clone(附 git 来源)或降级 | UI 任务,基线未覆盖的细节 |
-| 测试·静态页/UI | Playwright(E2E/多断点截图) | 项目 devDep | 日常批次 gate |
-| 测试·静态页/UI | @axe-core(a11y 审计) | 项目 devDep | 日常/收口 |
-| 测试·静态页/UI | Lighthouse CI(LCP/CLS 硬指标) | 全局 `lhci` | 里程碑收口 |
-| 测试·API | curl / vitest+fetch(冒烟) | 系统自带 | 日常 |
-| 测试·API | zod/ajv(响应契约校验) | 项目 devDep | 日常 |
-| 测试·API | Bruno(集合回归,文本存仓库) | 全局 `bru` | 日常/收口 |
-| 测试·API | Schemathesis(OpenAPI 对抗 fuzz) | pip/brew | 收口,契合 tester 对抗式找茬 |
-| 测试·性能 | k6(压测) | 系统包 | 里程碑级 |
-| 发布 | gitleaks(提交前密钥泄露扫描) | 系统包 brew | 闸口 2 前,建议默认开 |
+通用层不硬编码任何工具——由项目契约 ③ 声明,`/pipeline` 启动时自检、缺失自动安装(全局 CLI 型)。求精不求多,每角色 1–2 个;`templates/PIPELINE.md` ③ 节有同份注释清单(含条件启用项)可直接启用。完整安装命令与场景说明见 [tools/quick-install.md](tools/quick-install.md),此处不再重复,避免多份文档不同步。
 
 条件启用(只进模板注释,不进主表):knip(死代码扫描,项目体量大后)、size-limit(bundle 体积门禁,有体积验收条时)、npm audit(依赖漏洞,零安装)。
 
