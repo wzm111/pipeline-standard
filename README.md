@@ -144,6 +144,7 @@ bash init-project.sh /path/to/项目     # 或在项目目录里直接 bash <本
 
 ## 最近更新
 
+- **v3.5.3**: v3.5.2 review 补丁——hook 拦截 Bash 层 git 写操作 / init-project 自动配置 Bash PreToolUse / state.md 五要素示例 / 闸口 1 与便携版双口径 ETA 展示细化
 - **v3.5.2**: M1 实战补强——git 写操作硬边界 / 跨会话裁决一致性(rulings.md) / mock 基础设施端点豁免 / init-project 默认 gitignore 守护 / retro 校准 ETA 双口径
 - **v3.5.1**: developer 角色引入 Ponytail 编码纪律（最少代码原则）
 - **v3.5**: P1 四件套——state.md 断点自恢复 / skill 克隆安全扫描 / 可选 webhook 通知 / 预算上限
