@@ -25,16 +25,38 @@ fi
 
 INPUT=$(cat)
 
-# --- 提取 cwd 与目标路径(路径可能含空格,分开提取) ---
+# --- 提取 cwd、tool_name 与目标路径(路径可能含空格,分开提取) ---
 CWD=$(printf '%s' "$INPUT" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("cwd",""))' 2>/dev/null)
+TOOL_NAME=$(printf '%s' "$INPUT" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("tool_name",""))' 2>/dev/null)
 FP=$(printf '%s' "$INPUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); t=d.get("tool_input") or {}; print(t.get("file_path") or t.get("notebook_path") or "")' 2>/dev/null)
 
-if [ -z "${FP:-}" ]; then exit 0; fi
 if [ -z "${CWD:-}" ]; then CWD="$(pwd)"; fi
 
 # --- 无激活标记 = 非流水线会话,放行 ---
 MARKER="$CWD/tmp/pipeline/.active"
 if [ ! -f "$MARKER" ]; then exit 0; fi
+
+# --- Bash 命令:流水线期间禁止 git 写操作 ---
+if [ "$TOOL_NAME" = "Bash" ]; then
+  CMD=$(printf '%s' "$INPUT" | python3 -c 'import sys,json; t=json.load(sys.stdin).get("tool_input") or {}; print(t.get("command") or "")' 2>/dev/null)
+  if [ -n "$CMD" ]; then
+    GIT_WRITE_SUB=$(printf '%s' "$CMD" | python3 -c '
+import sys, re
+cmd = sys.stdin.read()
+m = re.search(r"\bgit(?:\s+-[a-zA-Z]+(?:\s+\S+)?)*\s+(add|commit|push|tag|reset|merge|checkout\s+-b|restore|revert|cherry-pick|rebase|pull|stash|rm|mv|branch)\b", cmd, re.I)
+if m:
+    print(m.group(1).lower())
+' 2>/dev/null)
+    if [ -n "$GIT_WRITE_SUB" ]; then
+      echo "[pipeline-guard] 拦截:流水线运行期间禁止通过 Bash 执行 git 写操作($GIT_WRITE_SUB)。请在闸口 2 由人类手工执行,或把建议命令写进 release-notes.md。" >&2
+      exit 2
+    fi
+  fi
+  # Bash 非 git 写操作:直接放行
+  exit 0
+fi
+
+if [ -z "${FP:-}" ]; then exit 0; fi
 
 # --- 项目外路径:流水线期间一律拦截 ---
 case "$FP" in

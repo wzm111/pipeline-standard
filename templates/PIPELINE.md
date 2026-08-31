@@ -74,6 +74,9 @@
 - 流水线可写范围:❏ 目录;不可动:❏ 目录/文件。
 - 禁止引入的依赖/模式:❏。
 - 流水线中间产物统一放 `tmp/pipeline/`(确认 `tmp/` 已加入项目 .gitignore)。
+- **mock 守卫白名单(推荐声明)**:dev-only 守卫只能拦真实 mock 路由,基础设施端点必须显式豁免。
+  - 本项目 mock 数据路由前缀:❏(例如 `/api/retail/mock/`、`/__mocks__/`)
+  - 必须显式豁免的基础设施端点:❏(例如 `sitemap`、`robots`、`health`、`manifest`、`openapi`、`_nuxt`、PWA service worker)
 - **硬拦截(可选,推荐)**:项目 `.claude/settings.json` 按 pipeline-standard README 配置 PreToolUse hook 后,下面的机器可读块在 /pipeline 运行期间生效(白名单模式:只允许写列出的前缀;或改用 `deny-write` 黑名单模式):
 
 <!-- pipeline-guard:allow-write

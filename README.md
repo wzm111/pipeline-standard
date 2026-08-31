@@ -74,10 +74,13 @@ flowchart LR
 - **复测收敛**:打回复测只覆盖修复项 + 影响面 + 快速命令层,首轮已过的重命令不重复跑——打回轮次不再烧全量 token
 - **模型分级**:tester 默认 sonnet、releaser 默认 haiku(角色 frontmatter 声明),重判断力角色跟随主会话模型
 - **Ponytail 编码纪律**:developer 遵循「最少代码原则」——优先复用现有实现/一行能解不写十行/不添加计划外抽象;测试、类型安全、可访问性、安全边界不许精简
+- **ETA 自动校准**:planner 读取历史 `tmp/pipeline/retro.md` 的实测数据反向校准系数;头部同时给出「墙钟时间」(并行后)与「人力时间」两种估算
 
 ### 可靠性与恢复
 
 - **断点自恢复**:调度员全程维护 `tmp/pipeline/state.md`(stage/批次/待办/下一步),中断续跑读文件自恢复,不靠口头描述现场
+- **跨会话裁决一致性**:CONCERNS 的人工裁决必须写入 `tmp/pipeline/rulings.md`,续跑时以该文件为唯一事实源,避免多会话对同一问题给出不同结论
+- **git 写操作硬边界**:releaser 及任何角色禁止执行 `git add/commit/push/tag`;闸口 2 必须由人类手工执行,release-notes.md 只提供建议命令
 - **预算上限**:闸口 1 可设时长/批次上限,快照对照,≈80% 主动预警
 - **skill 安全扫描**:声明式 skill 自动 clone 安装前扫可疑模式(管道执行/外联/越权读写),命中拒装转人工
 - **可选通知**:契约声明 webhook(URL 走环境变量)后,闸口等待/待裁决/完成三时机推送,未设静默跳过
@@ -141,6 +144,7 @@ bash init-project.sh /path/to/项目     # 或在项目目录里直接 bash <本
 
 ## 最近更新
 
+- **v3.5.2**: M1 实战补强——git 写操作硬边界 / 跨会话裁决一致性(rulings.md) / mock 基础设施端点豁免 / init-project 默认 gitignore 守护 / retro 校准 ETA 双口径
 - **v3.5.1**: developer 角色引入 Ponytail 编码纪律（最少代码原则）
 - **v3.5**: P1 四件套——state.md 断点自恢复 / skill 克隆安全扫描 / 可选 webhook 通知 / 预算上限
 - **v3.4**: P0 三件套——复测范围收敛 / retro.md 复盘闭环 / 模型分级（tester=sonnet, releaser=haiku）
