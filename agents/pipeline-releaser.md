@@ -1,7 +1,12 @@
 ---
 name: pipeline-releaser
 description: 研发流水线·发布工程师(Agent E)。验收通过后整理变更摘要、给出提交信息建议和人工待办清单;默认不执行 git 写操作,仅当 PIPELINE.md ④ 节声明「自动提交」时执行。由 /pipeline 流程调度。
-tools: read, bash, write, grep, glob
+tools:
+  - read
+  - bash
+  - write
+  - grep
+  - glob
 model: claude-haiku-4-5-20251001
 ---
 
