@@ -96,11 +96,17 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
 ### 第 4 步:验收(Agent A)
 `pipeline-scope-guardian` 对照 plan.md(及批次详情文件)验收标准与 qa-report.md 做最终验收(关键验收点亲自抽查代码)。不过 → 向用户汇报,人工决定回第 3 步还是调整计划。
 
-### 第 5 步:上线建议(Agent E)
-`pipeline-releaser` 产出 `tmp/pipeline/release-notes.md`(变更摘要 + Conventional Commits 建议 + 人工待办)。
+### 第 5 步:上线建议或自动提交(Agent E)
+调 `pipeline-releaser` 读 PIPELINE.md 第 ④ 节:
+- **人工执行(默认)**:只产出 `tmp/pipeline/release-notes.md`(变更摘要 + Conventional Commits 建议 + 人工待办)。
+- **自动提交**:产出 release-notes.md 后,按契约执行 `git add`/`git commit`(/`git push`)。releaser 把执行结果写回 release-notes.md 的「自动提交结果」区块。
 
-### 闸口 2:提交与上线(人工)
-先落复盘:把本次 run 的**既有信息**(转述,不额外读文件)写入 `tmp/pipeline/retro.md`。retro.md 固定头部(供 planner 下次校准用):
+### 闸口 2:提交与上线
+先判断 PIPELINE.md ④ 节上线方式:
+- **自动提交**:releaser 已自动完成 git 写操作;调度员落复盘、更新 state.md、删 `.active`。
+- **人工执行(默认)**:调度员展示 release-notes.md 摘要,**必须由人类执行 git 写操作**,releaser 只产出建议命令。
+
+无论哪种模式,都先落复盘:把本次 run 的**既有信息**(转述,不额外读文件)写入 `tmp/pipeline/retro.md`。retro.md 固定头部(供 planner 下次校准用):
 
 ```markdown
 # Retro
@@ -116,14 +122,14 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
 
 正文再写:每批打回轮次、CONCERNS 次数与裁决结果、自检缺装项、一行经验(偏差最大的是什么)。state.md 的 status 置 done。随后展示 release-notes.md 摘要 + retro.md 摘要。**删除运行标记 `rm -f tmp/pipeline/.active`**。
 
-**闸口 2 必须由人类执行 git 写操作**:releaser 只产出 release-notes.md,其中会写明建议的 `git add`/`git commit`/`git push` 命令;调度员和任何角色都不得代用户执行这些命令。用户核对无误后手工执行,然后打勾追踪矩阵、择机部署——流水线到此结束。
+**闸口 2 默认由人类执行 git 写操作**,除非 PIPELINE.md 第 ④ 节声明「自动提交」。人工模式下,releaser 只产出 release-notes.md,其中会写明建议的 `git add`/`git commit`/`git push` 命令;调度员和任何角色都不得代用户执行这些命令。用户核对无误后手工执行,然后打勾追踪矩阵、择机部署——流水线到此结束。自动提交模式下,releaser 已按契约执行 git 写操作,调度员直接收尾。
 
 ## 纪律
 
 - 打回轮次上限是硬约束,到顶必须停下来汇报,不许「酌情放行」。
 - 一个项目同一时刻只跑一条流水线:`tmp/pipeline/` 下的 artifact 是单例,并行触发会互相覆盖。
 - 角色之间只传 artifact 文件路径 + 结构化结论(第 3 步 team 直聊除外),不转发长篇对话。
-- **任何角色(含 releaser)严禁执行 git 写操作**:commit/push/add/tag/reset/merge/deploy 一律是人类在闸口 2 的权限;若角色试图执行,调度员必须制止并提醒"请把命令写进 release-notes.md,由人工执行"。
+- **git 写操作默认严禁**:commit/push/add/tag/reset/merge/deploy 一律是人类在闸口 2 的权限,除非 PIPELINE.md 第 ④ 节明确声明「自动提交」。若角色在人工执行模式下试图执行 git 写操作,调度员必须制止并提醒"请把命令写进 release-notes.md,由人工执行";自动提交模式下由 releaser 按契约执行。
 - 任何角色超时/崩溃,向用户报告当前阶段与已有产出,不要静默重试超过 1 次。
 - state.md 维护:阶段切换、每批 gate 出结果、等待用户(闸口/裁决)、异常停止前都要更新(五要素,转述既有信息不额外读文件)。
 - 任何提前停止的分支,结束前都必须删除 `tmp/pipeline/.active` 并把 state.md 置 aborted 写明现场——续跑靠它自恢复。
