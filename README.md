@@ -37,8 +37,8 @@ flowchart TD
     A1 -- "打回" --> B
     A1 -- "通过" --> L["③ 批次级开发⇄测试循环<br>developer · tester(详见下图)"]
     L --> A2["④ 验收 · scope-guardian<br>对照验收标准 + qa 报告"]
-    A2 --> E["⑤ 上线建议 · releaser<br>release-notes.md,不动 git"]
-    E --> G2["闸口 2 · 提交上线(人工)<br>删 .active · git 提交 · 矩阵打勾 · 部署"]
+    A2 --> E["⑤ 上线建议/自动提交 · releaser<br>按 PIPELINE.md ④ 节:人工建议 或 自动 git"]
+    E --> G2["闸口 2 · 提交上线<br>人工 / 自动删 .active · git · 矩阵打勾 · 部署"]
 ```
 
 第 3 步的批次级并行循环(qa 测上一批与 dev 开下一批墙钟重叠):
@@ -80,7 +80,7 @@ flowchart LR
 
 - **断点自恢复**:调度员全程维护 `tmp/pipeline/state.md`(stage/批次/待办/下一步),中断续跑读文件自恢复,不靠口头描述现场
 - **跨会话裁决一致性**:CONCERNS 的人工裁决必须写入 `tmp/pipeline/rulings.md`,续跑时以该文件为唯一事实源,避免多会话对同一问题给出不同结论
-- **git 写操作硬边界**:releaser 及任何角色禁止执行 `git add/commit/push/tag`;闸口 2 必须由人类手工执行,release-notes.md 只提供建议命令
+- **git 写操作默认硬边界**:releaser 及任何角色禁止执行 `git add/commit/push/tag`,除非 PIPELINE.md 第 ④ 节明确声明「自动提交」;默认闸口 2 由人类手工执行,release-notes.md 只提供建议命令
 - **预算上限**:闸口 1 可设时长/批次上限,快照对照,≈80% 主动预警
 - **skill 安全扫描**:声明式 skill 自动 clone 安装前扫可疑模式(管道执行/外联/越权读写),命中拒装转人工
 - **可选通知**:契约声明 webhook(URL 走环境变量)后,闸口等待/待裁决/完成三时机推送,未设静默跳过

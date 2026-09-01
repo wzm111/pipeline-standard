@@ -65,7 +65,13 @@
 
 ## ④ 上线方式
 
-- **人工执行**:发布工程师(E)只产出变更摘要、Conventional Commits 提交建议与人工待办;禁止任何 git 写操作与部署动作。
+- **模式**: ❏ 人工执行（默认） / ❏ 自动提交（由 `/pipeline` 在 gate-2 执行 git add/commit/push）
+- 如果选择**自动提交**:
+  - 目标分支: ❏
+  - commit message 风格: ❏ Conventional Commits / ❏ 按 release-notes 推荐
+  - 是否自动 push: ❏ 是 / ❏ 否（只 commit，push 由人工执行）
+  - 提交后动作: ❏（如更新追踪矩阵、飞书通知）
+- **默认人工执行**:发布工程师(E)只产出变更摘要、Conventional Commits 提交建议与人工待办;禁止任何 git 写操作与部署动作。
 - 人工提交后的收尾动作:❏(如更新追踪矩阵)
 - 通知(可选):❏ 飞书/Slack webhook——只声明渠道,URL 走环境变量(如 `FEISHU_WEBHOOK_URL`),不写进本文件;声明后 /pipeline 在闸口等待/待裁决/完成三时机推送,未设环境变量静默跳过
 
