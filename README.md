@@ -35,8 +35,8 @@ flowchart TD
     G1 -- "修改意见" --> B
     G1 -- "确认" --> A1["② 范围评审 · scope-guardian<br>≤2 轮,小任务跳过"]
     A1 -- "打回" --> B
-    A1 -- "通过" --> L["③ 批次级开发⇄测试循环<br>developer · tester(详见下图)"]
-    L --> A2["④ 验收 · scope-guardian<br>对照验收标准 + qa 报告"]
+    A1 -- "通过" --> L["③ 批次级开发⇄快速检查循环<br>developer · tester(核心路径,详见下图)"]
+    L --> A2["④ 终验/整体复核 · scope-guardian<br>汇总终验项 · 全量核对 · 提醒用户 check"]
     A2 --> E["⑤ 上线建议/自动提交 · releaser<br>按 PIPELINE.md ④ 节:人工建议 或 自动 git"]
     E --> G2["闸口 2 · 提交上线<br>人工 / 自动删 .active · git · 矩阵打勾 · 部署"]
 ```
@@ -63,7 +63,8 @@ flowchart LR
 - **批次级循环**:任务 >8 个时计划按批次组织(每批 ≤10 任务,plan.md 索引 + plan-<批次>.md 详情),每批 dev 交付即测;qa 测上一批与 dev 开下一批**并行重叠**,fail-fast 不攒到最后,单批打回 ≤3 轮
 - **team 直聊**:开发⇄测试打回循环由两个 teammate 直接 SendMessage,调度员只监控轮次与裁决,不经手中转(省上下文;异常时回退中转模式)
 - **闸口 1 ETA**:计划头部带任务数/批次数/预估时长量级;里程碑级计划附「拆分建议」,人工决定整体跑还是切片跑
-- **QA gate 三态**:`PASS / CONCERNS / FAIL`;CONCERNS 的非阻断问题交人工裁决豁免与否
+- **QA gate 三态(批次级快速检查)**:`PASS / CONCERNS / FAIL`;批次级只覆盖本批核心路径,非核心项与跨批回归记录为「终验复核项」,不占用轮次
+- **终验/整体复核**:全部批次 PASS 后,scope-guardian 汇总并执行终验清单,产出 `tmp/pipeline/acceptance.md`,闸口 2 明确提醒用户人工 check
 - **禁区硬拦截**:hook 在 `/pipeline` 运行期间(存在 `tmp/pipeline/.active` 标记)按 PIPELINE.md ⑤ 的 `pipeline-guard` 块拦截越界 Write/Edit,不依赖 prompt 自觉
 - **打回硬上限**:范围评审 ≤2 轮,测试 ≤3 轮,到顶停报
 
