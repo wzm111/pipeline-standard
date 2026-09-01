@@ -69,7 +69,7 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
 2. 你收到交付简报后**两件事同时做**:
    - 起(或唤醒)`pipeline-tester`(命名 `qa`)测该批——首轮 qa 还不存在,由你起并交接(传批次计划文件路径);后续批次直接 SendMessage 唤醒它续上下文。
    - 让 `dev` 继续开发下一批,**不等待 qa 结果**(测上一批与开下一批并行重叠)。
-3. qa 按「测试范围 = 该批任务 + 验收标准」实测,报告写 `tmp/pipeline/qa-report.md`(`batch:` 行注明批次):
+3. qa 按「测试范围 = 该批核心任务 + 核心验收标准」做**快速检查**,报告写 `tmp/pipeline/qa-report.md`(`batch:` 行注明批次);非核心项、跨批次回归、大面边界探索记录为「终验复核项」,不占用本批轮次:
    - `gate: FAIL` → qa 把失败清单(复现步骤 + 实际 vs 预期)直接 SendMessage 给 `dev`;dev 暂停手头批次、优先修复被打回的批次,修完 SendMessage qa 复测。打回循环在 dev ⇄ qa 之间直聊,你只收简报。复测走收敛范围(修复项 + 影响面 + 快速命令层),不整批重跑。
    - `gate: CONCERNS` → qa 停下等你;你把非阻断问题展示给用户裁决:**豁免 → 该批封版;不豁免 → 转交 dev 修复**。
      - **裁决必须落文件**:无论豁免与否,都要追加写入 `tmp/pipeline/rulings.md`(格式见下);跨会话续跑时以该文件为唯一事实源,避免多会话对同一问题给出不同结论。
@@ -93,8 +93,12 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
 
 回退预案:team 协作异常(消息丢失、角色反复跑偏)时,改用中转模式——每轮由你把 qa-report.md 的失败清单带给 developer,修复后再起 tester 复测。
 
-### 第 4 步:验收(Agent A)
-`pipeline-scope-guardian` 对照 plan.md(及批次详情文件)验收标准与 qa-report.md 做最终验收(关键验收点亲自抽查代码)。不过 → 向用户汇报,人工决定回第 3 步还是调整计划。
+### 第 4 步:终验/整体复核(Agent A)
+全部批次 PASS 后,`pipeline-scope-guardian` 做**终验**:
+- 汇总各批次 qa-report.md 的「终验复核项」清单,去重并按优先级排序;
+- 对照 plan.md 全部验收标准,逐条执行未在批次级快速检查中覆盖的项(关键验收点亲自抽查代码);
+- 把终验结果写入 `tmp/pipeline/acceptance.md`(或在最终 qa-report.md 顶部追加「终验」一节),明确列出**仍须用户人工 check 的项**及其复现路径;
+- 终验不过 → 向用户汇报,人工决定回第 3 步还是调整计划。
 
 ### 第 5 步:上线建议或自动提交(Agent E)
 调 `pipeline-releaser` 读 PIPELINE.md 第 ④ 节:
@@ -120,9 +124,11 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
 - 主要偏差原因: 简述
 ```
 
-正文再写:每批打回轮次、CONCERNS 次数与裁决结果、自检缺装项、一行经验(偏差最大的是什么)。state.md 的 status 置 done。随后展示 release-notes.md 摘要 + retro.md 摘要。**删除运行标记 `rm -f tmp/pipeline/.active`**。
+正文再写:每批打回轮次、CONCERNS 次数与裁决结果、自检缺装项、一行经验(偏差最大的是什么)。state.md 的 status 置 done。随后展示 release-notes.md 摘要 + retro.md 摘要 + **acceptance.md 终验清单**。
 
 **闸口 2 默认由人类执行 git 写操作**,除非 PIPELINE.md 第 ④ 节声明「自动提交」。人工模式下,releaser 只产出 release-notes.md,其中会写明建议的 `git add`/`git commit`/`git push` 命令;调度员和任何角色都不得代用户执行这些命令。用户核对无误后手工执行,然后打勾追踪矩阵、择机部署——流水线到此结束。自动提交模式下,releaser 已按契约执行 git 写操作,调度员直接收尾。
+
+**无论哪种模式,调度员都必须在闸口 2 明确提醒用户**:「项目整体进度已结束,请检查 acceptance.md 中的终验复核项 / 已知观察项 / 仍需人工确认项,确认无误后再进行后续部署或下一跑启动。」
 
 ## 纪律
 
