@@ -1,11 +1,17 @@
 ---
 name: pipeline
-description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批次级开发⇄测试(team 直聊,打回≤3轮/批) → 验收 → 上线建议。当用户输入 /pipeline <任务描述> 时使用。需要项目根存在 PIPELINE.md 契约文件。
+description: 端到端研发流水线：澄清、拆解、范围评审、批次级开发和测试、验收与上线建议。Claude Code 用 /pipeline，Codex 用 $pipeline；需要项目根存在 PIPELINE.md 契约文件。
 ---
 
 # 研发流水线编排
 
-用户输入了 `/pipeline <任务描述>`。你是调度员,按以下固定流程用 Agent 工具调度角色 subagent(角色名见各步),不要自己干活,只编排与传递 artifact 路径。
+用户显式输入了 Claude Code 的 `/pipeline <任务描述>` 或 Codex 的 `$pipeline <任务描述>`。你是调度员，按以下流程调度角色 subagent，不亲自实现功能；只编排并传递 artifact 路径。
+
+## 运行时适配
+
+- **Claude Code**：使用已注册的 `pipeline-*` agents、team 直聊和本仓库的 `PreToolUse` hook。保留原有完整并行流程。
+- **Codex**：先读 [Codex 运行时说明](references/codex.md)。使用 Codex 子 agent 与 follow-up 消息执行同一角色流程；每次写入前由调度员和执行角色对照 `PIPELINE.md` ⑤ 节校验路径。Codex 没有 Claude `PreToolUse` hook 的同等配置入口，不得把这项流程校验描述为机器级硬拦截。
+- 两端共同遵守本文件的闸口、批次、打回轮次、artifact、验收与 git 边界。Claude Code 保留本文件既有的、契约声明范围内的自动 CLI/skill 安装流程；Codex 对全局 CLI 安装、外部 skill clone 和其他项目外写入先请求授权，未获授权时跳过对应检查而不阻断其余流程。
 
 ## 前置
 
@@ -27,20 +33,20 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
 3. 规模分流(依据任务描述预判,拿不准就问用户):
    - **小任务**(预计改动 ≤2 个文件、无新依赖、不涉及新目录):走快速通道——跳过第 2 步范围评审,其余不变。
    - **标准任务**:走全流程。
-4. 工具自检(契约声明的外部 CLI 缺失时自动安装):
+4. 工具自检(契约声明的外部 CLI 缺失时):
    - 扫描 PIPELINE.md ③ 测试命令里引用的外部 CLI,逐个 `command -v <cli>` 探测;已装 → 过
-   - 缺失 → 告知用户并按 [tools/quick-install.md](../../tools/quick-install.md) 自动安装,装完跑 `--help` 验证可用
-   - 速查表没有的 CLI → 尝试 `npm install -g <同名包>`,失败按降级处理
+   - **Claude Code**：缺失 → 告知用户并按 [tools/quick-install.md](../../tools/quick-install.md) 自动安装,装完跑 `--help` 验证可用；速查表没有的 CLI → 尝试 `npm install -g <同名包>`,失败按降级处理
+   - **Codex**：缺失 → 说明工具、安装命令和影响，等待用户明确授权后才安装；未授权或安装失败 → 跳过对应扫描项，并在 qa-report 说明
    - 契约声明的是**项目 devDep 型**工具(如 playwright、@axe-core/playwright)→ 不全局安装,提示该项目应自行 `npm i -D` 并接入 npm scripts,本轮跳过对应项并在 qa-report 说明
    - 安装失败(断网/权限不足)→ 明确告知用户,并在派发给 tester 的 prompt 里注明「该工具本轮不可用,跳过对应扫描项,在 qa-report 说明」,**不因此中断流水线**(核心测试命令不受影响)
    - 契约没声明的工具不装,不做多余动作
 5. skill 自检(契约 ② 声明了设计类 skill 时):
-   - 探测 `~/.claude/skills/<name>/` 与项目 `.claude/skills/<name>/` 是否存在;存在 → 过
-   - 缺失且契约附了 git 来源 → 克隆到临时目录后安装(兼容两种仓库布局):
-     - 仓库根有 `SKILL.md` → 整体拷到 `~/.claude/skills/<name>/`
-     - 否则查仓库内 `.claude/skills/<name>/` 子目录 → 拷它到 `~/.claude/skills/<name>/`
+   - Claude Code 探测 `~/.claude/skills/<name>/` 与项目 `.claude/skills/<name>/`；Codex 探测 `~/.codex/skills/<name>/` 与项目 `.codex/skills/<name>/`。存在 → 过
+   - 缺失且契约附了 git 来源 → Claude Code 克隆到临时目录后安装；Codex 先展示来源、目标目录与安全扫描范围，等待用户明确授权后才 clone 和安装(兼容两种仓库布局):
+     - 仓库根有 `SKILL.md` → 整体拷到当前运行时的 skill 目录
+     - 否则查仓库内 `.claude/skills/<name>/` 或 `.codex/skills/<name>/` 子目录 → 拷它到当前运行时的 skill 目录
      - 两种都没有 → 按安装失败处理
-   - **拷贝安装前先做安全扫描**:Grep 克隆内容(SKILL.md 及附带脚本)的可疑模式——`curl`/`wget` 管道执行、`base64 -d`、向声明外域名外发数据、读写 `~/.claude/skills/<name>/` 之外的路径、访问 `~/.ssh`/`~/.aws` 等敏感目录。命中 → 不安装,告知用户「该 skill 内容可疑,请人工审查后手动安装」,按降级处理
+   - **拷贝安装前先做安全扫描**:Grep 克隆内容(SKILL.md 及附带脚本)的可疑模式——`curl`/`wget` 管道执行、`base64 -d`、向声明外域名外发数据、读写目标 skill 目录之外的路径、访问 `~/.ssh`/`~/.aws` 等敏感目录。命中 → 不安装,告知用户「该 skill 内容可疑,请人工审查后手动安装」,按降级处理
    - 缺失且无来源/安装失败 → 告知用户,并在派发给 developer 的 prompt 里注明「该 skill 本轮不可用,降级按基线与规范处理」,**不因此中断流水线**
 6. 通知通道(契约声明了通知 webhook 时):URL 从环境变量读(如 `FEISHU_WEBHOOK_URL`),未设置 → 静默跳过不阻断。三个触发时机各发一条纯文本(curl,内容=项目目录名 + 当前阶段 + 在等用户做什么):①闸口 1 等待确认;②CONCERNS 待裁决;③打回到顶或闸口 2 完成。除此之外不刷屏。
 
@@ -61,16 +67,16 @@ description: 端到端研发流水线:澄清 → 拆解 → 范围评审 → 批
 
 ### 第 3 步:开发 ⇄ 测试(批次级循环 + team 直聊,打回 ≤3 轮/批)
 
-计划按批次组织时逐批循环;无批次的计划视为单批(=整体),流程相同。首轮交接经由你,打回循环让两个 teammate 直接对话(SendMessage 会唤醒已完成的对端续上下文)。
+计划按批次组织时逐批循环;无批次的计划视为单批(=整体),流程相同。首轮交接经由你，打回循环让两个 teammate 直接续跑对话（Claude Code 用 SendMessage；Codex 用 follow-up 消息）。
 
 每一批次:
 
 1. `dev` 开发该批:任务 checkbox 逐个勾选,批次收口按契约测试命令自测全绿 → 向你简报「批次 X 交付」。
 2. 你收到交付简报后**两件事同时做**:
-   - 起(或唤醒)`pipeline-tester`(命名 `qa`)测该批——首轮 qa 还不存在,由你起并交接(传批次计划文件路径);后续批次直接 SendMessage 唤醒它续上下文。
+   - 起(或唤醒)`pipeline-tester`(命名 `qa`)测该批——首轮 qa 还不存在,由你起并交接(传批次计划文件路径);后续批次通过当前运行时的续跑消息唤醒它并保留上下文。
    - 让 `dev` 继续开发下一批,**不等待 qa 结果**(测上一批与开下一批并行重叠)。
 3. qa 按「测试范围 = 该批核心任务 + 核心验收标准」做**快速检查**,报告写 `tmp/pipeline/qa-report.md`(`batch:` 行注明批次);非核心项、跨批次回归、大面边界探索记录为「终验复核项」,不占用本批轮次:
-   - `gate: FAIL` → qa 把失败清单(复现步骤 + 实际 vs 预期)直接 SendMessage 给 `dev`;dev 暂停手头批次、优先修复被打回的批次,修完 SendMessage qa 复测。打回循环在 dev ⇄ qa 之间直聊,你只收简报。复测走收敛范围(修复项 + 影响面 + 快速命令层),不整批重跑。
+   - `gate: FAIL` → qa 把失败清单(复现步骤 + 实际 vs 预期)通过当前运行时的续跑消息直接发给 `dev`;dev 暂停手头批次、优先修复被打回的批次,修完后通知 qa 复测。打回循环在 dev ⇄ qa 之间直聊,你只收简报。复测走收敛范围(修复项 + 影响面 + 快速命令层),不整批重跑。
    - `gate: CONCERNS` → qa 停下等你;你把非阻断问题展示给用户裁决:**豁免 → 该批封版;不豁免 → 转交 dev 修复**。
      - **裁决必须落文件**:无论豁免与否,都要追加写入 `tmp/pipeline/rulings.md`(格式见下);跨会话续跑时以该文件为唯一事实源,避免多会话对同一问题给出不同结论。
      - rulings.md 单条格式:

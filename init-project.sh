@@ -1,11 +1,28 @@
 #!/usr/bin/env bash
 # init-project.sh — 把当前目录(或指定目录)接入 pipeline-standard
-# 用法: bash init-project.sh [项目根目录]     (默认当前目录)
-# 动作: ① 拷贝 PIPELINE.md 契约模板 ② 配置 .claude/settings.json 禁区 hook ③ 确认 .gitignore 含 /tmp/
+# 用法: bash init-project.sh [--all|--claude|--codex] [项目根目录]     (默认当前目录)
+# 动作: ① 拷贝 PIPELINE.md 契约模板 ② 配置 Claude Code 的 .claude/settings.json 禁区 hook ③ 确认 .gitignore 含 /tmp/
+# Codex 读取同一份 PIPELINE.md；其禁区校验由 pipeline skill 的流程执行，不写 Claude 配置。
 # 幂等:已存在的文件不会被覆盖。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+MODE="--all"
+if [[ "${1:-}" == --* ]]; then
+  MODE="$1"
+  shift
+fi
+case "$MODE" in
+  --all|--claude|--codex) ;;
+  *)
+    echo "用法: bash init-project.sh [--all|--claude|--codex] [项目根目录]" >&2
+    exit 2
+    ;;
+esac
+if [ "$#" -gt 1 ]; then
+  echo "用法: bash init-project.sh [--all|--claude|--codex] [项目根目录]" >&2
+  exit 2
+fi
 TARGET="$(cd "${1:-.}" && pwd)"
 
 echo "接入项目: $TARGET"
@@ -18,7 +35,8 @@ else
   echo "已拷贝: PIPELINE.md(请逐项替换 ❏)"
 fi
 
-# ② PreToolUse hook(禁区硬拦截)
+# ② Claude Code 的 PreToolUse hook(禁区硬拦截)
+if [ "$MODE" = "--all" ] || [ "$MODE" = "--claude" ]; then
 HOOK_CMD='bash ~/.claude/hooks/pipeline-guard.sh'
 mkdir -p "$TARGET/.claude"
 SETTINGS="$TARGET/.claude/settings.json"
@@ -120,6 +138,9 @@ if ! merge_settings_json "$SETTINGS" "$HOOK_CMD"; then
 }
 EOF
 fi
+else
+  echo "Codex 模式:跳过 .claude/settings.json hook 配置；禁区校验由 pipeline skill 执行。"
+fi
 
 # ③ .gitignore 含 pipeline 相关临时产物
 GITIGNORE="$TARGET/.gitignore"
@@ -140,4 +161,5 @@ EOF
 fi
 
 echo ""
-echo "接入完成。下一步:编辑 $TARGET/PIPELINE.md 替换 ❏,然后在该项目的 Claude Code 会话里运行 /pipeline <任务描述>"
+echo "接入完成。下一步:编辑 $TARGET/PIPELINE.md 替换 ❏。"
+echo "Claude Code 使用 /pipeline <任务描述>；Codex 安装 skill 后使用 \$pipeline <任务描述>。"

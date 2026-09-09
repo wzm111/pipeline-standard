@@ -5,7 +5,7 @@
 > 接入时逐项替换 ❏ 处内容,删除本说明行。
 >
 > 🛠 本契约依赖流水线工具:**[pipeline-standard](https://github.com/wzm111/pipeline-standard)**
-> 新成员安装:`git clone` 该仓库后 `bash install.sh`(软链角色/命令/hook 到 ~/.claude/),本项目接入已由 `init-project.sh` 完成。
+> 新成员安装:`git clone` 该仓库后 `bash install.sh`(安装 Claude Code 角色/hook 与 Claude/Codex skill；可传 `--claude` 或 `--codex`),本项目接入已由 `init-project.sh` 完成。
 
 ## ① 需求基线
 
@@ -18,7 +18,7 @@
 
 - 架构基线:❏ 架构文档路径(最高优先级的技术决策必须在此声明)
 - 工程约定:❏ 如项目根的 CLAUDE.md / CONTRIBUTING.md
-- UI 设计辅助(可选):❏ 声明 developer 可调用的设计类 skill(如 ui-ux-pro-max,来源 `https://github.com/nextlevelbuilder/ui-ux-pro-max-skill`),处理视觉基线未覆盖的细节;不声明则 developer 不调任何 skill。附 git 来源后缺失时 /pipeline 自动安装到 ~/.claude/skills/(兼容仓库根或 `.claude/skills/<name>/` 子目录两种布局);无来源则缺失时降级不阻断
+- UI 设计辅助(可选):❏ 声明 developer 可调用的设计类 skill(如 ui-ux-pro-max,来源 `https://github.com/nextlevelbuilder/ui-ux-pro-max-skill`),处理视觉基线未覆盖的细节;不声明则 developer 不调任何 skill。附 git 来源后缺失时，Claude Code 可安装到当前 skill 目录；Codex 会先展示来源、目标目录与安全扫描范围，获得授权后才安装(兼容仓库根或 `.claude/skills/<name>/`、`.codex/skills/<name>/` 子目录两种布局)；无来源则缺失时降级不阻断。
 - 其他规范:❏
 
 ## ③ 测试命令
