@@ -1,6 +1,6 @@
 # pipeline-standard 工具速查表
 
-本文件是 `/pipeline` 工具自检时可能自动安装的全局 CLI 单一来源。新增或修改 CLI 时只需改这里，README.md 与 `skills/pipeline/SKILL.md` 均引用本文件。
+本文件是 `/pipeline` 工具自检时可安装的全局 CLI 单一来源。Claude Code 可按契约自动安装；Codex 会先展示命令并等待用户授权。新增或修改 CLI 时只需改这里，README.md 与 `skills/pipeline/SKILL.md` 均引用本文件。
 
 ## 已知全局 CLI
 
@@ -36,4 +36,4 @@
 
 - 日常批次 gate 只跑快反馈项（lint / typecheck / 单测 / E2E 冒烟）。
 - 重工具（Lighthouse / fuzz / 压测）声明为里程碑收口用，避免每次 run 都烧全量。
-- 速查表没有的 CLI → `/pipeline` 尝试 `npm install -g <同名包>`，失败按降级处理。
+- 速查表没有的 CLI → Claude Code 的 `/pipeline` 尝试 `npm install -g <同名包>`；Codex 先请求授权，失败或未获授权则降级处理。

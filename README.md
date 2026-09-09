@@ -9,17 +9,17 @@
 ## 组成
 
 ```text
-agents/                     5 个通用角色(软链到 ~/.claude/agents/)
+agents/                     5 个通用角色(Claude Code 注册；Codex 以任务模板派发)
   pipeline-scope-guardian   A 范围守门员(只读):审计划、验收,对照需求基线与规范
   pipeline-planner          B 任务拆解员:先澄清歧义,再拆成带验收标准的任务清单
   pipeline-developer        C 开发工程师:只按计划做,checkbox 追踪进度
   pipeline-tester           D 测试工程师:实测 + 对抗式找茬,gate 三态结论,只报不改
   pipeline-releaser         E 发布工程师:变更摘要 + 提交建议,不动 git/不部署
-skills/pipeline/SKILL.md    /pipeline 斜杠命令:编排流程、两道人工闸口、规模分流、team 直聊
+skills/pipeline/SKILL.md    双端 skill：Claude `/pipeline`、Codex `$pipeline`
 hooks/pipeline-guard.sh     禁区硬拦截 hook(PreToolUse),流水线运行期间生效
 templates/PIPELINE.md       项目契约模板(❏ 占位符)
-templates/single-agent-pipeline.md  便携版:单 agent 顺序执行全流程(非 Claude Code 工具用)
-install.sh                  安装/同步脚本(软链 agents/skills/hooks 到 ~/.claude/)
+templates/single-agent-pipeline.md  便携版:单 agent 顺序执行全流程(无子 agent 工具用)
+install.sh                  双端安装/同步脚本(Claude agents/hooks + Claude/Codex skills)
 init-project.sh             项目接入脚本(拷契约模板 + 配 hook + gitignore,幂等)
 ```
 
@@ -61,7 +61,7 @@ flowchart LR
 - **澄清前置**:planner 发现实质性歧义先提问,不带着猜测拆计划
 - **规模分流**:小任务(≤2 文件、无新依赖)走快速通道,跳过范围评审
 - **批次级循环**:任务 >8 个时计划按批次组织(每批 ≤10 任务,plan.md 索引 + plan-<批次>.md 详情),每批 dev 交付即测;qa 测上一批与 dev 开下一批**并行重叠**,fail-fast 不攒到最后,单批打回 ≤3 轮
-- **team 直聊**:开发⇄测试打回循环由两个 teammate 直接 SendMessage,调度员只监控轮次与裁决,不经手中转(省上下文;异常时回退中转模式)
+- **team 直聊**:开发⇄测试打回循环由两个 teammate 直接续跑对话，调度员只监控轮次与裁决，不经手中转(省上下文；异常时回退中转模式)
 - **闸口 1 ETA**:计划头部带任务数/批次数/预估时长量级;里程碑级计划附「拆分建议」,人工决定整体跑还是切片跑
 - **QA gate 三态(批次级快速检查)**:`PASS / CONCERNS / FAIL`;批次级只覆盖本批核心路径,非核心项与跨批回归记录为「终验复核项」,不占用轮次
 - **终验/整体复核**:全部批次 PASS 后,scope-guardian 汇总并执行终验清单,产出 `tmp/pipeline/acceptance.md`,闸口 2 明确提醒用户人工 check
@@ -90,27 +90,33 @@ flowchart LR
 
 - **复盘闭环**:闸口 2 落 `tmp/pipeline/retro.md`(规模 / ETA vs 实际 / 打回轮次),下次 run 拆解时 planner 读取校准预估
 
-## 非 Claude Code 工具:便携模式
+## Codex 原生模式与便携模式
 
-流水线分三层,前两层与工具无关——**PIPELINE.md 契约**(纯 markdown)与**角色 prompt**(自然语言纪律);锁死在 Claude Code 的只有编排执行层(subagent、skills、PreToolUse hook、team 直聊)。
+Codex 支持本仓库的 `pipeline` skill 原生编排：planner / guardian / dev / qa / releaser 以 Codex 子 agent 运行，批次级 qa 与 dev 也可并行、续跑和直接回传。安装后新开 Codex 会话，使用 `$pipeline <任务描述>`。
 
-`templates/single-agent-pipeline.md` 是便携版:5 个角色串成单 agent 顺序执行,拷到任意 agentic 编码工具即可用(Codex `~/.codex/prompts/`、Gemini 自定义命令、Cursor 直接粘贴)。方法论、闸口、批次循环、打回上限与主版完全一致。
+Codex 与 Claude Code 共用 `PIPELINE.md`、角色规则、两道闸口、artifact 和打回上限。两端的唯一执行机制差异是 Claude Code 可通过 `.claude/settings.json` 的 `PreToolUse` hook 硬拦截越界写；Codex 当前改为每次写入前的 `PIPELINE.md` 强制校验，不能宣称具备同等级工具层拦截。Claude Code 保留契约声明的自动 CLI/skill 安装；Codex 对全局 CLI 安装、clone 外部 skill 等项目外写入会先请求授权。
 
-Claude Code 版的独有优势(= 便携版的降级项):
+若运行环境没有可用的子 agent，才使用下面的单 agent 便携模式。
 
-- **真角色隔离**:每角色独立 subagent 冷启动,tester 看不到 dev 的实现思路,对抗式找茬是真对抗;便携版同一上下文,靠纪律模拟
-- **批次并行**:qa 测上一批与 dev 开下一批墙钟重叠;便携版只能串行
-- **禁区硬拦截**:⑤ 白名单由 hook 机器执行,不靠 prompt 自觉;便携版无此保障
-- **打回直聊**:dev⇄qa teammate 互发消息,不经调度员上下文,省 token;便携版单上下文无此需求,但也失去上下文瘦身收益
+流水线分三层，前两层与工具无关——**PIPELINE.md 契约**(纯 markdown)与**角色 prompt**(自然语言纪律)；便携版省去编排执行层。
+
+`templates/single-agent-pipeline.md` 是便携版:5 个角色串成单 agent 顺序执行，拷到任意不支持子 agent/hook 的编码工具即可用(Gemini 自定义命令、Cursor 直接粘贴等)。方法论、闸口、批次循环、打回上限与主版完全一致。
+
+原生多 agent 版相对便携版的优势：
+
+- **真角色隔离**:每角色独立 subagent 冷启动,tester 看不到 dev 的实现思路,对抗式找茬是真对抗;便携版同一上下文,靠纪律模拟。
+- **批次并行**:qa 测上一批与 dev 开下一批墙钟重叠;便携版只能串行。
+- **打回直聊**:dev⇄qa 直接续跑消息，不经调度员转发完整上下文，节省上下文；便携版单上下文无此需求，但也失去上下文瘦身收益。
+- **Claude Code 额外具备禁区硬拦截**:⑤ 白名单由 `PreToolUse` hook 机器执行。Codex 保留等价的流程校验，但当前不具备同一层级的 hook 接口。
 
 ## 使用
 
-1. 安装(每台机器一次):`git clone` 本仓库后 `bash install.sh`(只做软链 agents/skills/hooks 到 `~/.claude/`,不动其他配置)。
-2. 项目接入:`bash init-project.sh /path/to/项目`(拷契约模板 + 配 hook + gitignore,详见「接入新项目」一节),然后编辑项目根的 `PIPELINE.md` 逐项替换 ❏。契约随项目 git 管理。
-3. 在项目的 Claude Code 会话里:`/pipeline <任务描述>`。
+1. 安装(每台机器一次):`git clone` 本仓库后 `bash install.sh`(同时安装 Claude Code 与 Codex；可传 `--claude` 或 `--codex` 限定目标)。
+2. 项目接入:`bash init-project.sh /path/to/项目`(拷契约模板 + Claude hook + gitignore；Codex-only 可用 `--codex` 跳过 Claude 配置，详见「接入新项目」一节),然后编辑项目根的 `PIPELINE.md` 逐项替换 ❏。契约随项目 git 管理。
+3. 在项目会话中触发:Claude Code 用 `/pipeline <任务描述>`；Codex 用 `$pipeline <任务描述>`。
 4. 中间产物在项目的 `tmp/pipeline/`(plan.md + plan-<批次>.md / qa-report.md / release-notes.md / retro.md / state.md)。同一项目同一时刻只跑一条 `/pipeline`(artifact 是单例,并行会互踩)。
 5. 流水线异常中断后若普通编辑被 hook 误拦,删除 `tmp/pipeline/.active` 即可。
-6. 非 Claude Code 工具(Codex/Gemini/Cursor 等)用便携模式(见上节),无需 install.sh。
+6. Codex 使用原生 skill；没有子 agent/hook 的其他工具使用便携模式(见上节)。
 
 ## 角色工具箱(推荐)
 
@@ -123,10 +129,11 @@ Claude Code 版的独有优势(= 便携版的降级项):
 ## 接入新项目
 
 ```bash
-bash init-project.sh /path/to/项目     # 或在项目目录里直接 bash <本目录>/init-project.sh
+bash init-project.sh /path/to/项目            # 双端/Claude Code 项目
+bash init-project.sh --codex /path/to/项目    # Codex-only 项目，不创建 .claude 配置
 ```
 
-一条命令完成:拷贝 `templates/PIPELINE.md` 到项目根 + 合并写入 `.claude/settings.json` 禁区 hook + 确认 `.gitignore` 含 `/tmp/`。幂等,重复执行不覆盖已有文件。之后编辑 PIPELINE.md 逐项替换 ❏,即可 `/pipeline <任务描述>`。
+一条命令完成:拷贝 `templates/PIPELINE.md` 到项目根 + 确认 `.gitignore` 含 `/tmp/`；在 Claude Code 项目中还会合并写入 `.claude/settings.json` 禁区 hook。幂等,重复执行不覆盖已有文件。之后编辑 PIPELINE.md 逐项替换 ❏，再按所用运行时触发流水线。
 
 ## 最近更新
 

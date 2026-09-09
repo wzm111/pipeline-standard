@@ -1,7 +1,7 @@
 # 便携版流水线(单 Agent 降级模式)
 
 > pipeline-standard 的便携形态,给没有 subagent / hook 机制的 agentic 编码工具用
-> (Codex CLI、Gemini CLI、Cursor 等)。一个 agent 依次扮演全部 5 个角色,串行执行。
+> (Gemini CLI、Cursor 等无子 agent/hook 的工具)。一个 agent 依次扮演全部 5 个角色,串行执行。
 > 方法论、闸口、批次、打回上限与 Claude Code 版完全一致;执行保障的降级项见文末。
 >
 > 本文件是 `agents/*.md` 的蒸馏版,只保留核心纪律;完整角色定义见同仓库 `agents/` 目录。
@@ -18,13 +18,12 @@
 - **外部 CLI/Skill 依赖**: ❏ 例如 `sg`, `lhci`, `ui-ux-pro-max`(完整安装命令见 `tools/quick-install.md`)
 - **需求基线文档**: ❏ 例如 `PRD.md`, `README.md` 需求章节,或 Issue 链接
 
-> 提示:把替换后的本文件保存到项目自定义命令目录(如 `~/.codex/prompts/pipeline.md`),并在每次触发时把任务描述附到末尾。
+> 提示:把替换后的本文件保存到所用工具的自定义命令目录，并在每次触发时把任务描述附到末尾。
 
 ## 用法
 
 把本文件接入所用工具的自定义命令机制,触发时附带任务描述:
 
-- Codex CLI:拷到 `~/.codex/prompts/pipeline.md`,以自定义命令触发
 - Gemini CLI:包一层自定义 command 引用本文件
 - Cursor / 其他:直接把全文 + 任务描述粘进对话
 
