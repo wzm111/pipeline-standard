@@ -4,7 +4,13 @@
 ![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
 ![Last commit](https://img.shields.io/github/last-commit/wzm111/pipeline-standard?style=flat-square)
 
-端到端「需求 → 开发 → 测试 → 上线」多角色流水线,方法论通用,项目差异由项目根的 `PIPELINE.md` 契约注入。
+端到端「需求 → 开发 → 测试 → 上线」多角色流水线，同时原生支持 **Claude Code** 与 **Codex**；方法论通用，项目差异由项目根的 `PIPELINE.md` 契约注入。
+
+| 运行时 | 触发方式 | 原生能力 |
+| --- | --- | --- |
+| Claude Code | `/pipeline <任务描述>` | 注册角色、批次并行、team 直聊、`PreToolUse` 禁区硬拦截 |
+| Codex | `$pipeline <任务描述>` | 子 agent 编排、批次并行、follow-up 续跑、`PIPELINE.md` 写前校验 |
+| 其他 agentic 工具 | 便携模板 | 单 agent 串行执行核心流程 |
 
 ## 组成
 
@@ -29,7 +35,7 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 
 ```mermaid
 flowchart TD
-    S["/pipeline 任务描述"] --> P["前置:读 PIPELINE.md 契约<br>规模分流 · 工具自检 · skill 自检"]
+    S["Claude: /pipeline 任务描述<br>Codex: $pipeline 任务描述"] --> P["前置:读 PIPELINE.md 契约<br>规模分流 · 工具自检 · skill 自检"]
     P --> B["① 拆解 · planner<br>实质歧义先出待澄清清单"]
     B --> G1{"闸口 1 · 计划确认(人工)<br>附任务数 / 批次数 / 预估时长"}
     G1 -- "修改意见" --> B
@@ -65,7 +71,7 @@ flowchart LR
 - **闸口 1 ETA**:计划头部带任务数/批次数/预估时长量级;里程碑级计划附「拆分建议」,人工决定整体跑还是切片跑
 - **QA gate 三态(批次级快速检查)**:`PASS / CONCERNS / FAIL`;批次级只覆盖本批核心路径,非核心项与跨批回归记录为「终验复核项」,不占用轮次
 - **终验/整体复核**:全部批次 PASS 后,scope-guardian 汇总并执行终验清单,产出 `tmp/pipeline/acceptance.md`,闸口 2 明确提醒用户人工 check
-- **禁区硬拦截**:hook 在 `/pipeline` 运行期间(存在 `tmp/pipeline/.active` 标记)按 PIPELINE.md ⑤ 的 `pipeline-guard` 块拦截越界 Write/Edit,不依赖 prompt 自觉
+- **禁区保护**:Claude Code 的 hook 在 `/pipeline` 运行期间(存在 `tmp/pipeline/.active` 标记)按 PIPELINE.md ⑤ 的 `pipeline-guard` 块硬拦截越界 Write/Edit；Codex 在每次写入前对同一契约做流程校验
 - **打回硬上限**:范围评审 ≤2 轮,测试 ≤3 轮,到顶停报
 
 ### 效率与成本
@@ -73,7 +79,7 @@ flowchart LR
 - **批次进度简报**:每批 gate 向用户一行简报(进度 N/M + gate + 下一步);阶段转换(过半/全批交付/异常停止)再发**表格式快照**(批次状态+实测节奏+修正 ETA),长跑进度始终可见
 - **上下文瘦身**:plan 按批拆文件、demo/大文档按需切片检索,控制各角色冷启动读入量
 - **复测收敛**:打回复测只覆盖修复项 + 影响面 + 快速命令层,首轮已过的重命令不重复跑——打回轮次不再烧全量 token
-- **模型分级**:tester 默认 sonnet、releaser 默认 haiku(角色 frontmatter 声明),重判断力角色跟随主会话模型
+- **模型分级**:Claude Code 中 tester 默认 sonnet、releaser 默认 haiku(角色 frontmatter 声明)；Codex 子 agent 默认继承主会话模型
 - **Ponytail 编码纪律**:developer 遵循「最少代码原则」——优先复用现有实现/一行能解不写十行/不添加计划外抽象;测试、类型安全、可访问性、安全边界不许精简
 - **ETA 自动校准**:planner 读取历史 `tmp/pipeline/retro.md` 的实测数据反向校准系数;头部同时给出「墙钟时间」(并行后)与「人力时间」两种估算
 
@@ -83,7 +89,7 @@ flowchart LR
 - **跨会话裁决一致性**:CONCERNS 的人工裁决必须写入 `tmp/pipeline/rulings.md`,续跑时以该文件为唯一事实源,避免多会话对同一问题给出不同结论
 - **git 写操作默认硬边界**:releaser 及任何角色禁止执行 `git add/commit/push/tag`,除非 PIPELINE.md 第 ④ 节明确声明「自动提交」;默认闸口 2 由人类手工执行,release-notes.md 只提供建议命令
 - **预算上限**:闸口 1 可设时长/批次上限,快照对照,≈80% 主动预警
-- **skill 安全扫描**:声明式 skill 自动 clone 安装前扫可疑模式(管道执行/外联/越权读写),命中拒装转人工
+- **skill 安全扫描**:声明式 skill 安装前扫描可疑模式(管道执行/外联/越权读写)，命中拒装转人工；Codex 在 clone 前还会请求授权
 - **可选通知**:契约声明 webhook(URL 走环境变量)后,闸口等待/待裁决/完成三时机推送,未设静默跳过
 
 ### 复盘闭环
@@ -114,13 +120,13 @@ Codex 与 Claude Code 共用 `PIPELINE.md`、角色规则、两道闸口、artif
 1. 安装(每台机器一次):`git clone` 本仓库后 `bash install.sh`(同时安装 Claude Code 与 Codex；可传 `--claude` 或 `--codex` 限定目标)。
 2. 项目接入:`bash init-project.sh /path/to/项目`(拷契约模板 + Claude hook + gitignore；Codex-only 可用 `--codex` 跳过 Claude 配置，详见「接入新项目」一节),然后编辑项目根的 `PIPELINE.md` 逐项替换 ❏。契约随项目 git 管理。
 3. 在项目会话中触发:Claude Code 用 `/pipeline <任务描述>`；Codex 用 `$pipeline <任务描述>`。
-4. 中间产物在项目的 `tmp/pipeline/`(plan.md + plan-<批次>.md / qa-report.md / release-notes.md / retro.md / state.md)。同一项目同一时刻只跑一条 `/pipeline`(artifact 是单例,并行会互踩)。
-5. 流水线异常中断后若普通编辑被 hook 误拦,删除 `tmp/pipeline/.active` 即可。
+4. 中间产物在项目的 `tmp/pipeline/`(plan.md + plan-<批次>.md / qa-report.md / release-notes.md / retro.md / state.md)。同一项目同一时刻只跑一条流水线(artifact 是单例,并行会互踩)。
+5. Claude Code 流水线异常中断后若普通编辑被 hook 误拦,删除 `tmp/pipeline/.active` 即可；Codex 同样会在中止时清理该标记。
 6. Codex 使用原生 skill；没有子 agent/hook 的其他工具使用便携模式(见上节)。
 
 ## 角色工具箱(推荐)
 
-通用层不硬编码任何工具——由项目契约 ③ 声明,`/pipeline` 启动时自检、缺失自动安装(全局 CLI 型)。求精不求多,每角色 1–2 个;`templates/PIPELINE.md` ③ 节有同份注释清单(含条件启用项)可直接启用。完整安装命令与场景说明见 [tools/quick-install.md](tools/quick-install.md),此处不再重复,避免多份文档不同步。
+通用层不硬编码任何工具——由项目契约 ③ 声明，流水线启动时自检。Claude Code 可按契约自动安装缺失的全局 CLI；Codex 会先展示命令和影响并请求授权。求精不求多,每角色 1–2 个;`templates/PIPELINE.md` ③ 节有同份注释清单(含条件启用项)可直接启用。完整安装命令与场景说明见 [tools/quick-install.md](tools/quick-install.md),此处不再重复,避免多份文档不同步。
 
 条件启用(只进模板注释,不进主表):knip(死代码扫描,项目体量大后)、size-limit(bundle 体积门禁,有体积验收条时)、npm audit(依赖漏洞,零安装)。
 
@@ -137,6 +143,7 @@ bash init-project.sh --codex /path/to/项目    # Codex-only 项目，不创建 
 
 ## 最近更新
 
+- **Unreleased**: Claude Code 与 Codex 双端原生支持——统一 `PIPELINE.md` 契约和角色规则；Codex 使用 `$pipeline`、子 agent 与 follow-up 续跑，安装和项目接入支持 `--codex`。
 - **v3.5.3**: v3.5.2 review 补丁——hook 拦截 Bash 层 git 写操作 / init-project 自动配置 Bash PreToolUse / state.md 五要素示例 / 闸口 1 与便携版双口径 ETA 展示细化
 - **v3.5.2**: M1 实战补强——git 写操作硬边界 / 跨会话裁决一致性(rulings.md) / mock 基础设施端点豁免 / init-project 默认 gitignore 守护 / retro 校准 ETA 双口径
 - **v3.5.1**: developer 角色引入 Ponytail 编码纪律（最少代码原则）
