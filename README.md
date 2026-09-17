@@ -22,6 +22,7 @@ agents/                     5 个通用角色(Claude Code 注册；Codex 以任�
   pipeline-tester           D 测试工程师:实测 + 对抗式找茬,gate 三态结论,只报不改
   pipeline-releaser         E 发布工程师:thorough 或自动提交时启用,默认不动 git/不部署
 skills/pipeline/SKILL.md    双端 skill：Claude `/pipeline`、Codex `$pipeline`
+skills/pipeline/references/ 按档流程、QA、依赖和恢复说明(按需加载)
 hooks/pipeline-guard.sh     禁区硬拦截 hook(PreToolUse),流水线运行期间生效
 templates/PIPELINE.md       项目契约模板(❏ 占位符)
 templates/single-agent-pipeline.md  便携版:单 agent 顺序执行全流程(无子 agent 工具用)
@@ -31,7 +32,7 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 
 ## 流程
 
-主流程(v3.6.0 三档独立执行链):
+主流程(v3.6.1 三档独立执行链):
 
 ```mermaid
 flowchart TD
@@ -75,19 +76,20 @@ flowchart LR
 
 - **批次进度简报**:每批 gate 只发一行；表格式快照仅用于等待用户、预算预警和异常停止。
 - **上下文瘦身**:plan 按批拆文件、demo/大文档按需切片检索,控制各角色冷启动读入量
-- **差量交接**:调度员先提取 context packet；首轮只传本批计划、边界、验收和测试层，后续通过角色续跑只传变更差量，不把 PRD/完整计划/长对话反复灌给每个 agent。
+- **渐进加载**:主 SKILL 只保留路由和硬边界，fast/standard/thorough、QA、依赖、恢复说明只在命中时加载。
+- **共享上下文**:稳定项目内容写 `context/base.md` 并按来源指纹复用；每次只新建轻量 `context/run.md`，各角色再接收阶段差量。
 - **验证分层**:每批只跑快速且受影响的检查，完整类型检查、构建、E2E、性能和扫描只在最后一批或终验运行一次；打回复测继续限定在修复影响面。
 - **QA 报告压缩**:`qa/index.md` 只保存批次索引，`qa/<批次>.md` 仅保留当前轮全文与紧凑历史，终验默认不重读已 PASS 正文。
 - **旧契约兼容**:未声明快速/终验分层时自动分类且不阻塞，全部原命令最多在收口运行一次。
 - **复测收敛**:打回复测只覆盖修复项 + 影响面 + 快速命令层,首轮已过的重命令不重复跑——打回轮次不再烧全量 token
 - **模型分级**:Claude Code 中 tester 默认 sonnet、releaser 默认 haiku(角色 frontmatter 声明)；Codex 子 agent 默认继承主会话模型
 - **Ponytail 编码纪律**:developer 遵循「最少代码原则」——优先复用现有实现/一行能解不写十行/不添加计划外抽象;测试、类型安全、可访问性、安全边界不许精简
-- **ETA 自动校准**:planner 读取历史 `tmp/pipeline/retro.md` 的实测数据反向校准系数;头部同时给出「墙钟时间」(并行后)与「人力时间」两种估算
+- **ETA 自动校准**:planner 只读 metrics 最后 5 条同档记录；样本足够时用中位数/P80，不足时给低置信度阶段区间，不再采用固定每任务分钟系数。
 
 ### 可靠性与恢复
 
 - **断点自恢复**:standard/thorough 维护 `tmp/pipeline/state.md`；fast 正常流程不写，只在异常时保存最小现场。
-- **跨会话裁决一致性**:CONCERNS 的人工裁决必须写入 `tmp/pipeline/rulings.md`,续跑时以该文件为唯一事实源,避免多会话对同一问题给出不同结论
+- **裁决分片**:只搜索 `rulings/index.md`，命中当前范围才读取 `rulings/<run-id>.md`，避免跨运行历史无限灌入上下文。
 - **git 写操作默认硬边界**:releaser 及任何角色禁止执行 `git add/commit/push/tag`,除非 PIPELINE.md 第 ④ 节明确声明「自动提交」；默认闸口 2 由人类手工执行，建议命令位于本档摘要或 thorough 的 release-notes.md。
 - **预算上限**:闸口 1 可设时长/批次上限,快照对照,≈80% 主动预警
 - **skill 安全扫描**:声明式 skill 安装前扫描可疑模式(管道执行/外联/越权读写)，命中拒装转人工；Codex 在 clone 前还会请求授权
@@ -95,7 +97,7 @@ flowchart LR
 
 ### 复盘闭环
 
-- **复盘闭环**:闸口 2 落 `tmp/pipeline/retro.md`(规模 / ETA vs 实际 / 打回轮次),下次 run 拆解时 planner 读取校准预估
+- **轻量度量**:每次只向 `metrics.tsv` 追加一行真实运行指标；token 不可见时留空。retro 保留定性偏差，planner 不全文扫描历史。
 
 ## Codex 原生模式与便携模式
 
@@ -121,13 +123,13 @@ Codex 与 Claude Code 共用三档路由、`PIPELINE.md`、角色规则、条件
 1. 安装(每台机器一次):`git clone` 本仓库后 `bash install.sh`(同时安装 Claude Code 与 Codex；可传 `--claude` 或 `--codex` 限定目标)。
 2. 项目接入:`bash init-project.sh /path/to/项目`(拷契约模板 + Claude hook + gitignore；Codex-only 可用 `--codex` 跳过 Claude 配置，详见「接入新项目」一节),然后编辑项目根的 `PIPELINE.md` 逐项替换 ❏。契约随项目 git 管理。
 3. 在项目会话中触发:Claude Code 用 `/pipeline <任务描述>`；Codex 用 `$pipeline <任务描述>`。可加 `--fast`、`--standard`、`--thorough` 选档；低风险计划希望免等闸口 1 时加 `--auto`。
-4. standard/thorough 中间产物在项目的 `tmp/pipeline/`(`plan*.md`、`qa/index.md`、`qa/<批次>.md`、`qa/final.md`，以及按档生成的 acceptance/release/retro/state)；fast 只保留运行期 `.active`。同一项目同一时刻只跑一条流水线。
+4. standard/thorough 中间产物位于 `tmp/pipeline/`(`context/base.md`、`context/run.md`、角色差量、`plan*.md`、`qa/`、分片 `rulings/`、metrics，以及按档生成的 acceptance/release/retro/state)；fast 正常流程只追加一行 metrics。单项目同时只跑一条。
 5. Claude Code 流水线异常中断后若普通编辑被 hook 误拦,删除 `tmp/pipeline/.active` 即可；Codex 同样会在中止时清理该标记。
 6. Codex 使用原生 skill；没有子 agent/hook 的其他工具使用便携模式(见上节)。
 
 ## 角色工具箱(推荐)
 
-通用层不硬编码任何工具——由项目契约 ③ 声明，流水线启动时自检。Claude Code 可按契约自动安装缺失的全局 CLI；Codex 会先展示命令和影响并请求授权。求精不求多,每角色 1–2 个;`templates/PIPELINE.md` ③ 节有同份注释清单(含条件启用项)可直接启用。完整安装命令与场景说明见 [tools/quick-install.md](tools/quick-install.md),此处不再重复,避免多份文档不同步。
+通用层不硬编码任何工具——由项目契约 ③ 声明，只有进入实际使用该工具的测试层时才自检。Claude Code 可按契约自动安装缺失的全局 CLI；Codex 会先展示命令和影响并请求授权。求精不求多,每角色 1–2 个;`templates/PIPELINE.md` ③ 节有同份注释清单(含条件启用项)可直接启用。完整安装命令与场景说明见 [tools/quick-install.md](tools/quick-install.md),此处不再重复,避免多份文档不同步。
 
 条件启用(只进模板注释,不进主表):knip(死代码扫描,项目体量大后)、size-limit(bundle 体积门禁,有体积验收条时)、npm audit(依赖漏洞,零安装)。
 
@@ -144,6 +146,7 @@ bash init-project.sh --codex /path/to/项目    # Codex-only 项目，不创建 
 
 ## 最近更新
 
+- **v3.6.1**: 固定 token 进一步收敛——主 SKILL 渐进披露、共享 context base + 角色差量、裁决按 run 分片、轻量 metrics 与中位数/P80 ETA；Claude、Codex、便携模式同步。
 - **v3.6.0**: 性能与 token 收敛——三档独立执行链、旧契约无阻塞测试分层、QA 索引/批次报告压缩、惰性 skill 自检、standard 条件角色与 fast 最小 artifact；Claude Code、Codex、便携模式同步。
 - **v3.5.3**: v3.5.2 review 补丁——hook 拦截 Bash 层 git 写操作 / init-project 自动配置 Bash PreToolUse / state.md 五要素示例 / 闸口 1 与便携版双口径 ETA 展示细化
 - **v3.5.2**: M1 实战补强——git 写操作硬边界 / 跨会话裁决一致性(rulings.md) / mock 基础设施端点豁免 / init-project 默认 gitignore 守护 / retro 校准 ETA 双口径

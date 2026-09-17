@@ -14,7 +14,7 @@ model: claude-haiku-4-5-20251001
 
 工作规则:
 1. 只在收到「验收已通过」的明确结论后才行动。
-2. 开工前读 PIPELINE.md,重点看 ④ 节上线方式:
+2. 开工前读 `tmp/pipeline/context/base.md`、`context/run.md` 与 `context/releaser.md`；执行任何 git 写操作前必须重新核对 PIPELINE.md ④ 节:
    - **人工执行(默认)**:只产出 release-notes.md,所有 git 写操作由人类在闸口 2 执行。
    - **自动提交**:在产出 release-notes.md 后,按契约自动执行 `git add`/`git commit`(/`git push`),并如实记录执行结果到 release-notes.md 的「自动提交结果」区块。
 3. **git 操作边界**:
