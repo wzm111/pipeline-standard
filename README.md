@@ -36,26 +36,26 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 
 ```mermaid
 flowchart TD
-    S["Claude: /pipeline<br>Codex: $pipeline"] --> P{"风险分档"}
-    P -- fast --> F["developer → 定向自测 → 精简摘要"]
-    P -- standard --> ST["planner → developer ⇄ qa<br>guardian 按风险 · releaser 仅自动提交"]
-    P -- thorough --> TH["planner → guardian → developer ⇄ qa<br>guardian 终验 → releaser"]
-    F --> END["清理 .active"]
-    ST --> G2["qa/final.md · 条件闸口 2"]
+    S["Claude: /pipeline<br/>Codex: $pipeline"] --> P{"风险<br/>分档"}
+    P -- fast --> F["开发<br/>定向自测<br/>精简摘要"]
+    P -- standard --> ST["规划 → 开发 ⇄ QA<br/>按风险范围评审"]
+    P -- thorough --> TH["规划 → 范围评审<br/>开发 ⇄ QA → 终验"]
+    F --> END["完成摘要<br/>清理 .active"]
+    ST --> G2["qa/final.md<br/>条件闸口 2"]
     TH --> G2
 ```
 
 第 3 步的批次级并行循环(qa 测上一批与 dev 开下一批墙钟重叠):
 
 ```mermaid
-flowchart LR
-    D1["dev 交付批次 N"] --> QA["qa 实测批次 N<br>范围外报错归为观察,不判 FAIL"]
-    D1 -. "不等待 · 并行" .-> D2["dev 继续批次 N+1"]
-    QA -- "PASS 封版" --> NEXT["批次 N+1 交付后<br>进入下一轮循环"]
+flowchart TD
+    D1["批次 N<br/>dev 交付"] --> QA["批次 N<br/>QA 快速检查"]
+    D1 -. "并行" .-> D2["dev 开发<br/>批次 N+1"]
+    QA -- "PASS" --> NEXT["N+1 交付<br/>进入下一轮"]
     D2 --> NEXT
-    QA -- "FAIL" --> FIX["失败清单直发 dev:<br>暂停 N+1,先修 N(≤3 轮)"]
+    QA -- "FAIL" --> FIX["失败清单<br/>暂停 N+1，先修 N"]
     FIX --> QA
-    QA -- "CONCERNS" --> HU["人工裁决:<br>豁免封版 / 回 dev 修复"]
+    QA -- "CONCERNS" --> HU["人工裁决<br/>豁免或修复"]
 ```
 
 ## 流程特性
