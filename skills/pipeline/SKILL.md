@@ -5,7 +5,7 @@ description: 端到端研发流水线：按风险选择 fast、standard 或 thor
 
 # 研发流水线编排
 
-用户显式输入 Claude Code 的 `/pipeline <任务描述>` 或 Codex 的 `$pipeline <任务描述>`。你是调度员；除 fast 的变更卡和各档摘要外，不亲自规划或实现。
+用户显式输入 Claude Code 的 `/pipeline <任务描述>` 或 Codex 的 `$pipeline <任务描述>`。fast/standard 默认由当前 agent 直接规划、实现和验证；仅在独立评审或并行工作确有收益时委派。thorough 使用完整角色链。
 
 ## 运行时
 
@@ -18,12 +18,14 @@ description: 端到端研发流水线：按风险选择 fast、standard 或 thor
 1. 读取项目根 `PIPELINE.md`。不存在即停止，提示先用本仓库 `templates/PIPELINE.md` 接入。
 2. 若 `tmp/pipeline/.active` 存在或 state 显示未完成，先处理续跑/新开，禁止同项目并行两条流水线；需要恢复时读 [运行与恢复](references/operations.md)。随后创建 `.active`，任何结束路径都必须删除。
 3. 用户显式档位优先；未声明时按风险选择并在首条简报说明。只能自动升级，不能自动降级：
-   - **fast**：≤2 个既有文件；无新依赖、迁移、公开 API/数据结构、权限/支付/安全、部署配置、自动提交；范围和验收明确。只读 [fast 流程](references/fast.md)。
+   - **fast**：单个内聚、可定向验证的低风险改动；无新依赖、迁移、公开 API/数据结构、权限/支付/安全、部署配置、自动提交；范围和验收明确。文件数量不作为硬门槛，关联测试与样式可同批修改。只读 [fast 流程](references/fast.md)。
    - **standard**：默认。只读 [standard 流程](references/standard.md)；进入 QA 时再读 [QA 循环](references/qa-loop.md)。
    - **thorough**：>10 个任务、预计 >半日、跨系统/高风险，或用户要求完整审查。只读 [thorough 流程](references/thorough.md)；进入 QA 时再读 [QA 循环](references/qa-loop.md)。
-4. fast 发现任何风险信号或需要自动提交时，升级 standard 并补 planner；thorough 的闸口 1 永不自动跳过。
+4. fast 发现任何风险信号或需要自动提交时，升级 standard（高风险升级 thorough），角色按新档位按需选择；thorough 的闸口 1 永不自动跳过。
 
 ## 一次生成、差量复用的上下文
+
+fast/standard 在当前会话执行时，直接复用已读上下文；只记录最小 state（standard）和结束 metrics，不生成 base/run/角色差量文件。首次委派时才建立下述交接包。每次写入仍对照已读的 ⑤ 节校验范围；契约变化或上下文丢失时重新读取。
 
 调度员读取 `PIPELINE.md`、项目根 `AGENTS.md`/`CLAUDE.md`(存在时)及相关基线切片，生成稳定的 `tmp/pipeline/context/base.md`；本次任务另写 `context/run.md`：
 

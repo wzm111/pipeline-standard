@@ -32,13 +32,13 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 
 ## 流程
 
-主流程(v3.6.1 三档独立执行链):
+主流程(v3.7.0 按需编排):
 
 ```mermaid
 flowchart TD
     S["Claude: /pipeline<br/>Codex: $pipeline"] --> P{"风险<br/>分档"}
     P -- fast --> F["开发<br/>定向自测<br/>精简摘要"]
-    P -- standard --> ST["规划 → 开发 ⇄ QA<br/>按风险范围评审"]
+    P -- standard --> ST["直接开发与验证<br/>按需独立评审"]
     P -- thorough --> TH["规划 → 范围评审<br/>开发 ⇄ QA → 终验"]
     F --> END["完成摘要<br/>清理 .active"]
     ST --> G2["qa/final.md<br/>条件闸口 2"]
@@ -63,12 +63,13 @@ flowchart TD
 ### 核心流程
 
 - **澄清前置**:planner 发现实质性歧义先提问,不带着猜测拆计划
-- **三档分流**:`fast` 仅用于 ≤2 个既有文件且无依赖/API/安全风险的明确改动；`standard`(默认)由 planner/dev/qa 执行，guardian 按风险介入；`thorough` 保留五角色、两道闸口与里程碑拆分。用户可用 `--fast` / `--standard` / `--thorough` 指定，系统只会自动升级，不会自动降级。
-- **批次级循环**:任务 >4、预计开发超过 40 分钟或天然分层时按依赖组织为 2–4 批,每批 dev 交付即测;qa 测上一批与 dev 开下一批**并行重叠**,fail-fast 不攒到最后,单批打回 ≤3 轮
+- **三档分流**:`fast` 用于内聚、可定向验证且无依赖/API/安全风险的明确改动，不按文件数限制；`standard`(默认)由当前 agent 直接规划、开发和验证，独立评审与子 agent 按风险和收益启用；`thorough` 保留五角色、两道闸口与里程碑拆分。用户可用 `--fast` / `--standard` / `--thorough` 指定，系统只会自动升级，不会自动降级。
+- **批次级循环**:standard 默认单批；有独立交付和验证收益时才拆批并委派。仅不影响测试现场的开发可与 QA 重叠；共享工作树全量测试期间暂停写入，单批打回 ≤3 轮。
 - **team 直聊**:开发⇄测试打回循环由两个 teammate 直接续跑对话，调度员只监控轮次与裁决，不经手中转(省上下文；异常时回退中转模式)
 - **条件闸口 1**:里程碑、风险信号或未授权任务必须人工确认；契约允许「低风险自动进入开发」或用户给 `--auto` 时，标准计划发简报后直接进入开发，避免长时间空等。
 - **QA gate 三态(批次级快速检查)**:`PASS / CONCERNS / FAIL`;批次级只覆盖本批核心路径,非核心项与跨批回归记录为「终验复核项」,不占用轮次
-- **按档收口**:fast 只给精简摘要；standard 由 qa 产出 `qa/final.md`，guardian 按风险复用；thorough 才产出完整 acceptance/release/retro。
+- **按档收口**:fast 只给精简摘要；standard 默认当前 agent 产出 `qa/final.md`，不生成交接包、plan、retro；需要委派时才建立交接文件。thorough 保留完整 acceptance/release/retro。
+- **检查去重**:同一代码、配置、依赖与环境下的实际成功结果可复用，须保留命令、范围、时间、退出码和输出；失效或缺证据时重跑。核心验收和契约要求的检查仍必须覆盖。共享工作树全量测试期间暂停写入。
 - **禁区保护**:Claude Code 的 hook 在 `/pipeline` 运行期间(存在 `tmp/pipeline/.active` 标记)按 PIPELINE.md ⑤ 的 `pipeline-guard` 块硬拦截越界 Write/Edit；Codex 在每次写入前对同一契约做流程校验
 - **打回硬上限**:范围评审 ≤2 轮,测试 ≤3 轮,到顶停报
 
@@ -101,7 +102,7 @@ flowchart TD
 
 ## Codex 原生模式与便携模式
 
-Codex 支持本仓库的 `pipeline` skill 原生编排：按档位创建 planner / guardian / dev / qa / releaser 子 agent，批次级 qa 与 dev 可并行、续跑和直接回传。安装后新开 Codex 会话，使用 `$pipeline <任务描述>`。
+Codex 支持本仓库的 `pipeline` skill：fast/standard 默认当前 agent 直接执行，需要独立评审或并行收益时才创建子 agent；thorough 保留完整编排。Claude Code 使用同样的默认策略。安装后新开 Codex 会话，使用 `$pipeline <任务描述>`。
 
 Codex 与 Claude Code 共用三档路由、`PIPELINE.md`、角色规则、条件闸口、artifact 和打回上限。两端的唯一执行机制差异是 Claude Code 可通过 `.claude/settings.json` 的 `PreToolUse` hook 硬拦截越界写；Codex 当前改为每次写入前的 `PIPELINE.md` 强制校验，不能宣称具备同等级工具层拦截。Claude Code 保留契约声明的自动 CLI/skill 安装；Codex 对全局 CLI 安装、clone 外部 skill 等项目外写入会先请求授权。
 
@@ -123,7 +124,7 @@ Codex 与 Claude Code 共用三档路由、`PIPELINE.md`、角色规则、条件
 1. 安装(每台机器一次):`git clone` 本仓库后 `bash install.sh`(同时安装 Claude Code 与 Codex；可传 `--claude` 或 `--codex` 限定目标)。
 2. 项目接入:`bash init-project.sh /path/to/项目`(拷契约模板 + Claude hook + gitignore；Codex-only 可用 `--codex` 跳过 Claude 配置，详见「接入新项目」一节),然后编辑项目根的 `PIPELINE.md` 逐项替换 ❏。契约随项目 git 管理。
 3. 在项目会话中触发:Claude Code 用 `/pipeline <任务描述>`；Codex 用 `$pipeline <任务描述>`。可加 `--fast`、`--standard`、`--thorough` 选档；低风险计划希望免等闸口 1 时加 `--auto`。
-4. standard/thorough 中间产物位于 `tmp/pipeline/`(`context/base.md`、`context/run.md`、角色差量、`plan*.md`、`qa/`、分片 `rulings/`、metrics，以及按档生成的 acceptance/release/retro/state)；fast 正常流程只追加一行 metrics。单项目同时只跑一条。
+4. 中间产物位于 `tmp/pipeline/`。standard 直通仅维护 state、qa/final.md 和 metrics；实际委派后才创建 context 与计划；thorough 保留完整产物。fast 正常结束只追加 metrics。所有档位运行期间维护 .active，单项目同时只跑一条。
 5. Claude Code 流水线异常中断后若普通编辑被 hook 误拦,删除 `tmp/pipeline/.active` 即可；Codex 同样会在中止时清理该标记。
 6. Codex 使用原生 skill；没有子 agent/hook 的其他工具使用便携模式(见上节)。
 
@@ -146,6 +147,7 @@ bash init-project.sh --codex /path/to/项目    # Codex-only 项目，不创建 
 
 ## 最近更新
 
+- **v3.7.0**: fast/standard 默认当前会话直接执行；移除 fast 文件数门槛，交接包和独立角色按需创建；复用未失效的真实测试结果，单批合并 QA 与终验。保留高风险审查、契约边界和必需验证。尚无同任务前后对照数据，不承诺固定耗时或 token 降幅。
 - **v3.6.1**: 固定 token 进一步收敛——主 SKILL 渐进披露、共享 context base + 角色差量、裁决按 run 分片、轻量 metrics 与中位数/P80 ETA；Claude、Codex、便携模式同步。
 - **v3.6.0**: 性能与 token 收敛——三档独立执行链、旧契约无阻塞测试分层、QA 索引/批次报告压缩、惰性 skill 自检、standard 条件角色与 fast 最小 artifact；Claude Code、Codex、便携模式同步。
 - **v3.5.3**: v3.5.2 review 补丁——hook 拦截 Bash 层 git 写操作 / init-project 自动配置 Bash PreToolUse / state.md 五要素示例 / 闸口 1 与便携版双口径 ETA 展示细化
