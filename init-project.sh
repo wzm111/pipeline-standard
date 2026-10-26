@@ -25,6 +25,18 @@ if [ "$#" -gt 1 ]; then
 fi
 TARGET="$(cd "${1:-.}" && pwd)"
 
+# 不跟随项目控制文件的符号链接写入其他目录。
+CONTROL_PATHS=("$TARGET/.gitignore" "$TARGET/PIPELINE.md")
+if [ "$MODE" != "--codex" ]; then
+  CONTROL_PATHS+=("$TARGET/.claude" "$TARGET/.claude/settings.json")
+fi
+for control in "${CONTROL_PATHS[@]}"; do
+  if [ -L "$control" ]; then
+    echo "接入未完成:控制路径是符号链接，请由智能体核对目标后处理: $control" >&2
+    exit 1
+  fi
+done
+
 echo "接入项目: $TARGET"
 
 # ① 契约模板
@@ -47,7 +59,7 @@ merge_settings_json() {
   # 优先用 python3, 其次用 jq, 都没有则降级为手动提示
   if command -v python3 >/dev/null 2>&1; then
     if python3 - "$path" "$cmd" <<'PYEOF'
-import json, sys, os
+import json, sys, os, tempfile
 
 path, cmd = sys.argv[1], sys.argv[2]
 cfg = {}
@@ -65,37 +77,51 @@ entries = [
      "hooks": [{"type": "command", "command": cmd}]}
 ]
 
-existing_matchers = {group.get("matcher") for group in pre}
 changed = False
 for entry in entries:
-    if entry["matcher"] in existing_matchers:
-        print(f"跳过: matcher {entry['matcher']} 已配置")
+    if any(group.get("matcher") == entry["matcher"] and
+           any(h.get("type") == "command" and h.get("command") == cmd for h in group.get("hooks", []))
+           for group in pre):
+        print(f"跳过: matcher {entry['matcher']} 已含 pipeline hook")
         continue
     pre.append(entry)
-    existing_matchers.add(entry["matcher"])
     changed = True
 
 if changed:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+    staged = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=os.path.dirname(path), prefix=".pipeline-settings-", delete=False) as f:
+            staged = f.name
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        if os.path.exists(path):
+            os.chmod(staged, os.stat(path).st_mode & 0o777)
+        os.replace(staged, path)
+        staged = None
+    finally:
+        if staged is not None:
+            os.unlink(staged)
     print(f"已写入 hook: {path}")
 PYEOF
     then
       return 0
     fi
+    return 1
   fi
 
   if command -v jq >/dev/null 2>&1; then
-    local tmp="${path}.tmp"
+    local tmp
+    tmp="$(mktemp "${path}.pipeline.XXXXXX")" || return 1
     local jq_ok=0
     if [ -f "$path" ]; then
       jq --arg cmd "$cmd" '
         .hooks.PreToolUse //= [] |
-        if (.hooks.PreToolUse | map(select(.matcher == "Write|Edit|MultiEdit|NotebookEdit")) | length) == 0 then
+        if (.hooks.PreToolUse | map(select(.matcher == "Write|Edit|MultiEdit|NotebookEdit" and any(.hooks[]?; .type == "command" and .command == $cmd))) | length) == 0 then
           .hooks.PreToolUse += [{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":$cmd}]}]
         else . end |
-        if (.hooks.PreToolUse | map(select(.matcher == "Bash")) | length) == 0 then
+        if (.hooks.PreToolUse | map(select(.matcher == "Bash" and any(.hooks[]?; .type == "command" and .command == $cmd))) | length) == 0 then
           .hooks.PreToolUse += [{"matcher":"Bash","hooks":[{"type":"command","command":$cmd}]}]
         else . end
       ' "$path" > "$tmp" && jq_ok=1
@@ -123,20 +149,8 @@ PYEOF
 }
 
 if ! merge_settings_json "$SETTINGS" "$HOOK_CMD"; then
-  echo "跳过: 未找到 python3 或 jq, 无法自动合并 .claude/settings.json" >&2
-  echo "请手动在项目根创建/编辑 $SETTINGS, 添加以下 PreToolUse 配置:" >&2
-  cat <<EOF
-{
-  "hooks": {
-    "PreToolUse": [
-      { "matcher": "Write|Edit|MultiEdit|NotebookEdit",
-        "hooks": [{ "type": "command", "command": "$HOOK_CMD" }] },
-      { "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "$HOOK_CMD" }] }
-    ]
-  }
-}
-EOF
+  echo "接入未完成:无法合并 hook（配置无效、写入失败或缺少 python3/jq）。原设置保留，请让智能体根据上述错误修复后继续。" >&2
+  exit 1
 fi
 else
   echo "Codex 模式:跳过 .claude/settings.json hook 配置；禁区校验由 pipeline skill 执行。"
