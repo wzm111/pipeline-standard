@@ -85,34 +85,72 @@ fi
 
 if [ -z "${FP:-}" ]; then exit 0; fi
 
-# --- 项目外路径:流水线期间一律拦截 ---
-case "$FP" in
-  "$CWD"/*) REL="${FP#$CWD/}" ;;
-  /*)
-    echo "[pipeline-guard] 拦截:流水线运行期间禁止写项目外路径 $FP" >&2
-    exit 2 ;;
-  *) REL="$FP" ;;
-esac
+# --- 规范化 .. 和符号链接后再判断边界，不能仅比较原始字符串 ---
+if ! REL=$(python3 - "$CWD" "$FP" <<'PYEOF'
+import sys
+from pathlib import Path
+root = Path(sys.argv[1]).resolve()
+target = Path(sys.argv[2])
+if not target.is_absolute():
+    target = root / target
+try:
+    print(target.resolve().relative_to(root).as_posix())
+except (ValueError, OSError, RuntimeError):
+    sys.exit(1)
+PYEOF
+); then
+  echo "[pipeline-guard] 拦截:目标解析后位于项目外或路径无效: $FP" >&2
+  exit 2
+fi
+
+LEXICAL=$(python3 - "$CWD" "$FP" <<'PYEOF'
+import os, sys
+from pathlib import Path
+root = Path(sys.argv[1]).resolve()
+path = Path(sys.argv[2])
+if not path.is_absolute():
+    path = root / path
+try:
+    print(Path(os.path.abspath(path)).relative_to(root).as_posix())
+except ValueError:
+    print("")
+PYEOF
+)
 
 PIPELINE_FILE="$CWD/PIPELINE.md"
-if [ ! -f "$PIPELINE_FILE" ]; then exit 0; fi
+if [ ! -f "$PIPELINE_FILE" ]; then
+  echo "[pipeline-guard] 拦截:活动流水线缺少 PIPELINE.md，请先恢复契约。" >&2
+  exit 2
+fi
 
 # --- 解析 guard 块 ---
-GUARD=$(python3 - "$PIPELINE_FILE" <<'PYEOF' 2>/dev/null
+GUARD=$(python3 - "$PIPELINE_FILE" "$CWD" <<'PYEOF' 2>/dev/null
 import sys, re
+from pathlib import Path
 text = open(sys.argv[1], encoding="utf-8").read()
 m = re.search(r"<!--\s*pipeline-guard:(allow-write|deny-write)\s*\n(.*?)-->", text, re.S)
 if not m:
     sys.exit(0)
 mode = m.group(1)
 patterns = [l.strip() for l in m.group(2).splitlines() if l.strip() and not l.strip().startswith("#")]
-print(mode)
+root = Path(sys.argv[2]).resolve()
+normalized = set()
 for p in patterns:
+    path = Path(p)
+    if path.is_absolute() or ".." in path.parts:
+        sys.exit(1)
+    normalized.add(p.rstrip("/"))
+    normalized.add((root / path).resolve().relative_to(root).as_posix())
+print(mode)
+for p in sorted(normalized):
     print(p)
 PYEOF
 )
 
-if [ -z "$GUARD" ]; then exit 0; fi
+if [ -z "$GUARD" ]; then
+  echo "[pipeline-guard] 拦截:活动流水线缺少有效 guard 块，请由智能体修复契约。" >&2
+  exit 2
+fi
 
 MODE=$(printf '%s\n' "$GUARD" | head -1)
 PATTERNS=$(printf '%s\n' "$GUARD" | tail -n +2)
@@ -121,11 +159,9 @@ match() {
   local rel="$1"
   while IFS= read -r p; do
     [ -z "$p" ] && continue
-    # 规范化目录边界:普通前缀不以 / 结尾时自动补 /,避免 src 误匹配 src2/
-    if [[ "$p" != */ && "$p" != *\\* ]]; then
-      p="${p}/"
-    fi
-    case "$rel" in "$p"*) return 0 ;; esac
+    # 同时支持单文件和目录；src 不能误匹配 src2。
+    p="${p%/}"
+    case "$rel" in "$p"|"$p"/*) return 0 ;; esac
   done <<< "$PATTERNS"
   return 1
 }
@@ -136,7 +172,7 @@ if [ "$MODE" = "allow-write" ]; then
   echo "[pipeline-guard] 白名单见 PIPELINE.md ⑤ 的 pipeline-guard:allow-write 块;确需写其他位置,请先向调度员/用户申请。" >&2
   exit 2
 else
-  if match "$REL"; then
+  if match "$REL" || { [ -n "$LEXICAL" ] && match "$LEXICAL"; }; then
     echo "[pipeline-guard] 拦截:$REL 命中 PIPELINE.md ⑤ 声明的禁区。" >&2
     exit 2
   fi
