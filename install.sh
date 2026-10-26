@@ -49,6 +49,12 @@ install_codex() {
   echo "Codex: 链接 skills/pipeline"
 }
 
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "安装未完成:需要 python3 初始化并校验本机模型配置。请让智能体协助处理。" >&2
+  exit 1
+fi
+python3 "$ROOT/skills/pipeline/scripts/initialize-models.py" --target "$INSTALL_HOME/.config/pipeline-standard/models.json"
+
 if [ "$TARGET" = "--all" ] || [ "$TARGET" = "--claude" ]; then install_claude; fi
 if [ "$TARGET" = "--all" ] || [ "$TARGET" = "--codex" ]; then install_codex; fi
 
@@ -58,6 +64,8 @@ cat <<'NOTE'
 - Codex：$pipeline <任务描述>
 
 在项目会话直接描述需求，首次会自动接入，无需手填配置。
+已准备本机默认角色配置；项目配置优先，升级保留你的选择。
+新安装先继承当前会话模型，说“配置模型”即可选择不同角色型号。
 也可以说：帮我初始化、配置模型、查看设置、继续上次。
 Claude Code 用 /pipeline，Codex 用 $pipeline。
 Claude hook 与 Codex 写前校验的能力差异见 README。

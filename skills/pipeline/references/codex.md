@@ -27,7 +27,7 @@ fast/standard 默认当前 agent 直接执行，不创建角色或交接文件�
 1. 开始前读取项目根 `PIPELINE.md` 并创建 `.active` 标记；只有 standard/thorough 初始化完整 state.md，fast 正常运行不创建。base 来源指纹未变时复用，不重复总结。
 2. 每次写入前对照已读的 `PIPELINE.md` ⑤ 节校验范围；契约变化或上下文缺失时重读，不必每次从磁盘重读。不在允许范围内时停下交由用户裁决。
 3. Codex 没有本仓库 Claude hook 的 `PreToolUse` 等价配置。这个检查是强制流程步骤，不是不可绕过的工具级阻断；在最终报告中如实说明该差异。
-4. `agents/*.md` 中的 Claude 模型字段仅供 Claude Code 使用。Codex 默认继承当前模型；存在角色偏好时按 [模型配置](models.md) 解析并通过实际 spawn 参数应用，不通过 prompt 模拟切换。
+4. `agents/*.md` 中的Claude模型字段仅供Claude Code使用。Codex创建角色前始终按[模型配置](models.md)解析：项目覆盖skill自带默认，未配置角色沿用本地默认；实际spawn传入解析的参数，不通过prompt模拟切换。明确选择inherit的角色才继承父模型；当前会话直接开发仍使用界面模型。
 5. 不要自动执行全局包安装、外部仓库 clone 或写入 Codex/Claude 目录。先检测，说明影响，并在当前运行时要求授权；批准前把对应检查标为本轮跳过并写入报告。
 6. 终止、异常或用户中止时，更新当前run的状态（脚本模式为runs/<run_id>.json，旧模式为state.md），确认所有执行者停止且归属一致后清理自己的.active；无法确认保留现场。这项清理不依赖hook。
 

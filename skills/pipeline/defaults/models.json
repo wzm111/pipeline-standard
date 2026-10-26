@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "runtimes": {
+    "codex": {
+      "developer": {"model": "inherit"},
+      "planner": {"model": "inherit"},
+      "scope_guardian": {"model": "inherit"},
+      "tester": {"model": "inherit"},
+      "releaser": {"model": "inherit"}
+    },
+    "claude": {
+      "developer": {"model": "inherit"},
+      "planner": {"model": "inherit"},
+      "scope_guardian": {"model": "inherit"},
+      "tester": {"model": "inherit"},
+      "releaser": {"model": "inherit"}
+    }
+  }
+}
