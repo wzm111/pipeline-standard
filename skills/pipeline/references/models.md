@@ -32,6 +32,37 @@ model 必须是非空字符串。effort 可省略，表示使用选定模型/运
 
 可用 `scripts/resolve-models.py --runtime codex --project <项目根>` 只读解析项目和个人有效配置；它校验格式与优先级，不验证账号模型权限。没有 Python 时按同一规则读取，不为设置安装依赖。
 
+### 本地可靠工具（不启动模型）
+
+`scripts/model_config.py` 只用 Python 标准库。CLI 仍然只读：`--read` 返回项目文档及 revision；`--temporary '{"tester":{"model":"inherit"}}'` 添加本次覆盖，不写文件。临时覆盖采用当前运行时的角色对象，完整替换对应角色配置。
+
+智能体先读取 `read_document(path)` 获取 `(document, revision)`，用 `prepare_update(document, runtime, role, changes)` 生成精确更新。`remove=True` 删除该端该角色的覆盖；`{"model":"inherit"}` 屏蔽低层配置。仅改 effort 且项目未定义该角色时，传入已解析的 `effective` 偏好；切换 model 自动清除旧 effort/fallback，明确传入的新值才保留。格式校验不证明模型与 effort 的实际可用性，应用前还要能力预检。
+
+保存前由当前智能体复核用户授权、目标项目契约与写权限。可通过编辑工具保存已生成的局部文档并回读；需要可靠原子保存时调用 `save_project(project_root, updated_document, revision)`。该函数固定写指定项目根的 `pipeline.models.json`，没有 CLI 写入口，也没有个人/全局配置写入口；不会自动放宽权限、删除活动标记或生成角色文件。项目目录先解析为实际目录，配置文件、内部控制路径和锁文件拒绝符号链接；损坏 JSON、未知版本、活动 `tmp/pipeline/.active`、旧 revision 和现有 `.pipeline.models.lock` 均拒绝保存。临时文件 fsync 后原子替换并回读，失败清理自己的锁与临时文件。锁存在时先查明来源，不自动删除别人的锁。
+
+revision 在保存前和替换前两次检查，同模块写入由排他锁串行化，可发现常规外部编辑；非协作进程仍可能在最后检查与 replace 之间抢写。此保护不承诺对抗恶意并发写入，也不提供断电后目录元数据持久化保证。若替换后回读报错，检查当前文件，不盲目覆盖或回滚其他进程的修改。
+
+宿主适配器提供当前工具事实，例如以下对象（型号键仅为输入示意，不是推荐名单）：
+
+```json
+{
+  "agent_spawn": true,
+  "model_override": true,
+  "effort_override": true,
+  "fork_with_override": false,
+  "models_complete": false,
+  "models": {"host-reported-id": {"permission": null, "efforts": ["medium"]}}
+}
+```
+
+`assess_capability(preference, host)` 返回 `available_precheck`（可用预检）、`unavailable`（不可用）、`unverifiable`（无法验证）、`host_unsupported`（宿主不支持）。缺能力、缺名单、权限未知均不提升为已验证；所有预检结果的 `verified` 都为 false。`agent_spawn` 区分继承模型与宿主能否创建 agent；继承无需独立选模，但仍需启动能力。只有完整名单明确缺项才判型号不可用，名单不可读不等于型号不存在。
+
+`codex_spawn_parameters(preference, host)` 是纯转换函数，输出 `parameters`、预检状态及回退原因；显式型号转换为 `model` / `reasoning_effort`，宿主未明确支持带覆盖的 fork 时加入 `fork_turns=none`。预检不通过时只有配置明确 `fallback=inherit` 且宿主可创建 agent 才输出继承参数，否则报错。函数不创建 agent、重试或调用外部 API。真实启动失败由调度员按已有规则处理，网络/限流/宿主二进制错误不得改写为型号不存在或自动永久换模。
+
+`claude_role_parameters(preference, host)` 是 Claude 专用角色 frontmatter 的纯参数适配；宿主还须明确报告 `role_frontmatter=true`，继承须报告 `role_inherit=true`。返回 `parameters` 包含 model/effort；其中 null 表示调用方必须删除旧字段，不能把 null 直接写进 frontmatter。继承始终明确写 `model: inherit` 并删除旧 effort，压过来源角色的固定 model；显式模型不含 effort 时也删除旧 effort。权限未知、effort 未知/不支持时拒绝应用，只有明确 fallback=inherit 且宿主支持创建与角色继承才回退。调用方负责将参数合入独立角色、保留原规则、检查文件冲突和写权限，以及宿主加载/刷新；函数不解析 YAML、不写文件、不加载角色。
+
+启动后用 `execution_record(runtime, role, preference, plan, reported)` 生成记录，再由调度员按活动 run 的权限保存。`reported` 接受 `actual_model`、`actual_effort`、`startup_status`、`error`；没有实际反馈填 unknown，绝不从请求值推定。该模块提供两端纯参数适配，未实现 Claude 角色文件生成与宿主加载，也未完成 Claude/Codex 两端真实模型切换验收；本地行为测试不能替代第二期整体验收。
+
 ## 能力校验与应用
 
 1. 从当前运行时的工具 schema、模型列表或官方配置能力校验模型和 effort；不要用历史名单断言账号可用性。分别记录宿主支持、账号权限和实际启动结果，状态为“可用（预检）/不可用/无法验证/宿主不支持”。名单可见不是启动成功，官方介绍不是账号权限证据。未知或不支持时请用户选可用项，不保存成“已生效”。配置另一端且无法验证时可按用户指定保存，但明确“已保存，待该运行时验证”；首次使用必须验证。

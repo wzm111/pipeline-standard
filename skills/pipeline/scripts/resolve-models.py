@@ -1,47 +1,12 @@
 #!/usr/bin/env python3
-"""Read-only role preference resolver. Availability is checked by the runtime."""
+"""Read-only role preference resolver. Never starts models or saves files."""
 import argparse
 import json
 from pathlib import Path
 import sys
 
-ROLES = {"developer", "planner", "scope_guardian", "tester", "releaser"}
-
-
-def read_layer(path, runtime):
-    if not path.exists():
-        return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1:
-        raise ValueError(f"{path}: unsupported schema_version")
-    runtimes = data.get("runtimes", {})
-    if not isinstance(runtimes, dict):
-        raise ValueError(f"{path}: runtimes must be an object")
-    roles = runtimes.get(runtime, {})
-    if not isinstance(roles, dict):
-        raise ValueError(f"{path}: {runtime} must be an object")
-    for role, config in roles.items():
-        if role not in ROLES:
-            raise ValueError(f"{path}: unknown role {role}")
-        if not isinstance(config, dict):
-            raise ValueError(f"{path}: {role} must be an object")
-        model = config.get("model")
-        if not isinstance(model, str) or not model.strip():
-            raise ValueError(f"{path}: {role} requires model")
-        effort = config.get("effort")
-        if "effort" in config and (not isinstance(effort, str) or not effort.strip() or model == "inherit"):
-            raise ValueError(f"{path}: invalid effort for {role}")
-        if "fallback" in config and config["fallback"] != "inherit":
-            raise ValueError(f"{path}: fallback must be inherit when supplied")
-    return roles
-
-
-def resolve(runtime, personal, project):
-    result = {}
-    for source, path in (("personal", personal), ("project", project)):
-        for role, config in read_layer(path, runtime).items():
-            result[role] = {"preference": config, "source": source, "path": str(path)}
-    return {"runtime": runtime, "roles": result, "unconfigured": "runtime_default"}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from model_config import read_document, read_layer, resolve  # noqa: E402
 
 
 def main():
@@ -49,9 +14,21 @@ def main():
     parser.add_argument("--runtime", choices=("codex", "claude"), required=True)
     parser.add_argument("--project", type=Path, default=Path.cwd())
     parser.add_argument("--personal", type=Path, default=Path.home() / ".config/pipeline-standard/models.json")
+    parser.add_argument("--temporary", help="session-only role object as JSON; never persisted")
+    parser.add_argument("--read", action="store_true", help="read project document and revision instead of resolving")
     args = parser.parse_args()
     try:
-        result = resolve(args.runtime, args.personal, args.project / "pipeline.models.json")
+        project = args.project / "pipeline.models.json"
+        if args.read:
+            if args.temporary is not None:
+                raise ValueError("--read does not accept --temporary")
+            document, revision = read_document(project)
+            result = {"document": document, "revision": revision, "path": str(project)}
+        else:
+            temporary = json.loads(args.temporary) if args.temporary is not None else None
+            if args.temporary is not None and not isinstance(temporary, dict):
+                raise ValueError("temporary roles must be an object")
+            result = resolve(args.runtime, args.personal, project, temporary)
     except (OSError, ValueError) as error:
         print(f"模型配置未加载：{error}", file=sys.stderr)
         return 1
