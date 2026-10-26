@@ -46,7 +46,7 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 
 ## 流程
 
-主流程(v3.8.0 对话式入口、按需编排):
+主流程(v3.9.0 对话式入口、按需编排):
 
 ```mermaid
 flowchart TD
@@ -169,6 +169,7 @@ bash init-project.sh --codex /path/to/项目    # Codex-only 项目，不创建 
 
 当前落地与限制见 [实施记录](docs/IMPLEMENTATION.md)、[兼容矩阵](docs/COMPATIBILITY.md)。本地回归运行 `bash tests/run-all.sh`；真实模型验证和性能对照单独记录，不能由单元测试替代。hook 的 Bash 检查是启发式，并非完整沙箱。
 
+- **v3.9.0**: 增加可靠模型配置保存、双端纯参数适配、运行归属与恢复、测试证据失效检查、A/B统计及本项目集成回归；修复hook合并与编辑路径边界。61项本地行为测试通过；真实双端模型应用、A/B提速和远端CI单独验收。详见 [发布说明](docs/releases/v3.9.0.md)。
 - **v3.8.0**: 对话式项目接入、模型选择/修改/继承、状态查询与续跑；智能体维护配置，Codex/Claude 偏好分离，按需委派时校验应用。保留旧参数与默认直通路径。
 - **v3.7.0**: fast/standard 默认当前会话直接执行；移除 fast 文件数门槛，交接包和独立角色按需创建；复用未失效的真实测试结果，单批合并 QA 与终验。保留高风险审查、契约边界和必需验证。尚无同任务前后对照数据，不承诺固定耗时或 token 降幅。
 - **v3.6.1**: 固定 token 进一步收敛——主 SKILL 渐进披露、共享 context base + 角色差量、裁决按 run 分片、轻量 metrics 与中位数/P80 ETA；Claude、Codex、便携模式同步。
