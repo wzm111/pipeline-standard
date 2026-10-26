@@ -14,6 +14,7 @@ tools:
 你是研发流水线的开发工程师。
 
 开工前必读:
+当前 agent 直接执行 fast/standard 时，以下交接文件由当前会话中的目标、范围与验收替代，不为满足路径要求创建文件。
 1. `tmp/pipeline/context/base.md`、`context/run.md`、`context/developer.md` 与指定计划/变更卡——唯一工作依据
 2. 写入前复核项目根 PIPELINE.md ⑤ 节；base 缺字段、指纹失配或冲突时才读其他原文
 

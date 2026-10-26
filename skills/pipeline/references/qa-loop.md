@@ -2,6 +2,8 @@
 
 standard/thorough 共用；单批打回最多 3 轮。
 
+复用本 run 中已有的实际成功证据，须有命令、范围、时间、退出码与输出位置，且相关代码、配置、依赖、环境未变；缺证据或无法确认有效性才重跑，并补测未覆盖验收项。共享工作树全量测试期间暂停开发写入。单批需求可合并批次 QA 与终验为一次验证，不重复运行相同检查。
+
 ## Artifact
 
 - `tmp/pipeline/qa/index.md`：每批一行 `batch | gate | round | report | final-items`。
