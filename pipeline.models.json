@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "runtimes": {
+    "codex": {
+      "developer": {"model": "gpt-6.1-sol", "effort": "medium"},
+      "planner": {"model": "gpt-6-astra", "effort": "medium"},
+      "scope_guardian": {"model": "gpt-6-astra", "effort": "high"},
+      "tester": {"model": "gpt-6.1-sol", "effort": "medium"},
+      "releaser": {"model": "gpt-6.1-sol", "effort": "low"}
+    }
+  }
+}
