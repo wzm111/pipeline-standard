@@ -25,9 +25,52 @@ class ModelConfigTests(unittest.TestCase):
     def save(self, path, runtimes):
         path.write_text(json.dumps({"schema_version": 1, "runtimes": runtimes}), encoding="utf-8")
 
-    def test_missing_preserves_runtime_default(self):
-        self.assertEqual(MODELS.resolve("codex", self.personal, self.project)["roles"], {})
+    def test_missing_project_uses_installed_skill_defaults_without_writing(self):
+        roles = MODELS.resolve("codex", self.personal, self.project)["roles"]
+        self.assertEqual(set(roles), CORE.ROLES)
+        self.assertTrue(all(row["source"] == "skill_default" for row in roles.values()))
+        self.assertEqual(roles["developer"]["preference"], {"model": "inherit"})
+        self.assertEqual(Path(roles["developer"]["path"]), CORE.DEFAULT_MODELS)
         self.assertFalse(self.project.exists())
+        self.assertFalse(self.personal.exists())
+
+    def test_partial_project_overrides_only_its_roles_and_runtime(self):
+        self.save(self.project, {"codex": {"developer": {"model": "project-only"}}})
+        roles = CORE.resolve("codex", self.personal, self.project)["roles"]
+        self.assertEqual(roles["developer"]["source"], "project")
+        self.assertEqual(roles["developer"]["preference"], {"model": "project-only"})
+        self.assertEqual(roles["planner"]["source"], "skill_default")
+        self.assertTrue(all(row["source"] == "skill_default" for row in CORE.resolve("claude", self.personal, self.project)["roles"].values()))
+
+    def test_personal_compatibility_overrides_skill_but_not_project(self):
+        self.save(self.personal, {"codex": {"developer": {"model": "personal"}}})
+        self.save(self.project, {"codex": {"tester": {"model": "project"}}})
+        roles = CORE.resolve("codex", self.personal, self.project)["roles"]
+        self.assertEqual(roles["developer"]["source"], "personal")
+        self.assertEqual(roles["tester"]["source"], "project")
+        self.assertEqual(roles["planner"]["source"], "skill_default")
+
+    def test_inherit_masks_skill_and_removing_project_restores_it(self):
+        self.save(self.project, {"codex": {"developer": {"model": "inherit"}}})
+        self.assertEqual(CORE.resolve("codex", self.personal, self.project)["roles"]["developer"]["preference"], {"model": "inherit"})
+        document, revision = CORE.read_document(self.project)
+        updated = CORE.prepare_update(document, "codex", "developer", remove=True)
+        CORE.save_project(self.root, updated, revision)
+        self.assertEqual(CORE.resolve("codex", self.personal, self.project)["roles"]["developer"]["source"], "skill_default")
+
+    def test_missing_or_corrupt_skill_defaults_are_not_silently_ignored(self):
+        defaults = self.root / "defaults.json"
+        for raw in (None, "{bad", '{"schema_version": 2}'):
+            if raw is not None:
+                defaults.write_text(raw)
+            with self.assertRaises(ValueError):
+                CORE.resolve("codex", self.personal, self.project, defaults=defaults)
+
+    def test_portable_seed_has_no_version_specific_models_or_efforts(self):
+        for runtime in ("codex", "claude"):
+            roles = CORE.resolve(runtime, self.personal, self.project)["roles"]
+            self.assertEqual(set(roles), CORE.ROLES)
+            self.assertTrue(all(row["preference"] == {"model": "inherit"} for row in roles.values()))
 
     def test_project_replaces_entire_role_without_stale_effort(self):
         self.save(self.personal, {"codex": {"developer": {"model": "old", "effort": "high"}, "tester": {"model": "test"}}})

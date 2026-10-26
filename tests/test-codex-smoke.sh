@@ -15,6 +15,10 @@ test -f "$(realpath "$CODEX_SKILL_LINK")/../../agents/pipeline-planner.md"
 for ref in fast standard thorough qa-loop dependencies operations codex interaction models; do
   test -f "$(realpath "$CODEX_SKILL_LINK")/references/$ref.md"
 done
+test -f "$CODEX_SKILL_LINK/defaults/models.json"
+# 从安装软链接调用解析器，项目和个人均无配置时仍能找到skill默认文件。
+python3 "$CODEX_SKILL_LINK/scripts/resolve-models.py" --runtime codex --project "$TEST_HOME_DIR" --personal "$TEST_HOME_DIR/no-personal.json" |
+  python3 -c 'import json,sys; d=json.load(sys.stdin); assert len(d["roles"]) == 5; assert all(r["source"] == "skill_default" for r in d["roles"].values())'
 
 rm "$CODEX_SKILL_LINK"
 mkdir "$CODEX_SKILL_LINK"

@@ -8,6 +8,7 @@ import tempfile
 
 ROLES = {"developer", "planner", "scope_guardian", "tester", "releaser"}
 RUNTIMES = {"codex", "claude"}
+DEFAULT_MODELS = Path(__file__).resolve().parents[1] / "defaults/models.json"
 
 
 def validate_preference(config):
@@ -71,11 +72,14 @@ def read_layer(path, runtime):
     return read_document(path)[0].get("runtimes", {}).get(runtime, {})
 
 
-def resolve(runtime, personal, project, temporary=None):
+def resolve(runtime, personal, project, temporary=None, *, defaults=None):
     if runtime not in RUNTIMES:
         raise ValueError("unknown runtime")
     result = {}
-    for source, path in (("personal", personal), ("project", project)):
+    defaults = DEFAULT_MODELS if defaults is None else Path(defaults)
+    if not defaults.is_file():
+        raise ValueError(f"skill default models missing: {defaults}; restore the skill installation")
+    for source, path in (("skill_default", defaults), ("personal", personal), ("project", project)):
         for role, config in read_layer(path, runtime).items():
             result[role] = {"preference": deepcopy(config), "source": source, "path": str(path)}
     if temporary is not None:
