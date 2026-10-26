@@ -12,6 +12,8 @@
 
 `scripts/run_state.py --project <项目根> [--run-id <已知ID>]` 仅查询，不创建目录、启动任务、恢复或清锁。无 active 且未指定 ID 时返回空状态；查询历史 run 必须指定 ID。旧纯文本或损坏 `.active` 返回 `active: unrecognized`，保留原字节，不猜归属或根据时间删除。
 
+用户说“继续上次”但无active时，由智能体读取runs目录中的最近状态并按本次需求定位，不要求用户手填run_id或owner_token。多个未完成候选且无法判断时才问续跑哪个任务；不得仅凭最近修改时间删除其他记录。
+
 标准库模块提供可测试函数，调用方先遵守项目契约与当前授权：
 
 - `start(project_root, initial=None)` 生成唯一 UUID run_id 和随机 owner_token，排他创建 `.active`；存在任何旧标记均拒绝。返回 state 供当前调度员保存归属。initial 可包含 stage/batches/pending/next/artifacts，不可替换身份或状态字段。

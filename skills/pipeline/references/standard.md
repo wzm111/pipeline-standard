@@ -1,5 +1,7 @@
 # standard 流程
 
+下文 state.md 是旧格式名称；使用 run_state.py 时统一写对应 runs/<run_id>.json，不维护双份状态。结束步骤必须先确认执行者停止和本run归属，再调用finish；不能为满足“清理”而删除未知活动锁。
+
 ## 默认直接执行（优先于下方委派流程）
 
 1. 当前 agent 读取 developer 规则，初始化最小 state.md，在会话内列简短计划与验收项并直接实现。无需 planner/dev/qa 子 agent、context、plan 或 retro 文件；角色文件的交接路径要求只在委派时适用。

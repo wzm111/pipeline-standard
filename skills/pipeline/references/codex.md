@@ -29,7 +29,7 @@ fast/standard 默认当前 agent 直接执行，不创建角色或交接文件�
 3. Codex 没有本仓库 Claude hook 的 `PreToolUse` 等价配置。这个检查是强制流程步骤，不是不可绕过的工具级阻断；在最终报告中如实说明该差异。
 4. `agents/*.md` 中的 Claude 模型字段仅供 Claude Code 使用。Codex 默认继承当前模型；存在角色偏好时按 [模型配置](models.md) 解析并通过实际 spawn 参数应用，不通过 prompt 模拟切换。
 5. 不要自动执行全局包安装、外部仓库 clone 或写入 Codex/Claude 目录。先检测，说明影响，并在当前运行时要求授权；批准前把对应检查标为本轮跳过并写入报告。
-6. 终止、异常或用户中止时，更新 `tmp/pipeline/state.md` 并移除 `tmp/pipeline/.active`。这项清理不依赖 hook。
+6. 终止、异常或用户中止时，更新当前run的状态（脚本模式为runs/<run_id>.json，旧模式为state.md），确认所有执行者停止且归属一致后清理自己的.active；无法确认保留现场。这项清理不依赖hook。
 
 ## 协作失败时的回退
 
