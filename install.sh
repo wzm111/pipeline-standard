@@ -57,22 +57,8 @@ cat <<'NOTE'
 - Claude Code：/pipeline <任务描述>
 - Codex：$pipeline <任务描述>
 
-接入新项目(拷契约模板 + 配 hook + gitignore):
-  bash init-project.sh /path/to/项目
-
-说明：下面的 PreToolUse 配置仅适用于 Claude Code。Codex 通过 skill 内的
-PIPELINE.md 预检和子 agent 编排执行同一流程，但没有该 hook 级硬拦截接口。
-
-禁区硬拦截的手动配置方式(一般不需要,init-project.sh 已代办):
-{
-  "hooks": {
-    "PreToolUse": [
-      { "matcher": "Write|Edit|MultiEdit|NotebookEdit",
-        "hooks": [{ "type": "command", "command": "bash ~/.claude/hooks/pipeline-guard.sh" }] },
-      { "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "bash ~/.claude/hooks/pipeline-guard.sh" }] }
-    ]
-  }
-}
-并在项目 PIPELINE.md ⑤ 中维护 pipeline-guard 块(见 templates/PIPELINE.md)。
+在项目会话直接描述需求，首次会自动接入，无需手填配置。
+也可以说：帮我初始化、配置模型、查看设置、继续上次。
+Claude Code 用 /pipeline，Codex 用 $pipeline。
+Claude hook 与 Codex 写前校验的能力差异见 README。
 NOTE

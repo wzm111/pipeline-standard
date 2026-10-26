@@ -22,10 +22,12 @@ fast/standard 默认当前 agent 直接执行，不创建角色或交接文件�
 
 ## 安全与运行边界
 
+以下启动/清理规则仅用于研发 run；设置、帮助与状态查询按 interaction.md，不创建或移除已有锁。
+
 1. 开始前读取项目根 `PIPELINE.md` 并创建 `.active` 标记；只有 standard/thorough 初始化完整 state.md，fast 正常运行不创建。base 来源指纹未变时复用，不重复总结。
 2. 每次写入前对照已读的 `PIPELINE.md` ⑤ 节校验范围；契约变化或上下文缺失时重读，不必每次从磁盘重读。不在允许范围内时停下交由用户裁决。
 3. Codex 没有本仓库 Claude hook 的 `PreToolUse` 等价配置。这个检查是强制流程步骤，不是不可绕过的工具级阻断；在最终报告中如实说明该差异。
-4. `agents/*.md` 中的 Claude 模型字段仅供 Claude Code 使用。Codex 子 agent 默认继承当前模型；不要伪造或映射到不存在的 Claude 模型。
+4. `agents/*.md` 中的 Claude 模型字段仅供 Claude Code 使用。Codex 默认继承当前模型；存在角色偏好时按 [模型配置](models.md) 解析并通过实际 spawn 参数应用，不通过 prompt 模拟切换。
 5. 不要自动执行全局包安装、外部仓库 clone 或写入 Codex/Claude 目录。先检测，说明影响，并在当前运行时要求授权；批准前把对应检查标为本轮跳过并写入报告。
 6. 终止、异常或用户中止时，更新 `tmp/pipeline/state.md` 并移除 `tmp/pipeline/.active`。这项清理不依赖 hook。
 

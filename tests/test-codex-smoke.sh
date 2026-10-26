@@ -12,7 +12,7 @@ CODEX_SKILL_LINK="$TEST_HOME_DIR/.codex/skills/pipeline"
 test -L "$CODEX_SKILL_LINK"
 test "$(realpath "$CODEX_SKILL_LINK")" = "$(realpath "$REPO_ROOT/skills/pipeline")"
 test -f "$(realpath "$CODEX_SKILL_LINK")/../../agents/pipeline-planner.md"
-for ref in fast standard thorough qa-loop dependencies operations codex; do
+for ref in fast standard thorough qa-loop dependencies operations codex interaction models; do
   test -f "$(realpath "$CODEX_SKILL_LINK")/references/$ref.md"
 done
 

@@ -32,7 +32,7 @@ if [ -f "$TARGET/PIPELINE.md" ]; then
   echo "跳过: PIPELINE.md 已存在(不覆盖)"
 else
   cp "$ROOT/templates/PIPELINE.md" "$TARGET/PIPELINE.md"
-  echo "已拷贝: PIPELINE.md(请逐项替换 ❏)"
+  echo "已准备: PIPELINE.md 模板；下一次 pipeline 对话会自动识别项目并补全。"
 fi
 
 # ② Claude Code 的 PreToolUse hook(禁区硬拦截)
@@ -161,5 +161,5 @@ EOF
 fi
 
 echo ""
-echo "接入完成。下一步:编辑 $TARGET/PIPELINE.md 替换 ❏。"
+echo "接入文件已准备。对智能体说“帮我初始化”或直接描述需求，它会检查并补全项目设置。"
 echo "Claude Code 使用 /pipeline <任务描述>；Codex 安装 skill 后使用 \$pipeline <任务描述>。"
