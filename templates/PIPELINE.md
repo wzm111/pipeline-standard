@@ -2,7 +2,7 @@
 
 > 通用流水线(`/pipeline`)在本项目的接入口。所有流水线角色开工前必读。
 > 本文件只声明「在哪、怎么验、什么不能碰」,具体内容以被引用的文档为准。
-> 接入时逐项替换 ❏ 处内容,删除本说明行。
+> 本模板由智能体在首次对话接入时自动补全；❏ 是内部占位符，不要求用户逐项填写。仅无法推断的关键业务边界需要询问。
 >
 > 🛠 本契约依赖流水线工具:**[pipeline-standard](https://github.com/wzm111/pipeline-standard)**
 > 新成员安装:`git clone` 该仓库后 `bash install.sh`(安装 Claude Code 角色/hook 与 Claude/Codex skill；可传 `--claude` 或 `--codex`),本项目接入已由 `init-project.sh` 完成。
@@ -93,6 +93,8 @@
 -->
 
 ## ⑥ 执行效率策略（推荐声明）
+
+本节由智能体根据对话维护；用户可直接说“低风险直接做”“先让我确认计划”“这次最多半小时”。角色模型另存 pipeline.models.json（按 Codex/Claude 分离），说“配置模型”即可，不需要填写本文件。
 
 - 默认档位: ❏ standard（推荐） / ❏ fast（仅低风险直通） / ❏ thorough（里程碑全流程）
 - standard 默认当前 agent 直接开发和验证；独立评审仅在风险或明确要求时启用。fast 不按文件数限制；相同代码及环境下有完整证据的成功检查可复用，失效或缺证据时重跑。

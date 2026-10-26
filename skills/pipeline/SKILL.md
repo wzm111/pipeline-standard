@@ -1,6 +1,6 @@
 ---
 name: pipeline
-description: 端到端研发流水线：按风险选择 fast、standard 或 thorough，编排开发、测试、验收与上线建议。Claude Code 用 /pipeline，Codex 用 $pipeline；需要项目根存在 PIPELINE.md。
+description: 对话式研发流水线：描述需求即可按风险开发、测试与验收；也可初始化项目、配置角色模型、查看设置或继续上次任务。Claude Code 用 /pipeline，Codex 用 $pipeline；项目契约由智能体维护。
 ---
 
 # 研发流水线编排
@@ -13,9 +13,18 @@ description: 端到端研发流水线：按风险选择 fast、standard 或 thor
 - Codex 必须先读 [Codex 运行时说明](references/codex.md)，使用子 agent 与 follow-up；写入前对照 `PIPELINE.md` ⑤ 节校验，不得宣称具备 Claude 的机器级 hook。
 - 两端共用档位、artifact、打回上限和 git 边界。Codex 的全局安装、外部 clone 与项目外写入始终先请求授权。
 
+## 先识别用户意图
+
+用户不需要了解参数、角色或配置文件。支持自然语言及原有 flags：
+- 初始化/帮我接入、配置模型/换模型/恢复继承、查看设置/帮助：读 [对话操作](references/interaction.md)，必要时读 [模型配置](references/models.md)。这些操作不启动研发流水线、不创建 .active；已有任务的锁不移除。
+- 继续上次、进度怎么样、停止、修复中断：读 [运行与恢复](references/operations.md)。只读状态不启动新 run；明确续跑不重复询问。
+- 开发需求：直接进入下方流程。简单任务自动 fast，其余 standard，真实高风险 thorough；不让用户先选档、预算或模型。没有模型配置沿用现有默认，不发起设置问卷。
+- 全流程只问无法从项目推断且影响结果的关键问题，每轮尽量一个；给简短建议，接受自然语言回答。低风险已授权动作直接执行，保留必要风险闸口。使用“已完成、剩余、需要你决定”说明进度，不要求用户打开内部报告找答案。
+- 创建子 agent 前，若项目或个人模型配置存在，按 models.md 解析当前运行时的角色设置。配置模型不强制新增角色，主会话直通不会切换模型。
+
 ## 启动与路由
 
-1. 读取项目根 `PIPELINE.md`。不存在即停止，提示先用本仓库 `templates/PIPELINE.md` 接入。
+1. 读取项目根 `PIPELINE.md`。不存在或关键字段仍是占位符时，按 interaction.md 自动接入并继续原需求；不把填写模板交给用户。已有契约只补必要缺项，保留用户规则。
 2. 若 `tmp/pipeline/.active` 存在或 state 显示未完成，先处理续跑/新开，禁止同项目并行两条流水线；需要恢复时读 [运行与恢复](references/operations.md)。随后创建 `.active`，任何结束路径都必须删除。
 3. 用户显式档位优先；未声明时按风险选择并在首条简报说明。只能自动升级，不能自动降级：
    - **fast**：单个内聚、可定向验证的低风险改动；无新依赖、迁移、公开 API/数据结构、权限/支付/安全、部署配置、自动提交；范围和验收明确。文件数量不作为硬门槛，关联测试与样式可同批修改。只读 [fast 流程](references/fast.md)。

@@ -6,6 +6,20 @@
 
 端到端「需求 → 开发 → 测试 → 上线」多角色流水线，同时原生支持 **Claude Code** 与 **Codex**；方法论通用，项目差异由项目根的 `PIPELINE.md` 契约注入。
 
+**直接说需求，不用手填配置。** 安装后在项目会话输入 `$pipeline 帮我实现……`（Claude Code 用 `/pipeline`），智能体识别项目、补全接入信息并选择合适流程。缺少关键业务信息时才提问。
+
+| 你想做什么 | 直接这样说（Codex 示例） |
+| --- | --- |
+| 开始开发 | `$pipeline 给列表增加搜索功能` |
+| 先接入项目 | `$pipeline 帮我初始化` |
+| 选择模型 | `$pipeline 配置模型` |
+| 一句话设置角色 | `$pipeline 开发用 6.1 Sol 中，架构用 6 Astra 高` |
+| 修改/查看 | `$pipeline 测试恢复继承` / `$pipeline 查看设置` |
+| 继续/查进度 | `$pipeline 继续上次` / `$pipeline 进度怎么样` |
+| 修复中断 | `$pipeline 帮我修复中断状态` |
+
+模型默认只保存当前项目、当前运行时，另一端配置保留；说“所有项目通用”才保存个人默认，说“只这次”则不持久化。未配置沿用原默认，不要求完成问卷。角色偏好只在实际委派时应用；主会话直通仍使用会话模型，智能体会说明生效范围。可用模型与推理强度以当前宿主为准，不支持时不会静默替换。
+
 | 运行时 | 触发方式 | 原生能力 |
 | --- | --- | --- |
 | Claude Code | `/pipeline <任务描述>` | 注册角色、批次并行、team 直聊、`PreToolUse` 禁区硬拦截 |
@@ -32,7 +46,7 @@ init-project.sh             项目接入脚本(拷契约模板 + 配 hook + giti
 
 ## 流程
 
-主流程(v3.7.0 按需编排):
+主流程(v3.8.0 对话式入口、按需编排):
 
 ```mermaid
 flowchart TD
@@ -83,7 +97,7 @@ flowchart TD
 - **QA 报告压缩**:`qa/index.md` 只保存批次索引，`qa/<批次>.md` 仅保留当前轮全文与紧凑历史，终验默认不重读已 PASS 正文。
 - **旧契约兼容**:未声明快速/终验分层时自动分类且不阻塞，全部原命令最多在收口运行一次。
 - **复测收敛**:打回复测只覆盖修复项 + 影响面 + 快速命令层,首轮已过的重命令不重复跑——打回轮次不再烧全量 token
-- **模型分级**:Claude Code 中 tester 默认 sonnet、releaser 默认 haiku(角色 frontmatter 声明)；Codex 子 agent 默认继承主会话模型
+- **角色模型**:说“配置模型”即可按当前运行时保存偏好，委派时应用；未配置时保留原默认（Claude 的 tester/releaser 按角色 frontmatter，Codex 继承主会话）。配置不可用会说明，不静默替换。
 - **Ponytail 编码纪律**:developer 遵循「最少代码原则」——优先复用现有实现/一行能解不写十行/不添加计划外抽象;测试、类型安全、可访问性、安全边界不许精简
 - **ETA 自动校准**:planner 只读 metrics 最后 5 条同档记录；样本足够时用中位数/P80，不足时给低置信度阶段区间，不再采用固定每任务分钟系数。
 
@@ -122,10 +136,10 @@ Codex 与 Claude Code 共用三档路由、`PIPELINE.md`、角色规则、条件
 ## 使用
 
 1. 安装(每台机器一次):`git clone` 本仓库后 `bash install.sh`(同时安装 Claude Code 与 Codex；可传 `--claude` 或 `--codex` 限定目标)。
-2. 项目接入:`bash init-project.sh /path/to/项目`(拷契约模板 + Claude hook + gitignore；Codex-only 可用 `--codex` 跳过 Claude 配置，详见「接入新项目」一节),然后编辑项目根的 `PIPELINE.md` 逐项替换 ❏。契约随项目 git 管理。
-3. 在项目会话中触发:Claude Code 用 `/pipeline <任务描述>`；Codex 用 `$pipeline <任务描述>`。可加 `--fast`、`--standard`、`--thorough` 选档；低风险计划希望免等闸口 1 时加 `--auto`。
+2. 在项目会话直接说“帮我初始化”或描述需求，智能体自动维护 `PIPELINE.md`，不要求手填模板。已有项目规则会保留。
+3. Claude Code 用 `/pipeline <任务描述>`；Codex 用 `$pipeline <任务描述>`。自动按风险选档，用户无需记参数；原有 `--fast`、`--standard`、`--thorough`、`--auto` 仍兼容。
 4. 中间产物位于 `tmp/pipeline/`。standard 直通仅维护 state、qa/final.md 和 metrics；实际委派后才创建 context 与计划；thorough 保留完整产物。fast 正常结束只追加 metrics。所有档位运行期间维护 .active，单项目同时只跑一条。
-5. Claude Code 流水线异常中断后若普通编辑被 hook 误拦,删除 `tmp/pipeline/.active` 即可；Codex 同样会在中止时清理该标记。
+5. 中断后说“继续上次”或“帮我修复中断状态”，智能体检查活动执行者并处理，不要自行删除锁文件。
 6. Codex 使用原生 skill；没有子 agent/hook 的其他工具使用便携模式(见上节)。
 
 ## 角色工具箱(推荐)
@@ -138,15 +152,20 @@ Codex 与 Claude Code 共用三档路由、`PIPELINE.md`、角色规则、条件
 
 ## 接入新项目
 
+推荐直接在项目会话说 `$pipeline 帮我接入`（Claude Code 用 `/pipeline`）。以下脚本保留给自动化接入或高级用户：
+
 ```bash
 bash init-project.sh /path/to/项目            # 双端/Claude Code 项目
 bash init-project.sh --codex /path/to/项目    # Codex-only 项目，不创建 .claude 配置
 ```
 
-一条命令完成:拷贝 `templates/PIPELINE.md` 到项目根 + 确认 `.gitignore` 含 `/tmp/`；在 Claude Code 项目中还会合并写入 `.claude/settings.json` 禁区 hook。幂等,重复执行不覆盖已有文件。之后编辑 PIPELINE.md 逐项替换 ❏，再按所用运行时触发流水线。
+脚本准备契约模板、gitignore 和对应端 hook；项目内容由后续对话自动识别补全。脚本单独运行不代表业务契约已配置完成。无需用户逐项替换占位符。
+
+模型偏好由智能体保存到 `pipeline.models.json`，个人默认位于 `~/.config/pipeline-standard/models.json`；无需手动编辑。按“本次指定 > 项目 > 个人 > 原运行时默认”解析。查看设置会说明来源和是否实际启用。实现规则见 [对话入口](skills/pipeline/references/interaction.md) 和 [模型配置](skills/pipeline/references/models.md)。
 
 ## 最近更新
 
+- **v3.8.0**: 对话式项目接入、模型选择/修改/继承、状态查询与续跑；智能体维护配置，Codex/Claude 偏好分离，按需委派时校验应用。保留旧参数与默认直通路径。
 - **v3.7.0**: fast/standard 默认当前会话直接执行；移除 fast 文件数门槛，交接包和独立角色按需创建；复用未失效的真实测试结果，单批合并 QA 与终验。保留高风险审查、契约边界和必需验证。尚无同任务前后对照数据，不承诺固定耗时或 token 降幅。
 - **v3.6.1**: 固定 token 进一步收敛——主 SKILL 渐进披露、共享 context base + 角色差量、裁决按 run 分片、轻量 metrics 与中位数/P80 ETA；Claude、Codex、便携模式同步。
 - **v3.6.0**: 性能与 token 收敛——三档独立执行链、旧契约无阻塞测试分层、QA 索引/批次报告压缩、惰性 skill 自检、standard 条件角色与 fast 最小 artifact；Claude Code、Codex、便携模式同步。
