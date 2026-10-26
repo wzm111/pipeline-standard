@@ -1,5 +1,7 @@
 # fast 流程
 
+使用run_state.py时保留最小归属状态runs/<run_id>.json，不另建state.md；下文“无state”指不生成额外规划/角色状态。结束先核实本run执行者停止，再按归属清理自己的标记。
+
 仅在父级 `SKILL.md` 的全部 fast 条件满足时使用。
 
 1. 记录开始时间和 run_id；创建 `.active`，正常流程不创建 state.md。

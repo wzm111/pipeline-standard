@@ -1,5 +1,7 @@
 # thorough 流程
 
+使用run_state.py时下文state.md对应runs/<run_id>.json，不同时维护两份。收口前确认本run执行者停止，按归属清理标记；不删除未知活动锁。
+
 1. 初始化 state.md，创建 planner。计划必须给任务数、批次数、历史校准 ETA、预算上限和拆分建议；默认一次只执行用户确认的一组批次。
 2. 闸口 1 必须等待明确确认。随后创建 guardian 评审 plan，最多 2 轮；同一 guardian 留待终验。
 3. 创建持久 developer 与 qa；进入测试前读 `qa-loop.md`。按批准批次执行，角色后续只接收 context 差量。
