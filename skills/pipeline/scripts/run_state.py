@@ -204,6 +204,9 @@ def finish(project_root, run_id, owner_token, outcome, *, executors_stopped=Fals
         if any(item.get("status") in {"dispatching", "working"} for item in state.get("role_dispatches", [])):
             raise ValueError("close observed role dispatches after host stop before finishing")
         if outcome == "completed":
+            if state.get("release_plan"):
+                import release_checks
+                release_checks.validate_closeout(project_root, state)
             import delivery
             try:
                 delivery.seal(project_root, base, state)
