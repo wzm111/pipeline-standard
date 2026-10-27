@@ -1,5 +1,6 @@
 """Run lifecycle tests use isolated directories; never touch the real active run."""
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 from pathlib import Path
@@ -219,6 +220,213 @@ class RunStateTests(unittest.TestCase):
         self.assertTrue((self.base / ".active").exists())
         self.assertFalse((self.root / ".pipeline.models.lock").exists())
         self.assertEqual(list(self.base.rglob(".run-state.*")), [])
+
+
+class TimingTests(unittest.TestCase):
+    setUp = RunStateTests.setUp
+
+    def at(self, seconds):
+        return (datetime(2026, 10, 27, tzinfo=timezone.utc) + timedelta(seconds=seconds)).isoformat()
+
+    def call_at(self, seconds, function, *args, **kwargs):
+        with patch.object(RUN, "_now", return_value=self.at(seconds)):
+            return function(*args, **kwargs)
+
+    def start(self, seconds=0, initial=None):
+        return self.call_at(seconds, RUN.start, self.root, initial)
+
+    def update(self, state, seconds, changes):
+        return self.call_at(seconds, RUN.update, self.root, state["run_id"], state["owner_token"], changes)
+
+    def finish(self, state, seconds, outcome="completed"):
+        return self.call_at(seconds, RUN.finish, self.root, state["run_id"], state["owner_token"], outcome,
+                            executors_stopped=True, stop_evidence="all executor completions observed")
+
+    def resume(self, state, seconds):
+        return self.call_at(seconds, RUN.resume, self.root, state["run_id"], state["owner_token"],
+                            executors_stopped=True, stop_evidence="all stopped, recovery checked")
+
+    def timing(self, seconds, run_id=None):
+        return self.call_at(seconds, RUN.timing, self.root, run_id)
+
+    def test_full_frozen_lifecycle_partitions_time_without_pause_or_parallel_sum(self):
+        state = self.start()
+        self.assertEqual(state["created_at"], self.at(0))
+        self.assertEqual(state["activity"], "execution")
+        self.assertEqual(state["history"], [{"event": "start", "at": self.at(0), "stage": "start", "activity": "execution"}])
+        self.update(state, 5, {"stage": "design"})
+        self.update(state, 10, {"activity": "role_wait", "pending": ["parallel-role-A", "parallel-role-B"]})
+        self.update(state, 15, {"activity": "human_wait"})
+        self.update(state, 20, {"activity": "handoff"})
+        self.update(state, 25, {"stage": "verify", "activity": "testing"})
+        paused = self.finish(state, 35, "paused")
+        self.assertIn("stop_evidence", paused["history"][-1])
+        resumed = self.resume(state, 100)
+        self.assertEqual(resumed["owner_token"], state["owner_token"])
+        self.assertEqual(resumed["activity"], "execution")
+        self.finish(state, 110)
+        result = self.timing(200, state["run_id"])
+        self.assertEqual(result["coverage"], "complete")
+        self.assertEqual(result["tracked_seconds"], 45)
+        self.assertEqual(result["paused_seconds"], 65)
+        self.assertEqual(result["activity_seconds"], {"execution": 20, "testing": 10, "human_wait": 5, "role_wait": 5, "handoff": 5})
+        self.assertEqual(result["stage_seconds"], {"start": 5, "design": 20, "verify": 20})
+        self.assertEqual(sum(item["seconds"] for item in result["intervals"]), 45)
+        for previous, following in zip(result["intervals"], result["intervals"][1:]):
+            self.assertLessEqual(previous["end"], following["start"])
+
+    def test_pending_queries_and_same_stage_activity_add_no_events(self):
+        state = self.start()
+        self.update(state, 5, {"pending": ["next"]})
+        self.update(state, 10, {"stage": "start", "activity": "execution"})
+        snapshot = RUN.status(self.root)
+        self.assertEqual(len(snapshot["state"]["history"]), 1)
+        self.assertEqual(self.timing(20)["tracked_seconds"], 20)
+        self.assertEqual(len(RUN.status(self.root)["state"]["history"]), 1)
+        self.update(state, 25, {"stage": "testing", "activity": "testing"})
+        self.assertEqual(len(RUN.status(self.root)["state"]["history"]), 2)
+
+    def test_running_interval_extends_to_read_time_paused_interval_does_not_execute(self):
+        state = self.start(initial={"stage": "implementation", "activity": "execution"})
+        self.assertEqual(self.timing(10)["tracked_seconds"], 10)
+        self.finish(state, 15, "paused")
+        result = self.timing(100, state["run_id"])
+        self.assertEqual(result["tracked_seconds"], 15)
+        self.assertEqual(result["paused_seconds"], 85)
+        self.assertEqual(result["coverage"], "complete")
+
+    def test_legacy_state_no_fabrication_from_updated_at(self):
+        state = self.start()
+        path = self.base / "runs" / f'{state["run_id"]}.json'
+        legacy = dict(state)
+        legacy.pop("created_at")
+        legacy.pop("activity")
+        legacy["history"] = []
+        legacy["updated_at"] = self.at(-500)
+        path.write_text(json.dumps(legacy))
+        result = self.timing(10)
+        self.assertEqual(result["coverage"], "unknown")
+        self.assertEqual(result["tracked_seconds"], 0)
+        self.update(state, 20, {"pending": ["no-timeline-change"]})
+        self.assertEqual(self.timing(30)["tracked_seconds"], 0)
+        self.update(state, 40, {"stage": "known-now", "activity": "testing"})
+        result = self.timing(50)
+        self.assertEqual(result["coverage"], "partial")
+        self.assertEqual(result["tracked_seconds"], 10)
+        self.assertNotIn("created_at", RUN.status(self.root)["state"])
+
+    def test_legacy_resume_only_tracks_from_new_observed_boundary(self):
+        state = self.start()
+        self.finish(state, 10, "paused")
+        path = self.base / "runs" / f'{state["run_id"]}.json'
+        legacy = json.loads(path.read_text())
+        legacy.pop("created_at")
+        legacy.pop("activity")
+        legacy["history"] = [{"event": "paused", "at": self.at(10), "stop_evidence": "old observation"}]
+        path.write_text(json.dumps(legacy))
+        self.resume(state, 40)
+        result = self.timing(50)
+        self.assertEqual(result["coverage"], "partial")
+        self.assertEqual(result["tracked_seconds"], 10)
+        self.assertEqual(result["paused_seconds"], 30)
+
+    def test_recovering_running_state_does_not_count_unknown_interruption_gap(self):
+        state = self.start()
+        self.update(state, 10, {"stage": "work"})
+        self.resume(state, 100)
+        result = self.timing(110)
+        self.assertEqual(result["tracked_seconds"], 20)
+        self.assertEqual(result["coverage"], "partial")
+
+    def test_aborted_terminal_has_complete_boundary_and_no_post_abort_tail(self):
+        state = self.start()
+        self.finish(state, 15, "aborted")
+        for read_at in (15, 100, 1000):
+            result = self.timing(read_at, state["run_id"])
+            self.assertEqual(result["coverage"], "complete")
+            self.assertEqual(result["reason"], "observed_timeline")
+            self.assertEqual(result["tracked_seconds"], 15)
+            self.assertEqual(result["paused_seconds"], 0)
+            self.assertEqual(result["activity_seconds"]["execution"], 15)
+
+    def test_explicit_resume_after_abort_accounts_gap_only_as_nonexecution(self):
+        state = self.start()
+        self.finish(state, 15, "aborted")
+        self.resume(state, 100)
+        self.finish(state, 120)
+        result = self.timing(1000, state["run_id"])
+        self.assertEqual(result["coverage"], "complete")
+        self.assertEqual(result["tracked_seconds"], 35)
+        self.assertEqual(result["paused_seconds"], 85)
+        self.assertEqual(result["activity_seconds"]["execution"], 35)
+
+    def test_unknown_or_mismatched_active_owner_does_not_count_live_tail(self):
+        state = self.start()
+        marker = self.base / ".active"
+        original = json.loads(marker.read_text())
+        altered = dict(original, owner_token="not-this-owner")
+        marker.write_text(json.dumps(altered))
+        result = self.timing(100)
+        self.assertEqual(result["coverage"], "unknown")
+        self.assertEqual(result["reason"], "active_owner_mismatch")
+        self.assertEqual(result["tracked_seconds"], 0)
+        marker.unlink()
+        result = self.timing(100, state["run_id"])
+        self.assertEqual(result["coverage"], "unknown")
+        self.assertEqual(result["tracked_seconds"], 0)
+        marker.write_text("legacy-unknown-owner")
+        self.assertEqual(self.timing(100)["reason"], "active_owner_unrecognized")
+
+    def test_timing_function_and_cli_are_read_only_and_exclude_owner_token(self):
+        empty = self.timing(0)
+        self.assertEqual(empty["coverage"], "unknown")
+        self.assertEqual(list(self.root.iterdir()), [])
+        state = self.start()
+        before = {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in self.root.rglob("*") if path.is_file()}
+        result = self.timing(10)
+        self.assertNotIn(state["owner_token"], json.dumps(result))
+        output = subprocess.run([sys.executable, str(SCRIPTS / "run_state.py"), "--project", str(self.root), "--timing"],
+                                capture_output=True, text=True)
+        self.assertEqual(output.returncode, 0, output.stderr)
+        self.assertNotIn("owner_token", output.stdout)
+        self.assertNotIn(state["owner_token"], output.stdout)
+        self.assertEqual(json.loads(output.stdout)["run_id"], state["run_id"])
+        after = {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in self.root.rglob("*") if path.is_file()}
+        self.assertEqual(before, after)
+
+    def test_failed_transition_and_finish_do_not_leave_phantom_timing_events(self):
+        state = self.start()
+        with patch.object(RUN.os, "replace", side_effect=OSError("disk error")):
+            with self.assertRaises(OSError):
+                self.update(state, 10, {"stage": "not-written", "activity": "testing"})
+            with self.assertRaises(OSError):
+                self.finish(state, 20)
+        self.assertEqual(RUN.status(self.root)["state"], state)
+        result = self.timing(30)
+        self.assertEqual(result["stage_seconds"], {"start": 30})
+        self.assertEqual(result["activity_seconds"]["execution"], 30)
+
+    def test_invalid_activity_and_stage_refused_without_mutation(self):
+        state = self.start()
+        for changes in ({"activity": "parallel_role_total"}, {"activity": []}, {"stage": ""}, {"stage": None}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.update(state, 10, changes)
+        self.assertEqual(RUN.status(self.root)["state"], state)
+
+    def test_nonmonotonic_or_invalid_history_does_not_produce_negative_or_fake_totals(self):
+        state = self.start()
+        self.update(state, 10, {"stage": "testing", "activity": "testing"})
+        path = self.base / "runs" / f'{state["run_id"]}.json'
+        saved = json.loads(path.read_text())
+        for malformed in (dict(saved["history"][-1], at=self.at(-1)),
+                          dict(saved["history"][-1], at="invalid-date"),
+                          {"event": "unknown", "at": self.at(5)}):
+            altered = dict(saved, history=[saved["history"][0], malformed])
+            path.write_text(json.dumps(altered))
+            result = self.timing(20)
+            self.assertEqual(result["coverage"], "unknown")
+            self.assertEqual(result["reason"], "invalid_timeline")
+            self.assertEqual(result["tracked_seconds"], 0)
 
 
 if __name__ == "__main__":

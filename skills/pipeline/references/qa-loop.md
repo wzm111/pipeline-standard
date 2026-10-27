@@ -6,6 +6,8 @@ standard/thorough 共用；单批打回最多 3 轮。
 
 可用 scripts/workflow_metrics.py 的 fingerprint/reusable 核对显式输入目录（含新增/删除文件）与环境身份；必须包含实际依赖、配置与测试输入。证据还须记录输出日志的 output_sha256，缺失或日志已替换则不能复用。外部服务无稳定快照、日志缺失、命令或指纹变化时不复用。该工具不会证明调用者提供的范围已完整，也不自动执行测试；不确定影响面就重跑必需检查。指纹在稳定工作树采集，测试期间禁止并发修改。
 
+报告归属、实际路径、检查复用及共享资源规则见[evidence.md](evidence.md)。以下路径为逻辑名，脚本模式传本run的实际报告路径，不重复生成旧路径正文。
+
 ## Artifact
 
 - `tmp/pipeline/qa/index.md`：每批一行 `batch | gate | round | report | final-items`。
@@ -15,9 +17,9 @@ standard/thorough 共用；单批打回最多 3 轮。
 ## 循环
 
 1. developer 完成一批后一次性勾选该批 checkbox，只跑 context 标注的快速/定向检查并简报。
-2. 调度员同时让 qa 测本批、developer 开下一批；qa 测试期间 developer 不改已交付文件，收到打回后再暂停当前批修复。
+2. 仅在交付输入冻结且生成目录/浏览器状态等资源无冲突时，让qa测本批、developer开下一批；冲突则顺序执行或显式隔离。qa期间developer不改已交付输入，收到打回后再暂停当前批修复。
 3. qa 只核本批核心验收和快速层。后续批次半成品导致的范围外报错只记录观察，不判 FAIL；跨批回归、重型命令和探索项写入 final-items。
-4. `FAIL`：qa 直接把失败编号、复现、实际/预期发给 developer；修复后只复测失败项、影响面和受影响快速命令。
+4. `FAIL`：qa直接把失败编号、复现、实际/预期发给developer；修复后先复测失败项、影响面和受影响快速命令，未受影响的检查须核对输入/环境/日志指纹后复用。命令非零先分类，已给出的QA FAIL不因分类或改批次名重置打回上限。
 5. `CONCERNS`：暂停并读取 `operations.md` 的裁决规则；用户决定修复或豁免后再继续。
 6. `PASS`：更新 index 并封版。每批只向用户发一行；表格快照仅用于等待、预算预警和异常。
 7. 全部批次结束后，qa 只读 index 与 final-items，运行终验层一次写 final.md；不重读全部 PASS 批次正文。
