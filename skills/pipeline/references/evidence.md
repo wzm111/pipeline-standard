@@ -8,7 +8,8 @@
 
 ```python
 from run_evidence import write_report, read_report
-path = write_report(root, run_id, owner_token, "qa", "batch1-r1", {"gate": "PASS", "summary": "..."})
+path = write_report(root, run_id, owner_token, "qa", "batch1-r1",
+                    {"gate": "PASS", "required_checks": ["unit"], "summary": "..."})
 report = read_report(root, run_id, path, kind="qa")
 ```
 
@@ -27,8 +28,8 @@ from run_checks import execute_check, check_summary
 result = execute_check(root, run_id, owner_token, "unit-r1",
                        argv=["pnpm", "test:unit"],
                        scope=["src", "tests", "package.json", "pnpm-lock.yaml", "vite.config.ts"],
-                       environment={"node": actual_node_version}, write_paths=[".nuxt"])
-# 需要复测时，在新名称调用中传reuse_from=result["report"]、impact_covered=True。
+                       environment={"node": actual_node_version}, write_paths=[".nuxt"], coverage=["unit"])
+# 范围已确认时impact_covered=True，后续新名称调用自动查找有效结果。
 totals = check_summary(root, run_id)
 ```
 
@@ -39,6 +40,8 @@ environment补充本次实际使用的运行时、工具版本和必要外部状
 必须通过浏览器等专用工具执行时，可保留run_evidence.py的fingerprint/record_check/reusable_check接口，由智能体记录真实结果；不伪称专用工具已经经由本地执行入口运行。没有Python时按报告头部规则手动核验。
 
 复用要求原exit_code=0且命令/环境/输入/日志指纹相同、影响面明确；默认只查本run登记的证据。impact_covered=True时入口自动查找最新匹配结果，无需手动传reuse_from；命中记check_reuse并跳过执行。跨run仅允许按[交付承接](delivery.md)显式继承并验证来源链，不能直接读取别的run报告作为本轮PASS。底层reusable_check仍只读，统计区分继承与实际执行。必要全量门禁在冻结后集中收口；最终业务产物验收保留。
+
+coverage标明该命令实际覆盖的验收类别（如unit/e2e/build/browser/metadata），QA required_checks来自本需求及契约。交付凭证逐项列required/covered/missing及实际来源；metadata检查不能补足unit，未声明的旧证据完整性为unknown。缺项只补对应检查，不丢弃其他有效证据；后续提交阶段不能清掉继承的原验收要求。标签变化不会直接重贴旧PASS，仍需实际匹配的证据。
 
 ## 失败分类与角色开销
 
