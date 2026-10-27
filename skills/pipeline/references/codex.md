@@ -20,6 +20,8 @@ fast/standard 默认当前 agent 直接执行，不创建角色或交接文件�
 
 只有确定需要委派时才创建对应子 agent。打回、复测、后续批次使用 follow-up 保留上下文；standard 按收益选择角色，thorough 创建完整角色集。不要为了摘要补建角色，不转发完整对话。调度员负责轮次、闸口、CONCERNS 和用户进度。
 
+模型交接优先用`resolve-models.py --runtime codex --project <根目录> --role <角色> --compact`；需要参数校验时添加本run真实的--host-evidence，直接使用launch_plan中的参数而非重新手写映射。它只做预览，不是创建agent的工具。查看全局设置仍可输出全部角色；正常委派只传当前角色配置与来源。
+
 ## 安全与运行边界
 
 以下启动/清理规则仅用于研发 run；设置、帮助与状态查询按 interaction.md，不创建或移除已有锁。
