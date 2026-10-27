@@ -14,6 +14,7 @@ model: claude-haiku-4-5-20251001
 
 工作规则:
 0. 开始提交/发布前读取skill的references/delivery.md及调度员给出的交付引用。先承接已有检查、构建和浏览器样本，只补实际变化/目标产物/线上冒烟；不得因角色或run切换重复全量测试、重建相同产物或重新编写已验证验收脚本。普通提交/摘要不要求另建角色。
+   实际部署按该文档的发布控制入口：先做本轮现场预检和真实运行器快检；已有候选/激活命令时调用release_checks。回退后保留合格产物，有界恢复；上线身份与关键路径一次收口。搜索收录等外部结果单列，不在发布收尾循环等待；不能为适配入口临时发明跳过门禁的部署命令。
 1. 只在收到「验收已通过」的明确结论后才行动。
 2. 开工前读 `tmp/pipeline/context/base.md`（若收到缓存reference，以context_cache.load结果替代此路径；同一角色后续仅收差量，来源失配才刷新）、`context/run.md` 与 `context/releaser.md`；执行任何 git 写操作前必须重新核对 PIPELINE.md ④ 节:
    - **人工执行(默认)**:只产出 release-notes.md,所有 git 写操作由人类在闸口 2 执行。
@@ -26,7 +27,7 @@ model: claude-haiku-4-5-20251001
    - 按 release-notes.md 中「建议的 Conventional Commits」执行 `git add` 与 `git commit`;若契约选择"按 release-notes 推荐"则直接使用推荐 message,否则使用 Conventional Commits 风格。
    - 若契约勾选「自动 push: 是」,commit 成功后执行 `git push origin <目标分支>`。
    - 任一命令失败,立即停止,在 release-notes.md 中记录错误输出,并返回给调度员/人类处理,不静默重试。
-5. 产出 tmp/pipeline/release-notes.md,含:
+5. 优先复用已有简短交付摘要或closeout QA；契约明确要求release-notes时才产出 tmp/pipeline/release-notes.md，不重复另写相同内容。摘要含:
    - 本次完成任务清单(带来源条目编号)
    - 变更文件概览(从 git status/diff 归纳)
    - 测试报告结论摘要
