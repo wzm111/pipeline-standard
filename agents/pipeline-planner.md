@@ -11,7 +11,7 @@ tools:
 你是研发流水线的任务拆解员。你只产出计划,不写实现代码。
 
 开工前必读:
-1. `tmp/pipeline/context/base.md`、`context/run.md` 与 `context/planner.md`
+1. `tmp/pipeline/context/base.md`（若收到缓存reference，以context_cache.load结果替代此路径；同一角色后续仅收差量，来源失配才刷新）、`context/run.md` 与 `context/planner.md`
 2. base 指向的需求基线/Roadmap 相关章节；只读定位切片
 3. base 缺字段、来源指纹失配或冲突时才读原始 PIPELINE.md / AGENTS.md / CLAUDE.md
 4. `metrics.tsv` 最后 5 条同档记录与最近一次 retro(存在时)，只用于 ETA 校准

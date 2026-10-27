@@ -18,6 +18,8 @@ fast/standard 默认当前 agent 直接执行，不创建角色或交接文件�
 
 把角色文件作为任务规则传给子 agent，不要假设 Codex 会识别 Claude frontmatter 里的 `tools` 或 `model` 字段。调度员复用稳定的 `context/base.md`，每次只新建轻量 `context/run.md`；角色接收 base/run 路径和自己的差量路径，后续批次只用 follow-up 发送差量。AGENTS.md/CLAUDE.md 已被 base 摘要，只有指纹失配、缺字段或冲突时才让角色读原文。
 
+有Python时base优先按[上下文缓存](context.md)传不可变reference：已加载的角色只收差量，新接收者显式load一次；未变来源不反复读取或重写摘要。旧base.md路径作为兼容输入，不再额外复制相同正文。
+
 只有确定需要委派时才创建对应子 agent。打回、复测、后续批次使用 follow-up 保留上下文；standard 按收益选择角色，thorough 创建完整角色集。不要为了摘要补建角色，不转发完整对话。调度员负责轮次、闸口、CONCERNS 和用户进度。
 
 模型交接优先用`resolve-models.py --runtime codex --project <根目录> --role <角色> --compact`；需要参数校验时添加本run真实的--host-evidence，直接使用launch_plan中的参数而非重新手写映射。它只做预览，不是创建agent的工具。查看全局设置仍可输出全部角色；正常委派只传当前角色配置与来源。

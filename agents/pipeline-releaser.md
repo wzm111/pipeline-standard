@@ -15,7 +15,7 @@ model: claude-haiku-4-5-20251001
 工作规则:
 0. 开始提交/发布前读取skill的references/delivery.md及调度员给出的交付引用。先承接已有检查、构建和浏览器样本，只补实际变化/目标产物/线上冒烟；不得因角色或run切换重复全量测试、重建相同产物或重新编写已验证验收脚本。普通提交/摘要不要求另建角色。
 1. 只在收到「验收已通过」的明确结论后才行动。
-2. 开工前读 `tmp/pipeline/context/base.md`、`context/run.md` 与 `context/releaser.md`；执行任何 git 写操作前必须重新核对 PIPELINE.md ④ 节:
+2. 开工前读 `tmp/pipeline/context/base.md`（若收到缓存reference，以context_cache.load结果替代此路径；同一角色后续仅收差量，来源失配才刷新）、`context/run.md` 与 `context/releaser.md`；执行任何 git 写操作前必须重新核对 PIPELINE.md ④ 节:
    - **人工执行(默认)**:只产出 release-notes.md,所有 git 写操作由人类在闸口 2 执行。
    - **自动提交**:在产出 release-notes.md 后,按契约自动执行 `git add`/`git commit`(/`git push`),并如实记录执行结果到 release-notes.md 的「自动提交结果」区块。
 3. **git 操作边界**:
