@@ -27,6 +27,15 @@ def _label(value):
     return value
 
 
+def coverage_labels(value=None):
+    """Canonical caller-declared categories; labels never infer a PASS."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("coverage labels must be a list")
+    return sorted({_label(item) for item in value})
+
+
 def _no_owner_token(value):
     if isinstance(value, dict):
         if "owner_token" in value:
@@ -111,12 +120,13 @@ def _environment(environment):
 
 
 def record_check(project_root, run_id, owner_token, name, *, command, scope,
-                 environment, exit_code, log_path, started_fingerprint, seconds=None):
+                 environment, exit_code, log_path, started_fingerprint, seconds=None, coverage=None):
     """Record an observed command result; never execute or infer a PASS."""
     if not isinstance(command, str) or not command.strip() or type(exit_code) is not int:
         raise ValueError("command and observed integer exit code required")
     if seconds is not None and (type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0):
         raise ValueError("seconds must be an observed nonnegative duration or None")
+    coverage = coverage_labels(coverage)
     root = Path(project_root).resolve(strict=True)
     log = _local(root, log_path)
     current = fingerprint(root, scope)
@@ -124,21 +134,24 @@ def record_check(project_root, run_id, owner_token, name, *, command, scope,
         raise ValueError("inputs changed during check or pre-check fingerprint missing")
     payload = {"command": command, "scope": deepcopy(scope),
                "fingerprint": current, "environment": _environment(environment),
-               "exit_code": exit_code, "seconds": seconds, "log_path": log_path,
+               "exit_code": exit_code, "seconds": seconds, "log_path": log_path, "coverage": coverage,
                "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()}
     return write_report(root, run_id, owner_token, "check", name, payload)
 
 
-def reusable_check(project_root, run_id, relative, *, command, environment, impact_covered=False):
+def reusable_check(project_root, run_id, relative, *, command, environment, impact_covered=False, coverage=None):
     """Fail closed if scope coverage, run, inputs, environment or log is unknown."""
     if impact_covered is not True:
         return {"reusable": False, "reason": "impact_not_confirmed"}
+    coverage = coverage_labels(coverage)
     try:
         state = run_state.status(project_root, run_id)["state"]
         if state is None or relative not in state.get("artifacts", []):
             return {"reusable": False, "reason": "unregistered_evidence"}
         payload = read_report(project_root, run_id, relative, kind="check")["payload"]
         validate_lineage(project_root, payload)
+        if coverage_labels(payload.get("coverage")) != coverage:
+            return {"reusable": False, "reason": "coverage_changed"}
         if payload.get("inputs_stable", True) is not True:
             return {"reusable": False, "reason": "inputs_changed_during_check"}
         if type(payload["exit_code"]) is not int or payload["exit_code"] != 0:
@@ -169,7 +182,7 @@ def validate_lineage(project_root, payload, seen=None):
     if key in seen or len(seen) >= 16:
         raise ValueError("cyclic or excessive delivery lineage")
     seen.add(key)
-    packet = delivery.validated_receipt(root, receipt)
+    packet = delivery.validated_receipt(root, receipt, refresh_coverage=False)
     if check not in packet["checks"] or check["run_id"] != receipt["run_id"]:
         raise ValueError("check not included in predecessor acceptance")
     previous = delivery._read_reference(root, check, "check")

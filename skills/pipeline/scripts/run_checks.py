@@ -102,7 +102,8 @@ def _stop(process):
 
 
 def execute_check(project_root, run_id, owner_token, name, *, argv, scope, intent="test",
-                  environment=None, write_paths=None, timeout=None, reuse_from=None, impact_covered=False):
+                  environment=None, write_paths=None, timeout=None, reuse_from=None, impact_covered=False,
+                  coverage=None):
     """One call handles a check; callers still authorize command and impact scope.
 
     Unknown writes serialize cooperating checks. Timeout ends our POSIX process
@@ -110,6 +111,7 @@ def execute_check(project_root, run_id, owner_token, name, *, argv, scope, inten
     """
     root = Path(project_root).resolve(strict=True)
     E._label(name)
+    coverage = E.coverage_labels(coverage)
     if not isinstance(argv, list) or not argv or any(not isinstance(a, str) or not a or "\0" in a for a in argv):
         raise ValueError("argv must be a nonempty list of arguments")
     classify_result(0, intent)
@@ -144,11 +146,11 @@ def execute_check(project_root, run_id, owner_token, name, *, argv, scope, inten
             reusable = (env["executable_sha256"] != "unavailable" and
                         old.get("scope") == scope and old.get("intent") == intent and
                         E.reusable_check(root, run_id, reuse_from, command=command, environment=env,
-                                         impact_covered=True)["reusable"])
+                                         impact_covered=True, coverage=coverage)["reusable"])
         except (OSError, ValueError, KeyError, TypeError):
             reusable = False
         if reusable:
-            path = E.write_report(root, run_id, owner_token, "check_reuse", name, {"source": reuse_from})
+            path = E.write_report(root, run_id, owner_token, "check_reuse", name, {"source": reuse_from, "coverage": coverage})
             return {"report": reuse_from, "reuse_report": path, "reused": True,
                     "exit_code": 0, "result_class": "success", "seconds": 0.0}
     _claim(root, run_id, owner_token, name, write_paths, testing=intent not in {"search", "locate"})
@@ -187,7 +189,7 @@ def execute_check(project_root, run_id, owner_token, name, *, argv, scope, inten
         result_class = classify_result(exit_code, intent, error)
         path = E.write_report(root, run_id, owner_token, "check", name,
                               {"command": command, "argv": argv, "intent": intent, "result_class": result_class,
-                               "scope": scope, "fingerprint": before, "environment": env,
+                               "scope": scope, "fingerprint": before, "environment": env, "coverage": coverage,
                                "inputs_stable": stable, "exit_code": exit_code, "seconds": seconds,
                                "started_at": started_at, "finished_at": finished_at, "log_path": relative,
                                "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()})

@@ -22,7 +22,28 @@ def _read_reference(root, reference, kind):
     return E.read_report(root, reference["run_id"], reference["path"], kind=kind)["payload"]
 
 
-def validated_receipt(root, reference):
+def _coverage(root, checks, required):
+    """Current valid categories and their actual immutable report references."""
+    sources = {}
+    for check in checks:
+        try:
+            payload = _read_reference(root, check, "check")
+            labels = E.coverage_labels(payload.get("coverage"))
+            if not E.reusable_check(root, check["run_id"], check["path"], command=payload["command"],
+                                    environment=payload["environment"], impact_covered=True, coverage=labels)["reusable"]:
+                continue
+            for label in labels:
+                sources.setdefault(label, []).append(deepcopy(check))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    required = E.coverage_labels(required) if required is not None else None
+    covered = sorted(sources)
+    missing = sorted(set(required) - set(covered)) if required is not None else None
+    return {"required": required, "covered": covered, "missing": missing,
+            "complete": not missing if required is not None else None, "sources": sources}
+
+
+def validated_receipt(root, reference, *, refresh_coverage=True):
     root = Path(root).resolve(strict=True)
     packet = _read_reference(root, reference, "delivery")
     source = R.status(root, reference["run_id"])["state"]
@@ -36,13 +57,17 @@ def validated_receipt(root, reference):
         raise ValueError("delivery requires explicit QA acceptance")
     if E.fingerprint(root, packet["context_scope"]) != packet["context_fingerprint"]:
         raise ValueError("delivery contract changed")
+    if refresh_coverage:
+        required = packet.get("coverage", {}).get("required")
+        packet["coverage"] = _coverage(root, packet["checks"], required)
     return packet
 
 
 def seal(root, base, state):
     """Called by finish under its existing ownership lock; fail closed on gaps."""
     root = Path(root).resolve(strict=True)
-    approvals, checks, seen = {}, [], set()
+    approvals, checks, seen, blocked = {}, [], set(), set()
+    required = E.coverage_labels(state.get("inherited_required_checks"))
     for path in reversed(state["artifacts"]):
         if not isinstance(path, str) or f"/runs/{state['run_id']}/artifacts/" not in path:
             continue
@@ -52,14 +77,24 @@ def seal(root, base, state):
             if not isinstance(payload, dict) or payload.get("gate") != "PASS":
                 raise ValueError("latest acceptance is not PASS")
             approvals[kind] = {**_reference(root, state["run_id"], path), "kind": kind}
+            if kind == "qa":
+                required = sorted(set(required) | set(E.coverage_labels(payload.get("required_checks"))))
         elif kind == "check":
             key = json.dumps([payload.get("command"), payload.get("scope"), payload.get("intent")], sort_keys=True)
-            if key in seen:
+            if key in blocked:
                 continue
-            seen.add(key)
+            labels = E.coverage_labels(payload.get("coverage"))
+            labeled_key = (key, tuple(labels))
+            if labeled_key in seen:
+                continue
+            seen.add(labeled_key)
             if E.reusable_check(root, state["run_id"], path, command=payload["command"],
-                                environment=payload["environment"], impact_covered=True)["reusable"]:
+                                environment=payload["environment"], impact_covered=True, coverage=labels)["reusable"]:
                 checks.append(_reference(root, state["run_id"], path))
+            else:
+                # A later failed/invalid observation blocks older labels too;
+                # relabeling must never revive a superseded PASS.
+                blocked.add(key)
     if "qa" not in approvals or not checks:
         raise ValueError("no accepted, reusable check evidence to hand off")
     context = ["PIPELINE.md"] if (root / "PIPELINE.md").is_file() else []
@@ -73,7 +108,8 @@ def seal(root, base, state):
         assets_by_path[path] = {"path": path, "fingerprint": E.fingerprint(root, [path])}
     assets = list(assets_by_path.values())
     packet = {"project_root": str(root), "approvals": list(approvals.values()), "checks": checks,
-              "context_scope": context, "context_fingerprint": E.fingerprint(root, context), "assets": assets}
+              "context_scope": context, "context_fingerprint": E.fingerprint(root, context), "assets": assets,
+              "coverage": _coverage(root, checks, required or None)}
     digest = hashlib.sha256(json.dumps(packet, sort_keys=True).encode()).hexdigest()[:16]
     relative = f"tmp/pipeline/runs/{state['run_id']}/artifacts/delivery/handoff-{digest}.json"
     path = E._local(root, relative)
@@ -87,7 +123,7 @@ def seal(root, base, state):
         state["artifacts"].append(relative)
     reference = _reference(root, state["run_id"], relative)
     R._atomic(E._local(root, POINTER), reference)
-    state["delivery_status"] = {"sealed": True, "reference": reference}
+    state["delivery_status"] = {"sealed": True, "reference": reference, "coverage": deepcopy(packet["coverage"])}
 
 
 def adopt(root, base, state, reference):
@@ -100,10 +136,14 @@ def adopt(root, base, state, reference):
     if not isinstance(reference, dict) or reference.get("run_id") == state["run_id"]:
         raise ValueError("invalid predecessor delivery")
     packet = validated_receipt(root, reference)
-    imported = []
+    imported, skipped = [], []
     for check in packet["checks"]:
-        payload = _read_reference(root, check, "check")
-        E.validate_lineage(root, payload)
+        try:
+            payload = _read_reference(root, check, "check")
+            E.validate_lineage(root, payload)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            skipped.append({"reference": deepcopy(check), "reason": type(error).__name__})
+            continue
         inherited = deepcopy(payload)
         inherited["inherited_from"] = {"check": check, "receipt": reference}
         relative = f"tmp/pipeline/runs/{state['run_id']}/artifacts/check/inherited-{check['sha256'][:16]}.json"
@@ -121,8 +161,10 @@ def adopt(root, base, state, reference):
             matches = False
         assets.append({**item, "unchanged": matches})
     state["delivery_status"] = {"adopted": True, "reference": reference,
-                                "checks": imported, "assets": assets}
+                                "checks": imported, "assets": assets, "coverage": deepcopy(packet["coverage"]),
+                                "skipped_checks": skipped}
     state["inherited_assets"] = deepcopy(packet["assets"])
+    state["inherited_required_checks"] = deepcopy(packet.get("coverage", {}).get("required"))
 
 
 def block_latest(root, run_id, reason):
