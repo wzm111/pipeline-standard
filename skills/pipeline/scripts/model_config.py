@@ -9,9 +9,16 @@ import tempfile
 ROLES = {"developer", "planner", "scope_guardian", "tester", "releaser"}
 RUNTIMES = {"codex", "claude"}
 DEFAULT_MODELS = Path(__file__).resolve().parents[1] / "defaults/models.json"
+TASK_KINDS = {
+    "routine_planning": {"planner"},
+    "routine_review": {"scope_guardian"},
+    "scoped_fix": {"developer"},
+    "ui_validation": {"tester"},
+    "release_summary": {"releaser"},
+}
 
 
-def validate_preference(config):
+def validate_preference(config, *, role=None):
     if not isinstance(config, dict):
         raise ValueError("role must be an object")
     model = config.get("model")
@@ -22,6 +29,16 @@ def validate_preference(config):
         raise ValueError("invalid effort")
     if "fallback" in config and config["fallback"] != "inherit":
         raise ValueError("fallback must be inherit when supplied")
+    if "task_routes" in config:
+        routes = config["task_routes"]
+        if not isinstance(routes, dict):
+            raise ValueError("task_routes must be an object")
+        for task_kind, route in routes.items():
+            if task_kind not in TASK_KINDS or (role is not None and role not in TASK_KINDS[task_kind]):
+                raise ValueError(f"invalid task kind for role: {task_kind}")
+            if not isinstance(route, dict) or route.keys() - {"model", "effort", "fallback"}:
+                raise ValueError("task route accepts only model, effort and fallback")
+            validate_preference(route)
     return config
 
 
@@ -38,7 +55,7 @@ def validate_document(data):
         for role, config in roles.items():
             if role not in ROLES:
                 raise ValueError(f"unknown role {role}")
-            validate_preference(config)
+            validate_preference(config, role=role)
     return data
 
 
@@ -93,7 +110,7 @@ def prepare_update(document, runtime, role, changes=None, *, remove=False, effec
     """Produce an editable document. remove exposes lower layers; inherit masks them.
 
     effective is the resolved preference, required for effort-only edits when the
-    role is absent locally. Explicit model changes clear old effort and fallback.
+    role is absent locally. Explicit model changes clear old effort, fallback and routes.
     """
     validate_document(document)
     if runtime not in RUNTIMES or role not in ROLES:
@@ -111,9 +128,45 @@ def prepare_update(document, runtime, role, changes=None, *, remove=False, effec
         if "model" in changes:
             config.pop("effort", None)
             config.pop("fallback", None)
+            config.pop("task_routes", None)
         config.update(deepcopy(changes))
-        roles[role] = validate_preference(config)
+        roles[role] = validate_preference(config, role=role)
     return validate_document(result)
+
+
+def select_task_route(role, preference, *, task_kind=None, risk="unknown", complexity="unknown"):
+    """Pure selection only; selected preferences still require host preflight.
+
+    Routing replaces the model/effort/fallback tuple, without inheriting base
+    effort or fallback authorization. Unknown classifications keep the base.
+    """
+    if not isinstance(role, str) or role not in ROLES:
+        raise ValueError("unknown role")
+    validate_preference(preference, role=role)
+    if not isinstance(risk, str) or risk not in {"low", "medium", "high", "unknown"}:
+        raise ValueError("invalid risk")
+    if not isinstance(complexity, str) or complexity not in {"simple", "moderate", "complex", "unknown"}:
+        raise ValueError("invalid complexity")
+    if task_kind is not None and (not isinstance(task_kind, str) or task_kind not in TASK_KINDS or role not in TASK_KINDS[task_kind]):
+        raise ValueError("task kind does not apply to role")
+    effective = deepcopy(preference)
+    routes = effective.pop("task_routes", {})
+    applied = False
+    if task_kind is None:
+        reason = "task_kind_missing"
+    elif risk != "low":
+        reason = "risk_not_low"
+    elif complexity != "simple":
+        reason = "complexity_not_simple"
+    elif task_kind not in routes:
+        reason = "route_not_configured"
+    else:
+        effective = deepcopy(routes[task_kind])
+        applied = True
+        reason = "matched"
+    return {"preference": effective,
+            "routing": {"task_kind": task_kind, "risk": risk, "complexity": complexity,
+                        "applied": applied, "reason": reason, "base_model": preference["model"]}}
 
 
 def save_project(project_root, document, expected_revision):

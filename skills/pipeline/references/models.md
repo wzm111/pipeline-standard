@@ -43,9 +43,11 @@ model 必须是非空字符串。effort 可省略，表示使用选定模型/运
 
 ### 本地可靠工具（不启动模型）
 
+角色可选task_routes支持按任务分流，详见[任务模型路由](model-routing.md)。先解析配置优先级，再根据显式任务分类选择；项目固定角色会屏蔽低层路由。智能体传--task-kind/--risk/--complexity，不要求用户填写；只在明确low/simple时使用匹配路线，返回routing用于审计。原命令不加新参数时输出保持兼容，仍须对最终型号做宿主预检。
+
 `scripts/model_config.py` 只用 Python 标准库。CLI 仍然只读：`--read` 返回项目文档及 revision；`--temporary '{"tester":{"model":"inherit"}}'` 添加本次覆盖，不写文件。临时覆盖采用当前运行时的角色对象，完整替换对应角色配置。
 
-智能体先读取 `read_document(path)` 获取 `(document, revision)`，用 `prepare_update(document, runtime, role, changes)` 生成精确更新。`remove=True` 删除该端该角色的覆盖；`{"model":"inherit"}` 屏蔽低层配置。仅改 effort 且项目未定义该角色时，传入已解析的 `effective` 偏好；切换 model 自动清除旧 effort/fallback，明确传入的新值才保留。格式校验不证明模型与 effort 的实际可用性，应用前还要能力预检。
+智能体先读取 `read_document(path)` 获取 `(document, revision)`，用 `prepare_update(document, runtime, role, changes)` 生成精确更新。`remove=True` 删除该端该角色的覆盖；`{"model":"inherit"}` 屏蔽低层配置。仅改 effort 且项目未定义该角色时，传入已解析的 `effective` 偏好；切换 model 自动清除旧 effort/fallback/task_routes，明确传入的新值才保留。格式校验不证明模型与 effort 的实际可用性，应用前还要能力预检。
 
 保存前由当前智能体复核用户授权、目标项目契约与写权限。可通过编辑工具保存已生成的局部文档并回读；需要可靠原子保存时调用 `save_project(project_root, updated_document, revision)`。该函数固定写指定项目根的 `pipeline.models.json`，没有 CLI 写入口，也没有个人/全局配置写入口；不会自动放宽权限、删除活动标记或生成角色文件。项目目录先解析为实际目录，配置文件、内部控制路径和锁文件拒绝符号链接；损坏 JSON、未知版本、活动 `tmp/pipeline/.active`、旧 revision 和现有 `.pipeline.models.lock` 均拒绝保存。临时文件 fsync 后原子替换并回读，失败清理自己的锁与临时文件。锁存在时先查明来源，不自动删除别人的锁。
 
