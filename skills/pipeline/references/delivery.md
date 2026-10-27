@@ -21,6 +21,8 @@
 
 智能体可在原run更新handoff_files，列出已验证的浏览器脚本、合成样本或候选构建目录；finish封存其路径与指纹。后续state.delivery_status.assets逐项标unchanged，优先复用有效脚本和样本，失效项单独处理，不丢弃其他有效检查，也不重新猜DOM入口。目录存在不代表可上线，构建版本/提交身份仍须符合本次目标。
 
+浏览器验收后按[browser-handoff.md](browser-handoff.md)记录脚本、样本和实际页面前置条件，接口自动将这些文件加入handoff_files。后续使用先做短探测并preflight；页面或样本不匹配时直接定位差异，不在错误入口上反复等控件。recipe可用只表示复用验收方法，不能替代本次必要的线上验收结果。
+
 继承失败会返回delivery_status.adopted=false；先看拒绝原因和影响面，再补缺口，不静默改成PASS，也不不加区分地重跑整套。最新阶段未通过、缺交付证据、暂停或中止时，latest明确阻塞，不默认回退旧PASS。显式选择旧引用仍需完整校验及对应用户意图。旧格式不能只补上当前run_id当作合格历史证据。
 
 ## 只改版本号时
