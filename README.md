@@ -163,6 +163,8 @@ bash init-project.sh --codex /path/to/项目    # Codex-only 项目，不创建 
 
 安装器从 [`skills/pipeline/defaults/models.json`](skills/pipeline/defaults/models.json) 初始化本机`~/.config/pipeline-standard/models.json`，升级不覆盖；skill目录存放可更新的模板，本机文件保存你的选择。项目根`pipeline.models.json`优先覆盖同一角色。完整顺序为“本次指定 > 项目 > 本机默认 > skill模板（旧安装兜底）> 运行时默认”，无需手动编辑。查看设置会说明每个角色来源和是否实际启用。实现规则见 [对话入口](skills/pipeline/references/interaction.md) 和 [模型配置](skills/pipeline/references/models.md)。
 
+智能体交接模型配置时支持按角色精简查询和宿主参数预览，减少无关上下文与手工映射。预览不调用模型，实际启动结果仍单独验证；用户继续用自然语言操作即可。
+
 ## 最近更新
 
 后续建设见 [分期开发路线图](docs/ROADMAP.md)：覆盖能力边界、角色模型可靠性、性能对照、对话操作、双端回归和真实项目试点，包含各期任务与验收标准。规划项不代表已实现。

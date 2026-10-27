@@ -35,6 +35,10 @@ model 必须是非空字符串。effort 可省略，表示使用选定模型/运
 
 可用 `scripts/resolve-models.py --runtime codex --project <项目根>` 只读解析项目和个人有效配置；它校验格式与优先级，不验证账号模型权限。没有 Python 时按同一规则读取，不为设置安装依赖。
 
+创建单个角色时，智能体优先使用`--role tester --compact`，只返回当前角色的preference/source/path，避免每次转发五个角色的完整配置；查看全部设置时仍使用原命令。此为智能体内部接口，不要求用户记参数。
+
+需要转换启动参数时，可加`--host-evidence <本run宿主能力.json>`：Codex返回launch_plan.parameters，Claude返回独立角色frontmatter修改参数。该文件由智能体依据当前宿主真实能力准备，不要求用户填写，不把历史名单或型号可见当作权限已确认。只支持与--role配合，不能与--read混用；权限未知/型号失效/不支持的强度会拒绝生成成功计划，显式授权的fallback=inherit才可回退。Claude结果的effort=null表示删除旧字段，不应原样写入frontmatter。所有模式均只读，不创建角色、不写设置，预检verified=false；实际执行仍由运行时工具完成并单独记录反馈。
+
 解析器通过自身真实位置定位defaults/models.json，不能依赖当前工作目录或借用pipeline-standard项目根的pipeline.models.json。每个角色返回source/path：skill_default、personal、project或temporary。默认文件缺失/损坏应提示修复安装，不静默返回空roles。安装是完整skill目录链接，默认文件无需拷贝到每个项目；读取它不写项目或个人文件。正在运行的角色不因默认文件更新自动换模。
 
 ### 本地可靠工具（不启动模型）
