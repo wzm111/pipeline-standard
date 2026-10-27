@@ -47,7 +47,7 @@ fast/standard 在当前会话执行时，直接复用已读上下文；只记录
 - 每个角色只接收 base、run 路径和 `context/<role>.md` 差量(当前批次、artifact、验收变化)。同一角色后续批次只发差量，不重复冷启动或转发长对话。
 - 角色只有在 base 缺字段、指纹失配或发现冲突时才打开原文；developer 每次写入前仍须复核 `PIPELINE.md` ⑤ 节，releaser 执行 git 前仍须复核 ④ 节。
 - 新产生的模型、QA和验收报告必须绑定本run及记录时间；实际路径放交接包，不能信任共享目录里遗留的同名文件。生成报告、QA启动或复用检查时读[证据与复用](references/evidence.md)，优先用run_evidence.py保存与核验，不为fast新增原本不需要的报告。
-- 普通前台检查经run_checks.execute_check统一执行；范围明确时impact_covered=True，自动先查可复用证据再决定是否执行，不能只在prompt里说“复用”后仍直接重跑命令。浏览器等专用工具按evidence.md记录。实际委派时记role_metrics事件，缺历史保持unknown，不为统计增加角色或必填配置。
+- 普通前台检查经run_checks.execute_check统一执行；范围明确时impact_covered=True，自动先查可复用证据再决定是否执行，不能只在prompt里说“复用”后仍直接重跑命令。浏览器等专用工具按evidence.md记录。实际委派须在[角色派发边界](references/role-dispatch.md)调用begin→宿主工具→accepted，工作结束再complete；已注册未闭合派发不能finish。不为统计增加角色或必填配置；当前会话全程直做时收口confirm_direct，历史缺失不倒填。
 - 读取不确定的内部路径前先窄范围定位（如rg --files或运行时等价工具）；角色目录按skill真实路径解析，不反复猜目录/通配符。搜索无匹配与路径错误分别处理。
 
 ## 按需加载
