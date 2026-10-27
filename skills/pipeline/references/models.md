@@ -82,7 +82,7 @@ revision 在保存前和替换前两次检查，同模块写入由排他锁串�
 4. **Claude Code**：优先使用当前 Agent 调用支持的模型覆盖。没有该覆盖但支持自定义角色文件时，由智能体在项目 `.claude/agents/` 为所选角色生成专用 `pipeline-configured-<role>.md`，复制原角色规则并设置当前版本支持的 model/effort frontmatter，使用独立名称避免覆盖已有角色；已有非本工具维护文件不可覆盖。仅按运行时实际支持字段写入，不通过全局 effort 设置影响其他角色。加载需刷新时说明“下次会话生效”，不冒充已加载。继承配置需显式覆盖原角色的固定 model 或使用受支持的 inherit 角色。
 5. Claude 项目配置明确要求模型/角色文件时，写入仍遵守项目禁区与运行时权限；没有权限或活动 run 阻止变更时保存待办，不放宽白名单或移除 .active。未配置角色保留旧默认，确保兼容。
 6. 模型不存在、无权限或组合无效：只在该角色实际需要时阻止其启动，给可操作的选择；不得重复尝试多个昂贵模型。仅明确允许 fallback=inherit 时回退并说明。当前已运行的 agent 不因文件变更自动切换；下一次创建生效，不为配置变更中断工作。
-7. 把 role、requested_model/effort、传入参数、runtime 报告的 actual_model/effort、fallback 写入本 run 的 context/models.json（仅委派时）；运行时不返回实际模型则标 unknown，不能把请求值当实际值。展示设置时区别“保存的偏好”与“本次实际使用”。
+7. 把role、requested_model/effort、传入参数、runtime报告的actual_model/effort、fallback作为本run的models报告保存（仅委派时），按[evidence.md](evidence.md)绑定run_id与记录时间并交接实际路径；旧context/models.json只作逻辑名，未确认归属的内容不当本轮证据。运行时不返回实际模型则标unknown，不能把请求值当实际值。展示设置时区别“保存的偏好”与“本次实际使用”。
 
 ## 不可用时的最短处理
 

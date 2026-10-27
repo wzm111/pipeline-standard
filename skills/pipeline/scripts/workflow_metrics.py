@@ -6,6 +6,19 @@ import math
 from pathlib import Path
 import statistics
 
+try:
+    from input_fingerprint import fingerprint as _input_fingerprint
+except ModuleNotFoundError as error:
+    # Existing consumers load this file by absolute importlib spec, without
+    # putting the sibling scripts directory on sys.path.
+    if error.name != "input_fingerprint":
+        raise
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location("pipeline_input_fingerprint", Path(__file__).with_name("input_fingerprint.py"))
+    _module = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_module)
+    _input_fingerprint = _module.fingerprint
+
 
 def fingerprint(root, paths, environment):
     """Hash explicit inputs (directories include names/additions/deletions).
@@ -15,40 +28,7 @@ def fingerprint(root, paths, environment):
     """
     if not environment:
         raise ValueError("environment identity is required")
-    root = Path(root).resolve(strict=True)
-    entries = {}
-    for relative in paths:
-        candidate = root / relative
-        if Path(relative).is_absolute() or ".." in Path(relative).parts:
-            raise ValueError("inputs must be project relative")
-        for part in (candidate, *candidate.parents):
-            if part == root:
-                break
-            if part.is_symlink():
-                raise ValueError("symlink inputs require explicit resolved scope")
-        if not candidate.exists():
-            entries[relative] = {"missing": True}
-            continue
-        items = [candidate, *sorted(candidate.rglob("*"))] if candidate.is_dir() else [candidate]
-        for item in items:
-            if item.is_symlink():
-                raise ValueError("symlink input is not reusable")
-            key = item.relative_to(root).as_posix()
-            if item.is_dir():
-                entries[key] = {"directory": True}
-            elif item.is_file():
-                before = item.stat()
-                digest = hashlib.sha256(item.read_bytes()).hexdigest()
-                after = item.stat()
-                if (before.st_mtime_ns, before.st_size, before.st_ino) != (after.st_mtime_ns, after.st_size, after.st_ino):
-                    raise ValueError("input changed during fingerprint")
-                entries[key] = {"sha256": digest, "mode": after.st_mode & 0o777}
-            else:
-                raise ValueError("unsupported input type")
-    if not entries:
-        raise ValueError("at least one input required")
-    value = {"inputs": entries, "environment": environment}
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    return _input_fingerprint(root, paths, environment)
 
 
 def reusable(evidence, current_fingerprint, command, environment_stable):

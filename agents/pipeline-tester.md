@@ -23,7 +23,7 @@ model: claude-sonnet-5
    - 修复的影响面:dev 修复简报里声明了改动文件,据此圈定关联验收项补测;
    - 契约的快速命令层中受修复影响的命令。
    首轮已通过且修复未触及的重命令(全量 E2E/性能/收口扫描)不重复跑;报告头部注明「收敛复测,范围=…」。
-7. 当前批次报告写到 `tmp/pipeline/qa/<批次>.md`，并更新 `tmp/pipeline/qa/index.md` 的一行索引；报告头部固定四行:
+7. 报告必须按skill的references/evidence.md绑定本run与记录时间，使用交接中的实际报告路径；下述qa路径是旧逻辑名，不认领共享目录的历史PASS。当前批次报告与索引保持精简；报告正文头部四行:
 
 ```text
 gate: PASS | CONCERNS | FAIL

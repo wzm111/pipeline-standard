@@ -27,6 +27,7 @@ description: 对话式研发流水线：描述需求即可按风险开发、测�
 
 1. 读取项目根 `PIPELINE.md`。不存在或关键字段仍是占位符时，按 interaction.md 自动接入并继续原需求；不把填写模板交给用户。已有契约只补必要缺项，保留用户规则。
 2. 若 `tmp/pipeline/.active` 存在或 state 显示未完成，先处理续跑/新开，禁止同项目并行两条流水线。有Python时优先使用 scripts/run_state.py 的 start/status/update/finish，首次使用读取 [本地状态接口](references/operations.md)，保存本run身份；该模式的真实状态位于 runs/<run_id>.json，不再并行维护state.md。无Python可保留旧格式，但不能宣称具备脚本级归属校验。结束时先确认本run执行者停止，再清理自己的.active，不能删除未知归属标记。
+   阶段或执行/测试/人工等待/角色等待/交接实际改变时更新stage/activity，脚本自动记事件；查询和监控不制造事件，不反推旧记录缺失的耗时。
 3. 用户显式档位优先；未声明时按风险选择并在首条简报说明。只能自动升级，不能自动降级：
    - **fast**：单个内聚、可定向验证的低风险改动；无新依赖、迁移、公开 API/数据结构、权限/支付/安全、部署配置、自动提交；范围和验收明确。文件数量不作为硬门槛，关联测试与样式可同批修改。只读 [fast 流程](references/fast.md)。
    - **standard**：默认。只读 [standard 流程](references/standard.md)；进入 QA 时再读 [QA 循环](references/qa-loop.md)。
@@ -43,6 +44,9 @@ fast/standard 在当前会话执行时，直接复用已读上下文；只记录
 - 若已有 base 的来源指纹全部未变，直接复用；不得重新概括。旧契约未分测试层时，安全可过滤的 lint/单测归快速层，其余声明命令归终验层，不暂停补契约。
 - 每个角色只接收 base、run 路径和 `context/<role>.md` 差量(当前批次、artifact、验收变化)。同一角色后续批次只发差量，不重复冷启动或转发长对话。
 - 角色只有在 base 缺字段、指纹失配或发现冲突时才打开原文；developer 每次写入前仍须复核 `PIPELINE.md` ⑤ 节，releaser 执行 git 前仍须复核 ④ 节。
+- 新产生的模型、QA和验收报告必须绑定本run及记录时间；实际路径放交接包，不能信任共享目录里遗留的同名文件。生成报告、QA启动或复用检查时读[证据与复用](references/evidence.md)，优先用run_evidence.py保存与核验，不为fast新增原本不需要的报告。
+- 前台检查优先用run_checks.execute_check统一执行、计时、分类和保存证据；实际委派时用role_metrics记录创建/续用、准备/工作/等待及结束，缺历史保持unknown，不为统计增加角色或必填配置。
+- 读取不确定的内部路径前先窄范围定位（如rg --files或运行时等价工具）；角色目录按skill真实路径解析，不反复猜目录/通配符。搜索无匹配与路径错误分别处理。
 
 ## 按需加载
 
