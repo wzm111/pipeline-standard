@@ -111,6 +111,8 @@ def summary(root, run_id=None):
         result["reason"] = "invalid_role_history"
         return result
     if not actors:
+        if state.get("role_execution") == "direct" and not state.get("role_dispatches"):
+            result.update(coverage="not_applicable", reason="direct_execution_without_roles", observed_wall_seconds=0.0)
         return result
     roles = {}
     for actor in actors.values():

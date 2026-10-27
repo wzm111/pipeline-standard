@@ -49,7 +49,7 @@ intent按实际用途选择test/search/locate/reproduce/check。入口记录原�
 
 需要区分环境、测试夹具与真实回归时，用`review_check(root, run_id, owner_token, name, source, result_class, reason)`写有依据的独立诊断；result_class为environment_failure/fixture_failure/regression_failure。check_summary同时保留原始及诊断分类、执行与复用次数，不改原结果、不自动增加或重置QA打回轮次，也不把并行命令时长相加。
 
-角色事件用role_metrics.py的`record_role_event(root, run_id, owner_token, role, executor_id, event)`记录；executor_id为本run内稳定短标识。宿主实际创建/续用后记created/reused；交接、工作或等待开始记preparing/working/waiting，本次角色工作完成记stopped。重复相同phase不会反复写盘；stopped后再次工作须先记reused，不为记录额外创建角色。
+新委派按[role-dispatch.md](role-dispatch.md)将begin/accepted/complete接到真实宿主调用点，自动闭合角色生命周期并分开保存请求与实际反馈；创建失败不算创建成功。角色额外的可观察交接、工作或等待变化仍用role_metrics.py的`record_role_event(root, run_id, owner_token, role, executor_id, event)`记录preparing/working/waiting。executor_id为本run内稳定短标识，重复相同phase不会反复写盘，不额外补记adapter已写的created/reused/stopped，不为记录增加角色。
 
 `role_metrics.summary(root, run_id)`只读汇总角色创建/续用计数、各phase区间并集及全部角色墙钟并集。不同角色/phase可能重叠，不能把各列相加当总时间。未观测的阶段为null，既有角色首次reused不补造created；running中断恢复排除缺停止边界的旧区间，历史缺失标partial/unknown。脚本聚合已上报事件，不能自动获知宿主未上报的等待。
 

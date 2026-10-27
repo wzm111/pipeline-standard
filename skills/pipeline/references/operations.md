@@ -20,6 +20,7 @@
   同一交付的提交/发布可显式传delivery_from="latest"承接已完成run的凭证；普通新任务不继承。handoff_files可列出需沿用的浏览器脚本、样本或产物路径。两者由智能体维护，规则见delivery.md。
 - `update(project_root, run_id, owner_token, changes)` 仅修改上述进度字段，校验state和active归属一致；stage/activity真实改变时自动记录transition。只改待办或重复同值不增加事件；不代表启动、停止或更换执行者。
 - `finish(project_root, run_id, owner_token, outcome, executors_stopped=True, stop_evidence=...)` 支持 paused/aborted/completed。调用方必须先用宿主实际工具确认本 run 的全部执行者停止，再提供非空证据。先原子保存最终 state，再复核归属并清自己的标记；证据不充分则保留锁和现场。
+  已接入role_dispatch且还在dispatching/working的派发须先按真实宿主结果complete关闭；脚本拒绝默默丢弃这些事件。旧无派发记录的run保持原有停止证据流程。
   completed在同一归属锁内自动封存有QA PASS和可复用检查的交付凭证；缺失证据不造PASS，delivery_status会说明未封存。无法继承不等于业务失败，按影响面补必要检查。
 - `resume(project_root, run_id, owner_token, executors_stopped=True, stop_evidence=...)` 明确恢复本人 paused/aborted 或中断的 running run；拒绝 completed、其他 run 的 active、坏锁、归属不符及缺停止证据。身份保持不变，便于状态/标记之间中断后按同一归属重试；恢复不是自动重新委派，下一步由调度员根据 pending/next 和已有产物决定。
 
