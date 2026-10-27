@@ -17,8 +17,10 @@
 标准库模块提供可测试函数，调用方先遵守项目契约与当前授权：
 
 - `start(project_root, initial=None)` 生成唯一 UUID run_id 和随机 owner_token，排他创建 `.active`；存在任何旧标记均拒绝。返回 state 供当前调度员保存归属。initial可包含stage/activity/batches/pending/next/artifacts，不可替换身份或状态字段；新run自动保存created_at与start事件。
+  同一交付的提交/发布可显式传delivery_from="latest"承接已完成run的凭证；普通新任务不继承。handoff_files可列出需沿用的浏览器脚本、样本或产物路径。两者由智能体维护，规则见delivery.md。
 - `update(project_root, run_id, owner_token, changes)` 仅修改上述进度字段，校验state和active归属一致；stage/activity真实改变时自动记录transition。只改待办或重复同值不增加事件；不代表启动、停止或更换执行者。
 - `finish(project_root, run_id, owner_token, outcome, executors_stopped=True, stop_evidence=...)` 支持 paused/aborted/completed。调用方必须先用宿主实际工具确认本 run 的全部执行者停止，再提供非空证据。先原子保存最终 state，再复核归属并清自己的标记；证据不充分则保留锁和现场。
+  completed在同一归属锁内自动封存有QA PASS和可复用检查的交付凭证；缺失证据不造PASS，delivery_status会说明未封存。无法继承不等于业务失败，按影响面补必要检查。
 - `resume(project_root, run_id, owner_token, executors_stopped=True, stop_evidence=...)` 明确恢复本人 paused/aborted 或中断的 running run；拒绝 completed、其他 run 的 active、坏锁、归属不符及缺停止证据。身份保持不变，便于状态/标记之间中断后按同一归属重试；恢复不是自动重新委派，下一步由调度员根据 pending/next 和已有产物决定。
 
 状态放在 `tmp/pipeline/runs/<run_id>.json`，各 run 独立保留；不覆盖旧 `state.md` 或代码/产物。`.active` 仅保存 schema_version/run_id/owner_token。owner token 是本地归属凭证，不要写入公开报告。模块不操作 agent/进程，也不能验证调用方提供的停止证据是否真实；不能把传入 true 当作工具已替人终止 agent。旧纯文本锁无法经此接口自动迁移，调度员需先独立确认其归属与执行者，保留证据后再做受授权的迁移，不能通过猜测 token 或删除锁绕过。

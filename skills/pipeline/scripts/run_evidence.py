@@ -134,7 +134,11 @@ def reusable_check(project_root, run_id, relative, *, command, environment, impa
     if impact_covered is not True:
         return {"reusable": False, "reason": "impact_not_confirmed"}
     try:
+        state = run_state.status(project_root, run_id)["state"]
+        if state is None or relative not in state.get("artifacts", []):
+            return {"reusable": False, "reason": "unregistered_evidence"}
         payload = read_report(project_root, run_id, relative, kind="check")["payload"]
+        validate_lineage(project_root, payload)
         if payload.get("inputs_stable", True) is not True:
             return {"reusable": False, "reason": "inputs_changed_during_check"}
         if type(payload["exit_code"]) is not int or payload["exit_code"] != 0:
@@ -150,6 +154,29 @@ def reusable_check(project_root, run_id, relative, *, command, environment, impa
     except (OSError, ValueError, KeyError, TypeError):
         return {"reusable": False, "reason": "unconfirmed_evidence"}
     return {"reusable": True, "reason": "same_run_inputs_environment_and_log"}
+
+
+def validate_lineage(project_root, payload, seen=None):
+    """Inherited results retain immutable source and acceptance references."""
+    origin = payload.get("inherited_from")
+    if origin is None:
+        return
+    import delivery
+    root = Path(project_root).resolve(strict=True)
+    check, receipt = origin["check"], origin["receipt"]
+    key = (check["run_id"], check["path"])
+    seen = set() if seen is None else set(seen)
+    if key in seen or len(seen) >= 16:
+        raise ValueError("cyclic or excessive delivery lineage")
+    seen.add(key)
+    packet = delivery.validated_receipt(root, receipt)
+    if check not in packet["checks"] or check["run_id"] != receipt["run_id"]:
+        raise ValueError("check not included in predecessor acceptance")
+    previous = delivery._read_reference(root, check, "check")
+    if ({k: v for k, v in payload.items() if k != "inherited_from"}
+            != {k: v for k, v in previous.items() if k != "inherited_from"}):
+        raise ValueError("inherited result changed")
+    validate_lineage(root, previous, seen)
 
 
 def write_paths_conflict(project_root, left, right):

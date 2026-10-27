@@ -38,7 +38,7 @@ environment补充本次实际使用的运行时、工具版本和必要外部状
 
 必须通过浏览器等专用工具执行时，可保留run_evidence.py的fingerprint/record_check/reusable_check接口，由智能体记录真实结果；不伪称专用工具已经经由本地执行入口运行。没有Python时按报告头部规则手动核验。
 
-复用仅在同run、原exit_code=0、命令/环境/输入/日志指纹相同且影响面明确时允许。统一入口有明确复用请求时先核验，命中则记录check_reuse并跳过执行；未命中才执行已授权命令。底层reusable_check仍只读。必要全量门禁在冻结后集中收口；最终产物的业务语义、界面与用户明确要求仍须验收。
+复用要求原exit_code=0且命令/环境/输入/日志指纹相同、影响面明确；默认只查本run登记的证据。impact_covered=True时入口自动查找最新匹配结果，无需手动传reuse_from；命中记check_reuse并跳过执行。跨run仅允许按[交付承接](delivery.md)显式继承并验证来源链，不能直接读取别的run报告作为本轮PASS。底层reusable_check仍只读，统计区分继承与实际执行。必要全量门禁在冻结后集中收口；最终业务产物验收保留。
 
 ## 失败分类与角色开销
 

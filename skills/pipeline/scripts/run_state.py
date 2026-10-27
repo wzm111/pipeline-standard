@@ -11,9 +11,13 @@ import sys
 import tempfile
 import uuid
 
+# Keep file-based imports usable when finish/start load the optional delivery adapter.
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 FINAL = {"paused", "aborted", "completed"}
 ACTIVITIES = {"execution", "testing", "human_wait", "role_wait", "handoff"}
-FIELDS = {"stage", "activity", "batches", "pending", "next", "artifacts"}
+FIELDS = {"stage", "activity", "batches", "pending", "next", "artifacts", "handoff_files"}
 
 
 def _validate_changes(changes):
@@ -128,6 +132,7 @@ def status(project_root, run_id=None):
 
 def start(project_root, initial=None):
     initial = deepcopy({} if initial is None else initial)
+    delivery_from = initial.pop("delivery_from", None) if isinstance(initial, dict) else None
     _validate_changes(initial)
     with _write_guard(project_root) as base:
         if (base / ".active").exists():
@@ -140,6 +145,14 @@ def start(project_root, initial=None):
                  "artifacts": [], "created_at": now, "history": [], "updated_at": now}
         state.update(initial)
         state["history"].append(_event(state, "start", now))
+        if delivery_from is not None:
+            import delivery
+            before_adoption = deepcopy(state)
+            try:
+                delivery.adopt(project_root, base, state, delivery_from)
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                state = before_adoption
+                state["delivery_status"] = {"adopted": False, "reason": type(error).__name__, "detail": str(error)[:160]}
         path = _state_path(base, state["run_id"])
         if path.exists():
             raise ValueError("run_id collision")
@@ -188,6 +201,16 @@ def finish(project_root, run_id, owner_token, outcome, *, executors_stopped=Fals
     _stopped(executors_stopped, stop_evidence)
     with _write_guard(project_root) as base:
         path, state = _load_owned(base, run_id, owner_token)
+        if outcome == "completed":
+            import delivery
+            try:
+                delivery.seal(project_root, base, state)
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                delivery.block_latest(project_root, run_id, "latest_delivery_unaccepted")
+                state["delivery_status"] = {"sealed": False, "reason": type(error).__name__, "detail": str(error)[:160]}
+        else:
+            import delivery
+            delivery.block_latest(project_root, run_id, outcome)
         state["status"] = outcome
         state["updated_at"] = _now()
         state["history"].append(_event(state, outcome, state["updated_at"], stop_evidence=stop_evidence))
