@@ -35,6 +35,16 @@ coverage=complete表示新run有完整事件边界，partial表示只能覆盖�
 
 前台检查由run_checks.execute_check自动记录命令实际耗时并恢复调度阶段；role_metrics.summary提供角色级阶段并集和创建/续用计数，具体事件按evidence.md对接宿主。两类统计都不从测试项数或模型请求值推断耗时。resume确认旧执行者停止后，同时清除旧running_checks与临时阶段恢复记录；不得仅为绕过资源冲突调用恢复。
 
+### 非测试操作归因
+
+`operation_metrics.py`补充读取、定位、交接、Git和网络等实际操作区间。统一检查入口自动记录包含缓存判定的整次调用；原检查报告的seconds仍只是子进程耗时，两者不能相加。其他宿主工具由调度员在确有分析价值的操作边界记录，不逐条消息、轮询或重复同值写盘，不新建计时角色。
+
+普通Python调用可用`call(root, run_id, owner_token, category, label, callback, *args, **kwargs)`包住现有操作，或用`with span(root, run_id, owner_token, category, label): ...`。跨宿主工具边界则先`begin(...)`保存返回的span_id，实际工具返回后`end(root, run_id, owner_token, span_id)`；异常如实记failed/interrupted并保留原异常。category仅read/write/locate/handoff/git/network/verify/other，label为安全短标识。无需用户填写配置。
+
+`summary(root, run_id)`只读返回category_seconds、attributed_seconds、unattributed_seconds及未闭合计数。重复end不会增加新记录。只有实际接入过的操作可归因；不能根据事后聊天记录补造起止时间。
+
+摘要按类别和全部操作分别计算区间并集，并裁剪到run真实可观测的活动区间；嵌套、并行和暂停不能重复累加。剩余时间为unattributed_seconds，可能包括推理、交流或未接入操作，不能直接称为浪费。未闭合、旧历史缺失保持partial/unknown；模块不自动拦截浏览器、Claude或Codex的原生工具。只保存安全短标识及时间/状态，禁止把命令参数、文件内容、凭据写入操作标签。
+
 所有写函数与模型保存共用项目根 `.pipeline.models.lock`，排他失败立即返回；先取得该协调锁再处理 active，避免合作调用之间的设置保存/启动竞态。现有未知协调锁不自动回收。项目根可解析 macOS 系统目录别名，但项目内部 tmp、pipeline、runs、控制文件和状态文件拒绝符号链接。状态经同目录临时文件/fsync/原子替换保存，失败清理本次临时文件并保留可确认的现场。状态和 active 不是跨文件事务：写后中断可能需要带同一 run 归属和新停止证据重试；不承诺抵御非协作进程抢写或断电后目录元数据持久化。写失败时查询现文件，不盲目清锁或覆盖。
 
 ## 裁决分片

@@ -14,6 +14,7 @@ import time
 
 import run_evidence as E
 import run_state as R
+import operation_metrics as O
 
 INTENTS = {"test", "search", "locate", "reproduce", "check"}
 RESULTS = {"success", "search_no_match", "path_lookup_failure", "reproduction_nonzero",
@@ -104,6 +105,18 @@ def _stop(process):
 def execute_check(project_root, run_id, owner_token, name, *, argv, scope, intent="test",
                   environment=None, write_paths=None, timeout=None, reuse_from=None, impact_covered=False,
                   coverage=None):
+    """Automatically time one whole check call, including cache decisions."""
+    return O.call(project_root, run_id, owner_token, "locate" if intent in {"search", "locate"} else "verify", name,
+                  _execute_check, project_root, run_id, owner_token, name, argv=argv, scope=scope, intent=intent,
+                  environment=environment, write_paths=write_paths, timeout=timeout, reuse_from=reuse_from,
+                  impact_covered=impact_covered, coverage=coverage,
+                  result_status=lambda result: "reused" if result["reused"] else "executed"
+                  if result["result_class"] in {"success", "search_no_match", "reproduction_nonzero"} else "failed")
+
+
+def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, intent="test",
+                   environment=None, write_paths=None, timeout=None, reuse_from=None, impact_covered=False,
+                   coverage=None):
     """One call handles a check; callers still authorize command and impact scope.
 
     Unknown writes serialize cooperating checks. Timeout ends our POSIX process
