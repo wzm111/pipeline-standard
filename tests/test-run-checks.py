@@ -152,6 +152,20 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(R.status(self.root)["state"]["running_checks"], [])
 
     @unittest.skipUnless(os.name == "posix", "process group cleanup is POSIX-specific")
+    def test_timeout_does_not_signal_the_already_cleaned_process_group_twice(self):
+        original = C.os.killpg
+        signals = []
+        def signal_once(pid, sig):
+            signals.append((pid, sig))
+            if len(signals) > 1:
+                raise PermissionError("fixture: group no longer owned after cleanup")
+            return original(pid, sig)
+        with patch.object(C.os, "killpg", side_effect=signal_once):
+            result = self.execute("one-cleanup", "import time; time.sleep(20)", timeout=0.05)
+        self.assertEqual(result["result_class"], "timeout")
+        self.assertEqual(len(signals), 1)
+
+    @unittest.skipUnless(os.name == "posix", "process group cleanup is POSIX-specific")
     def test_timeout_cleans_our_descendant_process_group(self):
         source = "import subprocess,sys,time; from pathlib import Path; p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(20)']); Path('child-pid').write_text(str(p.pid)); time.sleep(20)"
         row = self.execute("tree", source, timeout=0.4)
