@@ -168,10 +168,9 @@ def execute_check(project_root, run_id, owner_token, name, *, argv, scope, inten
                 except subprocess.TimeoutExpired:
                     _stop(process)
                     exit_code, error = process.returncode, "timeout"
-                finally:
+                else:
                     # A foreground check must not leave descendants holding its resources.
-                    if process.poll() is not None:
-                        _stop(process)
+                    _stop(process)
             except OSError as exc:
                 stream.write(f"Launch failed: {type(exc).__name__}\n")
                 exit_code, error = 127, "command_unavailable"
