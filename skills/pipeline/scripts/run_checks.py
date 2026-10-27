@@ -123,6 +123,21 @@ def execute_check(project_root, run_id, owner_token, name, *, argv, scope, inten
     command = shlex.join(argv)
     if owner_token in command:
         raise ValueError("owner token cannot be passed to a command")
+    if impact_covered is True and reuse_from is None:
+        owned = R.status(root, run_id)["state"]
+        R._owned(owned, run_id, owner_token)
+        # Search only this run's registered evidence, including explicit imports.
+        for candidate in reversed(owned["artifacts"]):
+            if "/artifacts/check/" not in candidate:
+                continue
+            try:
+                proof = E.read_report(root, run_id, candidate, kind="check")["payload"]
+                if (proof.get("command") == command and proof.get("scope") == scope
+                        and proof.get("intent") == intent and proof.get("environment") == env):
+                    reuse_from = candidate
+                    break
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
     if reuse_from and impact_covered is True:
         try:
             old = E.read_report(root, run_id, reuse_from, kind="check")["payload"]
@@ -200,7 +215,7 @@ def review_check(project_root, run_id, owner_token, name, source, result_class, 
 def check_summary(project_root, run_id=None):
     state = R.status(project_root, run_id)["state"]
     result = {"run_id": state["run_id"] if state else run_id, "executed": 0, "reused": 0,
-              "by_result_class": {}, "by_raw_result_class": {}, "reviews": 0, "unconfirmed": 0}
+              "by_result_class": {}, "by_raw_result_class": {}, "reviews": 0, "inherited": 0, "unconfirmed": 0}
     checks, reviews = {}, {}
     for path in state.get("artifacts", []) if state else []:
         if not any(f"/artifacts/{kind}/" in path for kind in ("check", "check_reuse", "check_review")):
@@ -218,6 +233,10 @@ def check_summary(project_root, run_id=None):
                 reviews[payload["source"]] = payload["result_class"]
                 result["reviews"] += 1
             else:
+                if report["payload"].get("inherited_from"):
+                    E.validate_lineage(project_root, report["payload"])
+                    result["inherited"] += 1
+                    continue
                 category = report["payload"].get("result_class", "unclassified")
                 if category not in RESULTS:
                     category = "unclassified"

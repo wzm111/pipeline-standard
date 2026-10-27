@@ -18,6 +18,7 @@ description: 对话式研发流水线：描述需求即可按风险开发、测�
 用户不需要了解参数、角色或配置文件。支持自然语言及原有 flags：
 - 初始化/帮我接入、配置模型/换模型/恢复继承、查看设置/帮助：读 [对话操作](references/interaction.md)，必要时读 [模型配置](references/models.md)。这些操作不启动研发流水线、不创建 .active；已有任务的锁不移除。
 - 继续上次、进度怎么样、停止、修复中断：读 [运行与恢复](references/operations.md)。只读状态不启动新 run；明确续跑不重复询问。
+- 提交/发布刚完成的需求：按[交付承接](references/delivery.md)沿用验收、角色和脚本；已完成run通过delivery_from承接，不重新按开发需求规划和全量验收。实际git/上线动作仍限用户授权。
 - 开发需求：直接进入下方流程。简单任务自动 fast，其余 standard，真实高风险 thorough；不让用户先选档、预算或模型。项目没有配置时使用安装器生成的本机默认；旧安装缺本机文件时用defaults/models.json模板兜底，不发起设置问卷。
 - 全流程只问无法从项目推断且影响结果的关键问题，每轮尽量一个；给简短建议，接受自然语言回答。低风险已授权动作直接执行，保留必要风险闸口。使用“已完成、剩余、需要你决定”说明进度，不要求用户打开内部报告找答案。
 - 每次需要创建子agent前，都按models.md运行scripts/resolve-models.py解析当前运行时的角色设置；即使项目没有pipeline.models.json也不能跳过。优先级为本次 > 项目 > 本机默认 > skill模板 > 运行时默认。记录每个角色来源；配置模型不强制新增角色，主会话直通不会切换模型。
@@ -45,7 +46,7 @@ fast/standard 在当前会话执行时，直接复用已读上下文；只记录
 - 每个角色只接收 base、run 路径和 `context/<role>.md` 差量(当前批次、artifact、验收变化)。同一角色后续批次只发差量，不重复冷启动或转发长对话。
 - 角色只有在 base 缺字段、指纹失配或发现冲突时才打开原文；developer 每次写入前仍须复核 `PIPELINE.md` ⑤ 节，releaser 执行 git 前仍须复核 ④ 节。
 - 新产生的模型、QA和验收报告必须绑定本run及记录时间；实际路径放交接包，不能信任共享目录里遗留的同名文件。生成报告、QA启动或复用检查时读[证据与复用](references/evidence.md)，优先用run_evidence.py保存与核验，不为fast新增原本不需要的报告。
-- 前台检查优先用run_checks.execute_check统一执行、计时、分类和保存证据；实际委派时用role_metrics记录创建/续用、准备/工作/等待及结束，缺历史保持unknown，不为统计增加角色或必填配置。
+- 普通前台检查经run_checks.execute_check统一执行；范围明确时impact_covered=True，自动先查可复用证据再决定是否执行，不能只在prompt里说“复用”后仍直接重跑命令。浏览器等专用工具按evidence.md记录。实际委派时记role_metrics事件，缺历史保持unknown，不为统计增加角色或必填配置。
 - 读取不确定的内部路径前先窄范围定位（如rg --files或运行时等价工具）；角色目录按skill真实路径解析，不反复猜目录/通配符。搜索无匹配与路径错误分别处理。
 
 ## 按需加载
