@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from model_config import (ROLES, claude_role_parameters, codex_spawn_parameters,
-                          read_document, read_layer, resolve)  # noqa: E402
+                          read_document, read_layer, resolve, select_task_route)  # noqa: E402
 
 
 def main():
@@ -20,9 +20,15 @@ def main():
     parser.add_argument("--role", choices=sorted(ROLES), help="return only the role being delegated")
     parser.add_argument("--compact", action="store_true", help="compact JSON for agent handoff")
     parser.add_argument("--host-evidence", type=Path, help="current host capability JSON; requires --role; previews parameters only")
+    parser.add_argument("--task-kind", help="task type for an explicitly configured role route")
+    parser.add_argument("--risk", choices=("low", "medium", "high", "unknown"), default="unknown")
+    parser.add_argument("--complexity", choices=("simple", "moderate", "complex", "unknown"), default="unknown")
     args = parser.parse_args()
     try:
         project = args.project / "pipeline.models.json"
+        routing_requested = args.task_kind is not None or args.risk != "unknown" or args.complexity != "unknown"
+        if routing_requested and (args.role is None or args.task_kind is None):
+            raise ValueError("task routing requires both --role and --task-kind")
         if args.host_evidence is not None and args.role is None:
             raise ValueError("--host-evidence requires --role")
         if args.read and (args.role is not None or args.host_evidence is not None):
@@ -41,6 +47,9 @@ def main():
                 if args.role not in result["roles"]:
                     raise ValueError(f"no preference for role {args.role}")
                 result = {"runtime": args.runtime, "role": args.role, **result["roles"][args.role]}
+                if routing_requested:
+                    result.update(select_task_route(args.role, result["preference"], task_kind=args.task_kind,
+                                                    risk=args.risk, complexity=args.complexity))
                 if args.host_evidence is not None:
                     host = json.loads(args.host_evidence.read_text(encoding="utf-8"))
                     if not isinstance(host, dict):

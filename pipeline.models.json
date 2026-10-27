@@ -2,11 +2,11 @@
   "schema_version": 1,
   "runtimes": {
     "codex": {
-      "developer": {"model": "gpt-6.1-sol", "effort": "medium"},
-      "planner": {"model": "gpt-6-astra", "effort": "medium"},
-      "scope_guardian": {"model": "gpt-6-astra", "effort": "high"},
-      "tester": {"model": "gpt-6.1-sol", "effort": "medium"},
-      "releaser": {"model": "gpt-6.1-sol", "effort": "low"}
+      "developer": {"model": "gpt-6.1-sol", "effort": "medium", "task_routes": {"scoped_fix": {"model": "gpt-6.1-terra", "effort": "medium"}}},
+      "planner": {"model": "gpt-6-astra", "effort": "medium", "task_routes": {"routine_planning": {"model": "gpt-6.1-sol", "effort": "medium"}}},
+      "scope_guardian": {"model": "gpt-6-astra", "effort": "high", "task_routes": {"routine_review": {"model": "gpt-6.1-sol", "effort": "medium"}}},
+      "tester": {"model": "gpt-6.1-sol", "effort": "medium", "task_routes": {"ui_validation": {"model": "gpt-6.1-terra", "effort": "medium"}}},
+      "releaser": {"model": "gpt-6.1-sol", "effort": "low", "task_routes": {"release_summary": {"model": "gpt-6.1-terra", "effort": "low"}}}
     }
   }
 }
