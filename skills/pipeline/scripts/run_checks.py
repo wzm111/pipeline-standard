@@ -39,7 +39,26 @@ def classify_result(exit_code, intent, error=None):
             "reproduce": "reproduction_nonzero"}.get(intent, "command_failure")
 
 
-def _environment(root, argv, child_env, context):
+def _workdir(root, cwd=None):
+    relative = "." if cwd is None else cwd
+    path = E._local(root, relative)
+    if not path.is_dir():
+        raise ValueError("check cwd must be an existing project directory")
+    return path
+
+
+def inspect_runner(project_root, argv, *, cwd=None):
+    """Read-only executable/cwd preflight, no process and no environment dump."""
+    root = Path(project_root).resolve(strict=True)
+    directory = _workdir(root, cwd)
+    if not isinstance(argv, list) or not argv or any(not isinstance(a, str) or not a or "\0" in a for a in argv):
+        raise ValueError("argv must be a nonempty list of arguments")
+    env = _environment(directory, argv, dict(os.environ), None, project_root=root)
+    return {"cwd": directory.relative_to(root).as_posix(), "executable": env["executable"],
+            "available": env["executable_sha256"] != "unavailable"}
+
+
+def _environment(root, argv, child_env, context, *, project_root=None):
     # PATH entries (including the empty entry) are relative to the child's cwd.
     search_path = os.pathsep.join(str(root / part) if not Path(part).is_absolute() else part
                                   for part in child_env.get("PATH", os.defpath).split(os.pathsep))
@@ -49,10 +68,13 @@ def _environment(root, argv, child_env, context):
         identity = hashlib.sha256(Path(executable).read_bytes()).hexdigest() if executable else "unavailable"
     except OSError:
         identity = "unavailable"
-    return {"process_env_sha256": hashlib.sha256(json.dumps(child_env, sort_keys=True).encode()).hexdigest(),
+    result = {"process_env_sha256": hashlib.sha256(json.dumps(child_env, sort_keys=True).encode()).hexdigest(),
             "executable": str(Path(executable).resolve()) if executable else argv[0],
             "executable_sha256": identity,
             **{f"context:{k}": v for k, v in E._environment(context or {"scope": "local"}).items()}}
+    if project_root is not None and root != project_root:
+        result["working_directory"] = root.relative_to(project_root).as_posix()
+    return result
 
 
 def _claim(root, run_id, owner, name, write_paths, *, testing=True):
@@ -104,25 +126,26 @@ def _stop(process):
 
 def execute_check(project_root, run_id, owner_token, name, *, argv, scope, intent="test",
                   environment=None, write_paths=None, timeout=None, reuse_from=None, impact_covered=False,
-                  coverage=None):
+                  coverage=None, cwd=None):
     """Automatically time one whole check call, including cache decisions."""
     return O.call(project_root, run_id, owner_token, "locate" if intent in {"search", "locate"} else "verify", name,
                   _execute_check, project_root, run_id, owner_token, name, argv=argv, scope=scope, intent=intent,
                   environment=environment, write_paths=write_paths, timeout=timeout, reuse_from=reuse_from,
-                  impact_covered=impact_covered, coverage=coverage,
+                  impact_covered=impact_covered, coverage=coverage, cwd=cwd,
                   result_status=lambda result: "reused" if result["reused"] else "executed"
                   if result["result_class"] in {"success", "search_no_match", "reproduction_nonzero"} else "failed")
 
 
 def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, intent="test",
                    environment=None, write_paths=None, timeout=None, reuse_from=None, impact_covered=False,
-                   coverage=None):
+                   coverage=None, cwd=None):
     """One call handles a check; callers still authorize command and impact scope.
 
     Unknown writes serialize cooperating checks. Timeout ends our POSIX process
     group. Commands must stay in the foreground; this is not a service runner.
     """
     root = Path(project_root).resolve(strict=True)
+    directory = _workdir(root, cwd)
     E._label(name)
     coverage = E.coverage_labels(coverage)
     if not isinstance(argv, list) or not argv or any(not isinstance(a, str) or not a or "\0" in a for a in argv):
@@ -134,12 +157,13 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
     E.write_paths_conflict(root, write_paths, [])
     before = E.fingerprint(root, scope)
     child_env = {k: v for k, v in os.environ.items() if k != "PIPELINE_OWNER_TOKEN" and owner_token not in v}
-    env = _environment(root, argv, child_env, environment)
+    env = _environment(directory, argv, child_env, environment, project_root=root)
     command = shlex.join(argv)
     if owner_token in command:
         raise ValueError("owner token cannot be passed to a command")
     decision = {"reason": "impact_not_confirmed" if impact_covered is not True else "no_matching_check"}
-    if impact_covered is True and reuse_from is None:
+    latest = None
+    if impact_covered is True:
         owned = R.status(root, run_id)["state"]
         R._owned(owned, run_id, owner_token)
         # Search only this run's registered evidence, including explicit imports.
@@ -149,24 +173,37 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
             try:
                 proof = E.read_report(root, run_id, candidate, kind="check")["payload"]
                 if (proof.get("command") == command and proof.get("scope") == scope
-                        and proof.get("intent") == intent):
+                        and proof.get("intent", "test") == intent
+                        and proof.get("cwd", ".") == directory.relative_to(root).as_posix()):
                     # Select the latest observation before validating its environment;
                     # a newer failure must not revive an older PASS in another env.
-                    reuse_from = candidate
+                    latest = candidate
                     break
             except (OSError, ValueError, KeyError, TypeError):
                 continue
+        if reuse_from is None:
+            reuse_from = latest
     if reuse_from and impact_covered is True:
         decision = {"source": reuse_from, "reason": "unconfirmed_evidence"}
         try:
             old = E.read_report(root, run_id, reuse_from, kind="check")["payload"]
             if env["executable_sha256"] == "unavailable":
                 verdict = {"reusable": False, "reason": "executable_unconfirmed"}
-            elif old.get("scope") != scope or old.get("intent") != intent:
+            elif (old.get("scope") != scope or old.get("intent", "test") != intent
+                  or old.get("cwd", ".") != directory.relative_to(root).as_posix()):
                 verdict = {"reusable": False, "reason": "scope_or_intent_changed"}
             else:
-                verdict = E.reusable_check(root, run_id, reuse_from, command=command, environment=env,
-                                           impact_covered=True, coverage=coverage)
+                verdict = None
+                if latest and latest != reuse_from:
+                    newer = E.read_report(root, run_id, latest, kind="check")["payload"]
+                    current = E.reusable_check(root, run_id, latest, command=command, environment=env,
+                                               impact_covered=True, coverage=newer.get("coverage"))
+                    if not current["reusable"]:
+                        verdict = {"reusable": False, "reason": "superseded_observation"}
+                        decision.update(latest_source=latest, latest_reason=current["reason"])
+                if verdict is None:
+                    verdict = E.reusable_check(root, run_id, reuse_from, command=command, environment=env,
+                                               impact_covered=True, coverage=coverage)
             decision["reason"] = verdict["reason"]
             reusable = verdict["reusable"]
         except (OSError, ValueError, KeyError, TypeError):
@@ -186,7 +223,7 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
         error = None
         with log.open("x", encoding="utf-8") as stream:
             try:
-                process = subprocess.Popen(argv, cwd=root, env=child_env, stdin=subprocess.DEVNULL,
+                process = subprocess.Popen(argv, cwd=directory, env=child_env, stdin=subprocess.DEVNULL,
                                            stdout=stream, stderr=subprocess.STDOUT, start_new_session=os.name == "posix")
                 try:
                     exit_code = process.wait(timeout=timeout)
@@ -206,13 +243,15 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
         seconds, finished_at = time.monotonic() - start, R._now()
         try:
             stable = (env["executable_sha256"] != "unavailable" and E.fingerprint(root, scope) == before
-                      and _environment(root, argv, child_env, environment) == env)
+                      and _workdir(root, cwd) == directory
+                      and _environment(directory, argv, child_env, environment, project_root=root) == env)
         except (OSError, ValueError):
             stable = False
         result_class = classify_result(exit_code, intent, error)
         path = E.write_report(root, run_id, owner_token, "check", name,
                               {"command": command, "argv": argv, "intent": intent, "result_class": result_class,
                                "scope": scope, "fingerprint": before, "environment": env, "coverage": coverage,
+                               "cwd": directory.relative_to(root).as_posix(),
                                "inputs_stable": stable, "exit_code": exit_code, "seconds": seconds,
                                "reuse_decision": decision,
                                "started_at": started_at, "finished_at": finished_at, "log_path": relative,

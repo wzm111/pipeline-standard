@@ -72,6 +72,36 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(C.check_summary(self.root)["reused"], 1)
         self.assertEqual(C.check_summary(self.root)["executed"], 1)
 
+    def test_actual_package_cwd_is_used_and_prevents_cross_package_reuse(self):
+        for package in ("one", "two"):
+            (self.root / package).mkdir()
+        source = "from pathlib import Path; Path('counter').write_text('ran')"
+        first = self.execute("package-one", source, cwd="one", impact_covered=True)
+        same = self.execute("package-one-again", source, cwd="one", impact_covered=True)
+        other = self.execute("package-two", source, cwd="two", impact_covered=True)
+        self.assertTrue(same["reused"])
+        self.assertFalse(other["reused"])
+        self.assertEqual(self.payload(first)["cwd"], "one")
+        self.assertTrue((self.root / "one/counter").exists())
+        self.assertTrue((self.root / "two/counter").exists())
+        self.assertFalse((self.root / "counter").exists())
+
+    def test_runner_preflight_is_read_only_and_invalid_cwd_never_executes(self):
+        (self.root / "package").mkdir()
+        before = sorted(str(p) for p in self.root.rglob("*"))
+        runner = C.inspect_runner(self.root, [sys.executable, "-c", "raise SystemExit(1)"], cwd="package")
+        self.assertTrue(runner["available"])
+        self.assertEqual(runner["cwd"], "package")
+        self.assertEqual(before, sorted(str(p) for p in self.root.rglob("*")))
+        self.assertFalse(C.inspect_runner(self.root, ["/nonexistent/fixture-tool"])["available"])
+        for cwd in ("../outside", "missing", str(self.root)):
+            with self.assertRaises(ValueError):
+                self.execute("bad-cwd", "open('bad','w').close()", cwd=cwd)
+        (self.root / "alias").symlink_to(self.root / "package", target_is_directory=True)
+        with self.assertRaises(ValueError):
+            self.execute("bad-link", cwd="alias")
+        self.assertFalse((self.root / "bad").exists())
+
     def test_cache_decision_explains_reexecution_without_dumping_environment(self):
         first = self.execute("baseline")
         self.assertEqual(first["reuse_decision"]["reason"], "impact_not_confirmed")
@@ -108,6 +138,60 @@ class CheckTests(unittest.TestCase):
         self.assertFalse(retry["reused"])
         self.assertEqual(retry["exit_code"], 0)
         self.assertEqual(retry["reuse_decision"], {"source": failed["report"], "reason": "check_not_passed"})
+
+    def test_explicit_old_pass_cannot_bypass_newer_manual_failure_or_invalid_log(self):
+        for index, observation in enumerate(("legacy_failure", "invalid_log")):
+            with self.subTest(observation=observation):
+                source = f"from pathlib import Path; p=Path('counter{index}'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1')"
+                first = self.execute(f"first{index}", source, coverage=["unit"])
+                if observation == "legacy_failure":
+                    proof = self.payload(first)
+                    log = f"manual{index}.log"
+                    (self.root / log).write_text("actual failure")
+                    latest = E.record_check(self.root, self.state["run_id"], self.state["owner_token"],
+                                             f"manual{index}", command=proof["command"], scope=proof["scope"],
+                                             environment=proof["environment"], exit_code=1, log_path=log,
+                                             started_fingerprint=E.fingerprint(self.root, proof["scope"]),
+                                             coverage=["different_label"])
+                    reason = "check_not_passed"
+                else:
+                    newer = self.execute(f"newer{index}", source, coverage=["unit"])
+                    latest = newer["report"]
+                    (self.root / self.payload(newer)["log_path"]).write_text("replaced log")
+                    reason = "log_changed"
+                retry = self.execute(f"retry{index}", source, reuse_from=first["report"],
+                                     impact_covered=True, coverage=["unit"])
+                self.assertFalse(retry["reused"])
+                self.assertEqual(retry["reuse_decision"]["reason"], "superseded_observation")
+                self.assertEqual(retry["reuse_decision"]["latest_source"], latest)
+                self.assertEqual(retry["reuse_decision"]["latest_reason"], reason)
+                self.assertEqual((self.root / f"counter{index}").read_text(), "2" if index == 0 else "3")
+
+    def test_explicit_reference_respects_latest_failure_in_another_environment(self):
+        source = "import os; raise SystemExit(int(os.environ['FIXTURE_EXIT']))"
+        with patch.dict(os.environ, {"FIXTURE_EXIT": "0"}):
+            first = self.execute("explicit-env-pass", source)
+        with patch.dict(os.environ, {"FIXTURE_EXIT": "1"}):
+            latest = self.execute("explicit-env-fail", source)
+        with patch.dict(os.environ, {"FIXTURE_EXIT": "0"}):
+            retry = self.execute("explicit-env-retry", source, reuse_from=first["report"], impact_covered=True)
+        self.assertFalse(retry["reused"])
+        self.assertEqual(retry["exit_code"], 0)
+        self.assertEqual(retry["reuse_decision"]["latest_source"], latest["report"])
+
+    def test_explicit_valid_reference_survives_other_cwd_failure_and_newer_valid_pass(self):
+        for directory in ("one", "two"):
+            (self.root / directory).mkdir()
+        source = "from pathlib import Path; p=Path('counter'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); raise SystemExit(int(Path.cwd().name=='two'))"
+        first = self.execute("one-pass", source, cwd="one", coverage=["unit"])
+        self.execute("two-fail", source, cwd="two", coverage=["unit"])
+        retry = self.execute("one-reuse", source, cwd="one", coverage=["unit"],
+                             reuse_from=first["report"], impact_covered=True)
+        self.assertTrue(retry["reused"])
+        self.execute("one-new-pass", source, cwd="one", coverage=["unit"])
+        self.assertTrue(self.execute("one-valid-reuse", source, cwd="one", coverage=["unit"],
+                                    reuse_from=first["report"], impact_covered=True)["reused"])
+        self.assertEqual((self.root / "one/counter").read_text(), "2")
 
     def test_reasoned_failure_diagnosis_preserves_raw_result_and_exit(self):
         failed = self.execute("failed", "raise SystemExit(1)")

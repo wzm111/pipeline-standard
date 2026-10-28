@@ -8,6 +8,8 @@ standard/thorough 共用；单批打回最多 3 轮。
 
 报告归属、实际路径、检查复用及共享资源规则见[evidence.md](evidence.md)。以下路径为逻辑名，脚本模式传本run的实际报告路径，不重复生成旧路径正文。
 
+多项验收交接共享[检查计划](check-plan.md)引用；不把final-round等执行名复制为required_checks。QA仍审查业务断言与覆盖是否完整，计划生成PASS不替代独立判断。
+
 ## Artifact
 
 - `tmp/pipeline/qa/index.md`：每批一行 `batch | gate | round | report | final-items`。

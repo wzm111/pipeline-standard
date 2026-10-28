@@ -48,6 +48,13 @@ class RunStateTests(unittest.TestCase):
         after = {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in self.root.rglob("*") if path.is_file()}
         self.assertEqual(before, after)
 
+    def test_completed_phase_is_done_and_aborted_phase_preserves_failure_location(self):
+        completed = self.finish(RUN.start(self.root, {"stage": "qa", "activity": "testing"}))
+        self.assertEqual((completed["stage"], completed["activity"]), ("done", "execution"))
+        self.assertEqual(completed["history"][-1]["event"], "completed")
+        failed = self.finish(RUN.start(self.root, {"stage": "implementation"}), "aborted")
+        self.assertEqual(failed["stage"], "implementation")
+
     def test_start_is_unique_and_refuses_existing_active(self):
         first = RUN.start(self.root)
         marker = (self.base / ".active").read_bytes()

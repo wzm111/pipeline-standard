@@ -18,7 +18,7 @@ def _reference(root, run_id, path):
 def _read_reference(root, reference, kind):
     path = E._local(root, reference["path"])
     if hashlib.sha256(path.read_bytes()).hexdigest() != reference["sha256"]:
-        raise ValueError("delivery reference changed")
+        raise E.EvidenceError("delivery_reference_changed", "delivery reference changed")
     return E.read_report(root, reference["run_id"], reference["path"], kind=kind)["payload"]
 
 
@@ -52,14 +52,14 @@ def validated_receipt(root, reference, *, refresh_coverage=True):
     source = R.status(root, reference["run_id"])["state"]
     if (not source or source["status"] != "completed" or reference["path"] not in source["artifacts"]
             or packet["project_root"] != str(root)):
-        raise ValueError("delivery source must be a completed run in this project")
+        raise E.EvidenceError("delivery_source_unavailable", "delivery source must be a completed run in this project")
     for approval in packet["approvals"]:
         if approval["path"] not in source["artifacts"] or _read_reference(root, approval, approval["kind"]).get("gate") != "PASS":
-            raise ValueError("delivery acceptance changed or not passed")
+            raise E.EvidenceError("delivery_acceptance_changed", "delivery acceptance changed or not passed")
     if not any(a["kind"] == "qa" for a in packet["approvals"]):
-        raise ValueError("delivery requires explicit QA acceptance")
+        raise E.EvidenceError("delivery_acceptance_missing", "delivery requires explicit QA acceptance")
     if E.fingerprint(root, packet["context_scope"]) != packet["context_fingerprint"]:
-        raise ValueError("delivery contract changed")
+        raise E.EvidenceError("delivery_contract_changed", "delivery contract changed")
     if refresh_coverage:
         required = packet.get("coverage", {}).get("required")
         packet["coverage"] = _coverage(root, packet["checks"], required, packet.get("excluded_checks", []))
@@ -71,7 +71,8 @@ def seal(root, base, state):
     root = Path(root).resolve(strict=True)
     approvals, checks, seen, blocked = {}, [], set(), set()
     excluded = deepcopy(state.get("inherited_excluded_checks", []))
-    required = E.coverage_labels(state.get("inherited_required_checks"))
+    required = sorted(set(E.coverage_labels(state.get("inherited_required_checks")))
+                      | set(E.coverage_labels(state.get("planned_required_checks"))))
     for path in reversed(state["artifacts"]):
         if not isinstance(path, str) or f"/runs/{state['run_id']}/artifacts/" not in path:
             continue
@@ -84,7 +85,8 @@ def seal(root, base, state):
             if kind == "qa":
                 required = sorted(set(required) | set(E.coverage_labels(payload.get("required_checks"))))
         elif kind == "check":
-            key = json.dumps([payload.get("command"), payload.get("scope"), payload.get("intent")], sort_keys=True)
+            key = json.dumps([payload.get("command"), payload.get("scope"), payload.get("intent", "test"),
+                              payload.get("cwd", ".")], sort_keys=True)
             if key in blocked:
                 continue
             labels = E.coverage_labels(payload.get("coverage"))
