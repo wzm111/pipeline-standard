@@ -54,8 +54,12 @@ def parser():
     start.add_argument("--project", default=".")
     start.add_argument("--stage", default="execution")
     start.add_argument("--delivery-from", choices=["latest"])
+    preflight = sub.add_parser("preflight", help="inspect actual cwd and executable without starting a run or process")
+    preflight.add_argument("--project", default=".")
+    preflight.add_argument("--cwd")
+    preflight.add_argument("argv", nargs=argparse.REMAINDER)
     owned = {}
-    for name in ("update", "check", "report", "finish"):
+    for name in ("update", "check", "report", "finish", "plan", "run", "qa"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
@@ -71,11 +75,20 @@ def parser():
     check.add_argument("--timeout", type=float)
     check.add_argument("--write-path", action="append")
     check.add_argument("--impact-covered", action="store_true")
+    check.add_argument("--cwd", help="actual package cwd, relative to project; scope remains project-relative")
     check.add_argument("argv", nargs=argparse.REMAINDER)
     report = owned["report"]
     report.add_argument("--kind", required=True)
     report.add_argument("--name", required=True)
     report.add_argument("--json", required=True, dest="payload")
+    owned["plan"].add_argument("--name", required=True)
+    owned["plan"].add_argument("--json", required=True, dest="payload", help="agent-maintained checks and required_checks")
+    for action in ("run", "qa"):
+        owned[action].add_argument("--plan", required=True)
+        owned[action].add_argument("--name", required=True)
+    owned["run"].add_argument("--id", required=True, dest="check_id")
+    owned["run"].add_argument("--impact-covered", action="store_true")
+    owned["qa"].add_argument("--summary", default="")
     finish = owned["finish"]
     finish.add_argument("--outcome", choices=sorted(R.FINAL), default="completed")
     finish.add_argument("--stopped", action="store_true", help="only after host confirms all run executors stopped")
@@ -88,6 +101,10 @@ def dispatch(args):
     if args.action == "paths":
         return paths(), 0
     root = Path(args.project).resolve(strict=True)
+    if args.action == "preflight":
+        argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
+        result = C.inspect_runner(root, argv, cwd=args.cwd)
+        return result, 0 if result["available"] else 1
     if args.action == "status":
         snapshot = R.status(root, args.run_id)
         return {**_public(snapshot["state"]), "active": snapshot["active"] is not None,
@@ -105,6 +122,23 @@ def dispatch(args):
         return {**_public(state), "receipt": str(receipt), **paths()}, 0
     receipt = _receipt(root, args.receipt)
     run_id, owner = receipt["run_id"], receipt["owner_token"]
+    if args.action in {"plan", "run", "qa"}:
+        import check_plan as P
+        if args.action == "plan":
+            payload = json.loads(args.payload)
+            if not isinstance(payload, dict) or set(payload) - {"checks", "required_checks"}:
+                raise ValueError("plan accepts checks and required_checks only")
+            ref = P.save_plan(root, run_id, owner, args.name, payload.get("checks"), payload.get("required_checks"))
+            return {"run_id": run_id, "plan": ref}, 0
+        if args.action == "run":
+            result = P.run_planned(root, run_id, owner, args.plan, args.check_id, args.name,
+                                   impact_covered=args.impact_covered)
+            return result, 0 if result["exit_code"] == 0 else 1
+        R.update(root, run_id, owner, {"stage": "acceptance", "activity": "testing"})
+        ref = P.qa_from_plan(root, run_id, owner, args.plan, args.name, summary=args.summary)
+        payload = E.read_report(root, run_id, ref, kind="qa")["payload"]
+        return {"run_id": run_id, "report": ref, **{k: payload[k] for k in
+                ("gate", "required_checks", "missing_checks", "check_failures")}}, 0 if payload["gate"] == "PASS" else 1
     if args.action == "update":
         changes = {key: value for key in ("stage", "activity", "next") if (value := getattr(args, key)) is not None}
         if not changes:
@@ -114,7 +148,7 @@ def dispatch(args):
         argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
         result = C.execute_check(root, run_id, owner, args.name, argv=argv, scope=args.scope,
             coverage=args.coverage, intent=args.intent, timeout=args.timeout, write_paths=args.write_path,
-            impact_covered=args.impact_covered)
+            impact_covered=args.impact_covered, cwd=args.cwd)
         return result, 0 if result["exit_code"] == 0 else 1
     if args.action == "report":
         relative = E.write_report(root, run_id, owner, args.kind, args.name, json.loads(args.payload))

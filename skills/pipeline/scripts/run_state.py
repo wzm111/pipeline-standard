@@ -152,7 +152,7 @@ def start(project_root, initial=None):
                 delivery.adopt(project_root, base, state, delivery_from)
             except (OSError, ValueError, KeyError, TypeError) as error:
                 state = before_adoption
-                state["delivery_status"] = {"adopted": False, "reason": type(error).__name__, "detail": str(error)[:160]}
+                state["delivery_status"] = {"adopted": False, "reason": getattr(error, "reason", type(error).__name__), "detail": str(error)[:160]}
         path = _state_path(base, state["run_id"])
         if path.exists():
             raise ValueError("run_id collision")
@@ -212,11 +212,13 @@ def finish(project_root, run_id, owner_token, outcome, *, executors_stopped=Fals
                 delivery.seal(project_root, base, state)
             except (OSError, ValueError, KeyError, TypeError) as error:
                 delivery.block_latest(project_root, run_id, "latest_delivery_unaccepted")
-                state["delivery_status"] = {"sealed": False, "reason": type(error).__name__, "detail": str(error)[:160]}
+                state["delivery_status"] = {"sealed": False, "reason": getattr(error, "reason", type(error).__name__), "detail": str(error)[:160]}
         else:
             import delivery
             delivery.block_latest(project_root, run_id, outcome)
         state["status"] = outcome
+        if outcome == "completed":
+            state.update(stage="done", activity="execution")
         state["updated_at"] = _now()
         state["history"].append(_event(state, outcome, state["updated_at"], stop_evidence=stop_evidence))
         _atomic(path, state)

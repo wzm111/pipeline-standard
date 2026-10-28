@@ -10,6 +10,13 @@ import run_state
 from input_fingerprint import fingerprint as _input_fingerprint
 
 
+class EvidenceError(ValueError):
+    """Stable diagnostic code, preserving ValueError compatibility."""
+    def __init__(self, reason, message):
+        self.reason = reason
+        super().__init__(message)
+
+
 def _local(root, relative):
     if not isinstance(relative, str) or not relative or Path(relative).is_absolute() or ".." in Path(relative).parts:
         raise ValueError("expected project-relative path without ..")
@@ -150,6 +157,8 @@ def reusable_check(project_root, run_id, relative, *, command, environment, impa
             return {"reusable": False, "reason": "unregistered_evidence"}
         payload = read_report(project_root, run_id, relative, kind="check")["payload"]
         validate_lineage(project_root, payload)
+        if not _local(Path(project_root).resolve(strict=True), payload.get("cwd", ".")).is_dir():
+            return {"reusable": False, "reason": "working_directory_unavailable"}
         if coverage_labels(payload.get("coverage")) != coverage:
             return {"reusable": False, "reason": "coverage_changed"}
         if payload.get("inputs_stable", True) is not True:
@@ -164,6 +173,8 @@ def reusable_check(project_root, run_id, relative, *, command, environment, impa
         log = _local(root, payload["log_path"])
         if hashlib.sha256(log.read_bytes()).hexdigest() != payload["log_sha256"]:
             return {"reusable": False, "reason": "log_changed"}
+    except EvidenceError as error:
+        return {"reusable": False, "reason": error.reason}
     except (OSError, ValueError, KeyError, TypeError):
         return {"reusable": False, "reason": "unconfirmed_evidence"}
     return {"reusable": True, "reason": "same_run_inputs_environment_and_log"}
@@ -180,15 +191,15 @@ def validate_lineage(project_root, payload, seen=None):
     key = (check["run_id"], check["path"])
     seen = set() if seen is None else set(seen)
     if key in seen or len(seen) >= 16:
-        raise ValueError("cyclic or excessive delivery lineage")
+        raise EvidenceError("delivery_lineage_invalid", "cyclic or excessive delivery lineage")
     seen.add(key)
     packet = delivery.validated_receipt(root, receipt, refresh_coverage=False)
     if check not in packet["checks"] or check["run_id"] != receipt["run_id"]:
-        raise ValueError("check not included in predecessor acceptance")
+        raise EvidenceError("delivery_check_not_accepted", "check not included in predecessor acceptance")
     previous = delivery._read_reference(root, check, "check")
     if ({k: v for k, v in payload.items() if k != "inherited_from"}
             != {k: v for k, v in previous.items() if k != "inherited_from"}):
-        raise ValueError("inherited result changed")
+        raise EvidenceError("inherited_result_changed", "inherited result changed")
     validate_lineage(root, previous, seen)
 
 

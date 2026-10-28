@@ -71,6 +71,16 @@ class DeliveryTests(unittest.TestCase):
         self.assertTrue(self.execute(state, "second")["reused"])
         self.assertEqual((self.root / "count").read_text(), "1")
 
+    def test_contract_change_has_specific_reuse_reason_without_weakening_validation(self):
+        self.accepted_source()
+        target = self.start(delivery_from="latest")
+        (self.root / "PIPELINE.md").write_text("changed authorization and acceptance contract")
+        result = self.execute(target, "after-contract-change")
+        self.assertFalse(result["reused"])
+        self.assertEqual(result["reuse_decision"]["reason"], "delivery_contract_changed")
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual((self.root / "count").read_text(), "2")
+
     def test_new_unrelated_work_does_not_adopt_latest_delivery(self):
         self.accepted_source()
         target = self.start()

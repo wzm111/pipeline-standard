@@ -76,6 +76,36 @@ class PipelineCliTests(unittest.TestCase):
         self.assertEqual((self.root / "counter").read_text(), "1")
         self.assertNotIn("owner_token", json.dumps(second))
 
+    def test_plan_drives_actual_checks_and_qa_from_one_coverage_definition(self):
+        self.start()
+        plan = {"checks": {"unit": {"argv": [sys.executable, "-c", "print('fixture PASS')"],
+                                    "scope": ["source.py"], "coverage": ["unit"]}}}
+        ref = self.cli("plan", "--receipt", self.receipt, "--name", "acceptance", "--json", json.dumps(plan))["plan"]
+        missing = self.cli("qa", "--receipt", self.receipt, "--plan", ref, "--name", "before", expected=1)
+        self.assertEqual(missing["gate"], "CONCERNS")
+        self.assertEqual(missing["missing_checks"], ["unit"])
+        executed = self.cli("run", "--receipt", self.receipt, "--plan", ref, "--id", "unit",
+                            "--name", "unit-r1", "--impact-covered")
+        self.assertEqual(executed["exit_code"], 0)
+        repeated = self.cli("run", "--receipt", self.receipt, "--plan", ref, "--id", "unit",
+                            "--name", "unit-r2", "--impact-covered")
+        self.assertTrue(repeated["reused"])
+        accepted = self.cli("qa", "--receipt", self.receipt, "--plan", ref, "--name", "after")
+        self.assertEqual(accepted["gate"], "PASS")
+        self.assertEqual(accepted["required_checks"], ["unit"])
+
+    def test_preflight_needs_no_run_and_check_uses_real_package_cwd(self):
+        (self.root / "package").mkdir()
+        result = self.cli("preflight", "--cwd", "package", "--", sys.executable)
+        self.assertEqual(result["cwd"], "package")
+        self.assertTrue(result["available"])
+        self.assertFalse((self.root / "tmp/pipeline/.active").exists())
+        self.start()
+        result = self.cli("check", "--receipt", self.receipt, "--name", "nested", "--scope", "source.py",
+                          "--cwd", "package", "--", sys.executable, "-c", "open('proof','w').write('observed')")
+        self.assertEqual(result["exit_code"], 0)
+        self.assertTrue((self.root / "package/proof").exists())
+
     def test_changed_source_reruns_and_coverage_is_not_silently_relabelled(self):
         self.start()
         self.check("first")
