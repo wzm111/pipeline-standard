@@ -72,6 +72,43 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(C.check_summary(self.root)["reused"], 1)
         self.assertEqual(C.check_summary(self.root)["executed"], 1)
 
+    def test_cache_decision_explains_reexecution_without_dumping_environment(self):
+        first = self.execute("baseline")
+        self.assertEqual(first["reuse_decision"]["reason"], "impact_not_confirmed")
+        hit = self.execute("hit", impact_covered=True)
+        self.assertTrue(hit["reused"])
+        self.assertEqual(hit["reuse_decision"]["source"], first["report"])
+        (self.root / "input.txt").write_text("new input")
+        changed = self.execute("input-change", impact_covered=True)
+        self.assertEqual(changed["reuse_decision"]["reason"], "inputs_changed")
+        private_context = {"external_revision": "fixture-private-environment-value"}
+        env = self.execute("env-change", impact_covered=True, environment=private_context)
+        self.assertEqual(env["reuse_decision"]["reason"], "command_or_environment_changed")
+        self.assertNotIn(private_context["external_revision"], json.dumps(env["reuse_decision"]))
+        (self.root / self.payload(env)["log_path"]).write_text("changed log")
+        log = self.execute("log-change", impact_covered=True, environment=private_context)
+        self.assertEqual(log["reuse_decision"]["reason"], "log_changed")
+        self.assertEqual(self.payload(log)["reuse_decision"], log["reuse_decision"])
+        labels = self.execute("labels-change", impact_covered=True, environment=private_context, coverage=["unit"])
+        self.assertEqual(labels["reuse_decision"]["reason"], "coverage_changed")
+        other = self.execute("other-command", "print('a different check')", impact_covered=True)
+        self.assertEqual(other["reuse_decision"]["reason"], "no_matching_check")
+
+    def test_latest_failure_in_another_environment_blocks_older_success(self):
+        source = "import os; raise SystemExit(int(os.environ['FIXTURE_EXIT']))"
+        with patch.dict(os.environ, {"FIXTURE_EXIT": "0"}):
+            first = self.execute("env-pass", source, impact_covered=True)
+        with patch.dict(os.environ, {"FIXTURE_EXIT": "1"}):
+            failed = self.execute("env-fail", source, impact_covered=True)
+            self.assertFalse(failed["reused"])
+            self.assertEqual(failed["exit_code"], 1)
+        with patch.dict(os.environ, {"FIXTURE_EXIT": "0"}):
+            retry = self.execute("env-retry", source, impact_covered=True)
+        self.assertEqual(first["exit_code"], 0)
+        self.assertFalse(retry["reused"])
+        self.assertEqual(retry["exit_code"], 0)
+        self.assertEqual(retry["reuse_decision"], {"source": failed["report"], "reason": "check_not_passed"})
+
     def test_reasoned_failure_diagnosis_preserves_raw_result_and_exit(self):
         failed = self.execute("failed", "raise SystemExit(1)")
         C.review_check(self.root, self.state["run_id"], self.state["owner_token"], "diagnosis",
