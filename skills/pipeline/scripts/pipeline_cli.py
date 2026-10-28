@@ -4,6 +4,11 @@ import json
 from pathlib import Path
 import sys
 
+# Importing a workflow command must not mutate its own declared source scope.
+# In particular, finish may import delivery for the first time after QA.
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
+
 import run_checks as C
 import run_evidence as E
 import run_state as R

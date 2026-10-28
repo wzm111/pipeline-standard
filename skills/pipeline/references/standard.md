@@ -28,6 +28,8 @@ python3 <runner> finish --project <root> --receipt <receipt> --direct --stopped 
 
 scope包含命令真实依赖的源码、用例、工具/配置与依赖身份；例中路径不是所有项目的固定范围。name区分批次/轮次，coverage使用不随重试变化的语义类别；局部用例不能冒充全量门禁。impact-covered仅在影响面确已覆盖时传入。report的PASS由实际验收决定，CLI不会自动将命令成功转为业务通过。finish不代替终止执行者；实际委派时省略direct并先关闭角色派发。update可调整stage/activity，--help按需查参数；高级恢复、浏览器等继续用既有接口。
 
+CLI不生成Python字节码缓存，避免自身导入改动被计入源码输入。直接通过Python API操作且脚本目录也在检查scope内时，使用`python3 -B`或`PYTHONDONTWRITEBYTECODE=1`运行，避免无关缓存更新使证据失效；这不允许忽略真实生成产物或源码变化。
+
 ## 按需委派：计划与闸口
 
 1. 初始化 state.md(status/stage/batches/pending/next)，创建 planner，传 `context/base.md` 与 `context/planner.md`。
