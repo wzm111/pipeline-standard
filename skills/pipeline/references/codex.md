@@ -4,7 +4,7 @@
 
 ## 触发和角色
 
-fast/standard 默认当前 agent 直接执行，不创建角色或交接文件。下表及角色生命周期规则仅适用于实际委派；首次委派才建立 base/run/角色差量。thorough 保留完整角色链。
+简单fast/standard任务由当前agent直接执行，不创建角色或交接文件；复杂standard任务按standard.md自动选取并实际派发必要角色，thorough保留完整角色链。不能把风险不高等同于任务简单。下表及角色生命周期规则用于实际委派；首次委派才建立最小base/run/角色差量。
 
 使用 `$pipeline <任务描述>` 触发。不要创建用户侧栏 task；流水线角色是当前任务的子agent。直通路径用pipeline_cli.py paths取得实际developer规则；委派角色仍以当前SKILL.md真实路径（跟随软链接）的`<skill-dir>/../../agents`窄范围定位。角色文件按真实存在的pipeline-*.md绝对路径传递，不猜相对项目根的agents/...或不存在的别名。
 
@@ -20,7 +20,7 @@ fast/standard 默认当前 agent 直接执行，不创建角色或交接文件�
 
 有Python时base优先按[上下文缓存](context.md)传不可变reference：已加载的角色只收差量，新接收者显式load一次；未变来源不反复读取或重写摘要。旧base.md路径作为兼容输入，不再额外复制相同正文。
 
-只有确定需要委派时才创建对应子 agent。打回、复测、后续批次使用 follow-up 保留上下文；standard 按收益选择角色，thorough 创建完整角色集。不要为了摘要补建角色，不转发完整对话。调度员负责轮次、闸口、CONCERNS 和用户进度。
+复杂任务自动创建所需子agent，简单任务不为模型配置或摘要创建角色。打回、复测、后续批次使用follow-up保留上下文；standard选择最小必要角色集，thorough创建完整角色集。不转发完整对话。调度员负责轮次、闸口、CONCERNS和用户进度。
 
 实际工具调用点按[角色派发边界](role-dispatch.md)记录：begin后直接调用collaboration.spawn_agent/followup_task，宿主接受才accepted，收到真实结束结果并确认停止才complete。失败尝试和实际created/reused分开；未反馈的实际model/effort保持unknown。调用计时脚本不代替实际工具调用。当前会话直做只在收口confirm_direct，不造agent事件。
 
