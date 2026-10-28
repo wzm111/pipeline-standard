@@ -59,7 +59,7 @@ if [ "$TARGET" = "--all" ] || [ "$TARGET" = "--claude" ]; then install_claude; f
 if [ "$TARGET" = "--all" ] || [ "$TARGET" = "--codex" ]; then install_codex; fi
 
 cat <<'NOTE'
-完成。请新开会话以加载 skill：
+完成。可在新会话或已有会话中调用 skill：
 - Claude Code：/pipeline <任务描述>
 - Codex：$pipeline <任务描述>
 
@@ -68,5 +68,7 @@ cat <<'NOTE'
 新安装先继承当前会话模型，说“配置模型”即可选择不同角色型号。
 也可以说：帮我初始化、配置模型、查看设置、继续上次。
 Claude Code 用 /pipeline，Codex 用 $pipeline。
+已有会话请让智能体重新读取本机最新版 SKILL.md 及本次所需引用，沿用当前任务和有效证据。
+若宿主仍未发现更新，再重启应用或新开会话。
 Claude hook 与 Codex 写前校验的能力差异见 README。
 NOTE
