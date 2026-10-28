@@ -27,6 +27,8 @@ finish直接返回coverage_missing及coverage_issues，凭证保留excluded_chec
 
 继承失败会返回delivery_status.adopted=false；先看拒绝原因和影响面，再补缺口，不静默改成PASS，也不不加区分地重跑整套。最新阶段未通过、缺交付证据、暂停或中止时，latest明确阻塞，不默认回退旧PASS。显式选择旧引用仍需完整校验及对应用户意图。旧格式不能只补上当前run_id当作合格历史证据。
 
+PIPELINE.md保存稳定的权限、范围、测试与上线规则；本次版本号、进度、发布说明和验收结果写入run报告或已有发布说明，不为每次收尾改写契约。真实契约变化仍严格失效，不忽略文件片段来强行命中。reuse_decision/承接状态区分delivery_contract_changed、delivery_reference_changed、delivery_acceptance_changed、delivery_lineage_invalid等原因；按实际受影响范围补验，不将它们统一解释为源码测试失败。
+
 ## 只改版本号时
 
 源码测试、依赖变化和发布元数据检查分别声明范围。明确不依赖版本字段的源码检查，可在environment中记录`input_fingerprint.dependency_identity(root, ["package.json", "package-lock.json"])`，scope仍覆盖源码、测试与配置。该身份只忽略根版本号三处，依赖、scripts、engines、锁文件和间接依赖变化仍会失效。
@@ -40,6 +42,16 @@ finish直接返回coverage_missing及coverage_issues，凭证保留excluded_chec
 - 相同脚本/依赖/测试输入已通过的发布逻辑单测继续复用；本次候选版本和构建身份校验仍执行。只有依赖或实现变化影响到检查时才复测对应范围。
 - 上线后只做版本/资源及本次改动的关键路径冒烟。需要验证升级兼容时复用既有合成样本与浏览器入口，先确认当前页面前置条件；不要重新编写整套脚本来重复开发期覆盖。
 - 必须保留备份、实际产物完整性、权限边界和必要线上验收。提交/继承通过不等于发布获授权；同一需求的用户逐项提交要求不改变。
+
+### 源码与目标平台产物清单
+
+项目需要文件级传输/完整性核验时，可用`scripts/release_artifacts.py`的纯本地POSIX工具；既有可靠部署适配器无需重写。`capture(root, relative_directory, layer="source"|"artifact", identity={"build_id": ..., "platform": ...})`生成含文件hash、可执行位和目录的完整清单，`compare(expected, observed)`返回added/missing/changed/complete；`loads_manifest(text)`严格读取JSON。拒绝越界、软链接、扫描期间输入变化及格式歧义，不调用网络或发布命令。
+
+- source对：传输前的源码包与目标机实际收到的同一源码包比较，保留来源build_id/platform身份。
+- artifact对：在真正构建目标（如Linux）生成最终产物清单，与激活前/后实际候选产物比较，身份为实际构建ID和目标平台。
+- 两层分开保存，不把macOS本地生成的文件列表直接当Linux最终产物清单；源码一致不代表目标产物完整。layer或identity不同会拒绝比较，不能靠忽略差异放行。
+
+每份observed须在实际被核验目录采集。它校验本地传入的两份清单，不证明远端曾执行、清单来源可信或线上文件已核验；远端采集与传回使用项目已有授权入口，保留实际命令/日志。build_id/platform由调用者核对，不能仅复制字段冒充真实身份。平台缺安全目录描述符时明确拒绝，保留已有部署校验。
 
 ### 发布控制入口（已有候选/激活命令时）
 
