@@ -22,25 +22,28 @@ def _read_reference(root, reference, kind):
     return E.read_report(root, reference["run_id"], reference["path"], kind=kind)["payload"]
 
 
-def _coverage(root, checks, required):
+def _coverage(root, checks, required, excluded_checks=()):
     """Current valid categories and their actual immutable report references."""
-    sources = {}
+    sources, unavailable = {}, deepcopy(list(excluded_checks))
     for check in checks:
+        labels = []
         try:
             payload = _read_reference(root, check, "check")
             labels = E.coverage_labels(payload.get("coverage"))
-            if not E.reusable_check(root, check["run_id"], check["path"], command=payload["command"],
-                                    environment=payload["environment"], impact_covered=True, coverage=labels)["reusable"]:
+            verdict = E.reusable_check(root, check["run_id"], check["path"], command=payload["command"],
+                                       environment=payload["environment"], impact_covered=True, coverage=labels)
+            if not verdict["reusable"]:
+                unavailable.append({"reference": deepcopy(check), "coverage": labels, "reason": verdict["reason"]})
                 continue
             for label in labels:
                 sources.setdefault(label, []).append(deepcopy(check))
         except (OSError, ValueError, KeyError, TypeError):
-            continue
+            unavailable.append({"reference": deepcopy(check), "coverage": labels, "reason": "unconfirmed_evidence"})
     required = E.coverage_labels(required) if required is not None else None
     covered = sorted(sources)
     missing = sorted(set(required) - set(covered)) if required is not None else None
     return {"required": required, "covered": covered, "missing": missing,
-            "complete": not missing if required is not None else None, "sources": sources}
+            "complete": not missing if required is not None else None, "sources": sources, "unavailable": unavailable}
 
 
 def validated_receipt(root, reference, *, refresh_coverage=True):
@@ -59,7 +62,7 @@ def validated_receipt(root, reference, *, refresh_coverage=True):
         raise ValueError("delivery contract changed")
     if refresh_coverage:
         required = packet.get("coverage", {}).get("required")
-        packet["coverage"] = _coverage(root, packet["checks"], required)
+        packet["coverage"] = _coverage(root, packet["checks"], required, packet.get("excluded_checks", []))
     return packet
 
 
@@ -67,6 +70,7 @@ def seal(root, base, state):
     """Called by finish under its existing ownership lock; fail closed on gaps."""
     root = Path(root).resolve(strict=True)
     approvals, checks, seen, blocked = {}, [], set(), set()
+    excluded = deepcopy(state.get("inherited_excluded_checks", []))
     required = E.coverage_labels(state.get("inherited_required_checks"))
     for path in reversed(state["artifacts"]):
         if not isinstance(path, str) or f"/runs/{state['run_id']}/artifacts/" not in path:
@@ -88,13 +92,16 @@ def seal(root, base, state):
             if labeled_key in seen:
                 continue
             seen.add(labeled_key)
-            if E.reusable_check(root, state["run_id"], path, command=payload["command"],
-                                environment=payload["environment"], impact_covered=True, coverage=labels)["reusable"]:
+            verdict = E.reusable_check(root, state["run_id"], path, command=payload["command"],
+                                       environment=payload["environment"], impact_covered=True, coverage=labels)
+            if verdict["reusable"]:
                 checks.append(_reference(root, state["run_id"], path))
             else:
                 # A later failed/invalid observation blocks older labels too;
                 # relabeling must never revive a superseded PASS.
                 blocked.add(key)
+                excluded.append({"reference": _reference(root, state["run_id"], path),
+                                 "coverage": labels, "reason": verdict["reason"]})
     if "qa" not in approvals or not checks:
         raise ValueError("no accepted, reusable check evidence to hand off")
     context = ["PIPELINE.md"] if (root / "PIPELINE.md").is_file() else []
@@ -109,7 +116,7 @@ def seal(root, base, state):
     assets = list(assets_by_path.values())
     packet = {"project_root": str(root), "approvals": list(approvals.values()), "checks": checks,
               "context_scope": context, "context_fingerprint": E.fingerprint(root, context), "assets": assets,
-              "coverage": _coverage(root, checks, required or None)}
+              "excluded_checks": excluded, "coverage": _coverage(root, checks, required or None, excluded)}
     digest = hashlib.sha256(json.dumps(packet, sort_keys=True).encode()).hexdigest()[:16]
     relative = f"tmp/pipeline/runs/{state['run_id']}/artifacts/delivery/handoff-{digest}.json"
     path = E._local(root, relative)
@@ -165,6 +172,7 @@ def adopt(root, base, state, reference):
                                 "skipped_checks": skipped}
     state["inherited_assets"] = deepcopy(packet["assets"])
     state["inherited_required_checks"] = deepcopy(packet.get("coverage", {}).get("required"))
+    state["inherited_excluded_checks"] = deepcopy(packet.get("excluded_checks", []))
 
 
 def block_latest(root, run_id, reason):

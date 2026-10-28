@@ -19,6 +19,8 @@
 
 凭证还带可继承证据覆盖矩阵：QA required_checks与各检查coverage逐项对应到原始报告。complete=true才表示已声明的类别齐全；缺项为false，旧报告未声明为unknown。它衡量可核验复用证据，不把缺少缓存记录直接判为业务失败。单测、E2E、构建等功能证据必须各有实际引用，提交metadata检查不能冒充完整功能验收。部分证据有效时仍可承接，保留原要求，仅补失效或缺失类别。
 
+finish直接返回coverage_missing及coverage_issues，凭证保留excluded_checks和coverage.unavailable中的失效原因，避免为解释缺项反复全读历史报告。封存时排除的旧检查只作诊断，不在后续阶段因文件恢复而自动重新纳入；有效检查仍逐次校验。QA PASS与可复用矩阵不完整可同时存在，按inputs_changed、log_changed等实际原因处理；源码等价检查不会自动重贴旧unit/lint标签，也不能补足已失效的现场预检。
+
 智能体可在原run更新handoff_files，列出已验证的浏览器脚本、合成样本或候选构建目录；finish封存其路径与指纹。后续state.delivery_status.assets逐项标unchanged，优先复用有效脚本和样本，失效项单独处理，不丢弃其他有效检查，也不重新猜DOM入口。目录存在不代表可上线，构建版本/提交身份仍须符合本次目标。
 
 浏览器验收后按[browser-handoff.md](browser-handoff.md)记录脚本、样本和实际页面前置条件，接口自动将这些文件加入handoff_files。后续使用先做短探测并preflight；页面或样本不匹配时直接定位差异，不在错误入口上反复等控件。recipe可用只表示复用验收方法，不能替代本次必要的线上验收结果。

@@ -120,8 +120,14 @@ def dispatch(args):
     state = R.finish(root, run_id, owner, args.outcome,
                      executors_stopped=args.stopped, stop_evidence=args.stop_evidence)
     delivery = state.get("delivery_status", {})
+    coverage = delivery.get("coverage", {})
+    missing = coverage.get("missing")
+    issues = {label: sorted({item["reason"] for item in coverage.get("unavailable", [])
+                            if label in item.get("coverage", [])}) or ["no_valid_evidence"]
+              for label in missing or []}
     return {**_public(state), "delivery_sealed": delivery.get("sealed", False),
-            "coverage_complete": delivery.get("coverage", {}).get("complete")}, 0
+            "coverage_complete": coverage.get("complete"), "coverage_missing": missing,
+            "coverage_issues": issues}, 0
 
 
 def main(argv=None):
