@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -44,6 +45,16 @@ class PipelineCliTests(unittest.TestCase):
         self.assertEqual(Path(p["developer"]).name, "pipeline-developer.md")
         self.assertEqual(self.cli("status")["active"], False)
         self.assertEqual(before, sorted(self.root.iterdir()))
+
+    def test_cli_without_environment_flag_does_not_generate_source_caches(self):
+        scripts = self.root / "isolated-skill/scripts"
+        shutil.copytree(SCRIPTS, scripts, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        environment = {k: v for k, v in os.environ.items() if k != "PYTHONDONTWRITEBYTECODE"}
+        result = subprocess.run([sys.executable, str(scripts / "pipeline_cli.py"), "paths"],
+                                cwd=self.root, env=environment, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(list(scripts.rglob("*.pyc")))
+        self.assertFalse(list(scripts.rglob("__pycache__")))
 
     def test_start_records_early_stage_without_printing_credentials(self):
         s = self.start()
