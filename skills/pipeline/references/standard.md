@@ -6,12 +6,27 @@
 
 ## 默认直接执行（优先于下方委派流程）
 
-1. 当前 agent 读取 developer 规则，初始化最小 state.md，在会话内列简短计划与验收项并直接实现。无需 planner/dev/qa 子 agent、context、plan 或 retro 文件；角色文件的交接路径要求只在委派时适用。
+1. 契约和锁确认后尽早初始化本run，再读取paths给出的developer规则，在会话内列简短计划与验收项并直接实现。无需planner/dev/qa子agent、context、plan或retro文件；角色文件的交接路径要求只在委派时适用。使用下方CLI即可，不读run_state/run_checks等内部源码猜参数或角色路径。
 2. 无实质歧义且在用户授权内时发简报后继续。契约明确要求每次人工确认时遵守；新增依赖、禁区、公开接口/数据、权限/支付/安全、范围不确定时保留闸口 1。已批准的相同范围不重复确认。
 3. 默认一个交付批次，不按文件数、任务数或预计时长机械拆批。实际运行核心验收与契约要求的终验命令；UI 行为需运行态验证。相同代码、配置、依赖、环境下的成功检查只跑一次，记录命令、范围、时间、退出码和输出位置。无法确认结果有效性时重跑；失败后只复测失败项与影响面，最多 3 轮。
 4. 收口写qa/final（摘要、验收证据、未验证项、人工待办），不把未执行检查标通过。普通提交由当前调度员复核契约④后执行，不为提交或摘要单独创建角色；需要独立部署判断时才使用/续用releaser。state置done，追加metrics，按归属finish。
 5. 只有用户/契约要求独立检查或实际风险需要时创建 reviewer，按 guardian/tester 规则检查差量、复用有效证据并补测缺口；文件数不是独立评审触发器。需要复杂规划或独立批次并行时才进入下方委派流程；跨系统/高风险升级 thorough。
 6. 每次增加角色、拆批、重跑检查前明确具体收益，无收益就省略。区分实现/验证耗时与交接/报告/等待开销；不承诺固定加速倍数。用户预算到达 80%、CONCERNS 或异常时读取 operations.md，报告完成项、剩余检查和可交付范围。
+
+### 直通调用（由智能体执行）
+
+runner为本skill实际目录的`scripts/pipeline_cli.py`；`paths`返回真实存在的skill、runner和developer路径，不猜agents/developer.md或run_dispatch.py。常用命令如下，私有receipt由start返回并由当前调度上下文保存，用户无需配置：
+
+```sh
+python3 <runner> paths
+python3 <runner> status --project <root>
+python3 <runner> start --project <root> --stage review
+python3 <runner> check --project <root> --receipt <receipt> --name feature-r1 --scope src e2e package.json package-lock.json --coverage e2e_feature --impact-covered --timeout 120 -- <实际检查命令及参数>
+python3 <runner> report --project <root> --receipt <receipt> --kind qa --name final --json '{"gate":"PASS","required_checks":["e2e_feature"]}'
+python3 <runner> finish --project <root> --receipt <receipt> --direct --stopped --stop-evidence '<宿主确认本run执行者均停止的实际证据>'
+```
+
+scope包含命令真实依赖的源码、用例、工具/配置与依赖身份；例中路径不是所有项目的固定范围。name区分批次/轮次，coverage使用不随重试变化的语义类别；局部用例不能冒充全量门禁。impact-covered仅在影响面确已覆盖时传入。report的PASS由实际验收决定，CLI不会自动将命令成功转为业务通过。finish不代替终止执行者；实际委派时省略direct并先关闭角色派发。update可调整stage/activity，--help按需查参数；高级恢复、浏览器等继续用既有接口。
 
 ## 按需委派：计划与闸口
 

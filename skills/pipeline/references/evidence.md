@@ -43,6 +43,8 @@ environment补充本次实际使用的运行时、工具版本和必要外部状
 
 coverage标明该命令实际覆盖的验收类别（如unit/e2e/build/browser/metadata），QA required_checks来自本需求及契约。交付凭证逐项列required/covered/missing及实际来源；metadata检查不能补足unit，未声明的旧证据完整性为unknown。缺项只补对应检查，不丢弃其他有效证据；后续提交阶段不能清掉继承的原验收要求。标签变化不会直接重贴旧PASS，仍需实际匹配的证据。
 
+name是执行轮次，coverage是稳定的验收含义；不能把a-e2e-r2、a-browser-final之类每次变化的执行名直接复制为coverage。相同局部检查可用稳定e2e_service_context类别，最后全量e2e门禁使用独立类别；不能把局部PASS改标签冒充全量。直通可用pipeline_cli.py check/report，沿用同一验证引擎，不额外读取本模块源码。
+
 ## 失败分类与角色开销
 
 intent按实际用途选择test/search/locate/reproduce/check。入口记录原始退出码和result_class，区分成功、搜索无匹配、定位失败、故障复现非零、测试失败、一般命令失败、工具不可用、超时和中断。test_failure表示测试命令非零，不自动判定业务回归或QA FAIL。
