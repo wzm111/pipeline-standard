@@ -138,6 +138,7 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
     command = shlex.join(argv)
     if owner_token in command:
         raise ValueError("owner token cannot be passed to a command")
+    decision = {"reason": "impact_not_confirmed" if impact_covered is not True else "no_matching_check"}
     if impact_covered is True and reuse_from is None:
         owned = R.status(root, run_id)["state"]
         R._owned(owned, run_id, owner_token)
@@ -148,24 +149,33 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
             try:
                 proof = E.read_report(root, run_id, candidate, kind="check")["payload"]
                 if (proof.get("command") == command and proof.get("scope") == scope
-                        and proof.get("intent") == intent and proof.get("environment") == env):
+                        and proof.get("intent") == intent):
+                    # Select the latest observation before validating its environment;
+                    # a newer failure must not revive an older PASS in another env.
                     reuse_from = candidate
                     break
             except (OSError, ValueError, KeyError, TypeError):
                 continue
     if reuse_from and impact_covered is True:
+        decision = {"source": reuse_from, "reason": "unconfirmed_evidence"}
         try:
             old = E.read_report(root, run_id, reuse_from, kind="check")["payload"]
-            reusable = (env["executable_sha256"] != "unavailable" and
-                        old.get("scope") == scope and old.get("intent") == intent and
-                        E.reusable_check(root, run_id, reuse_from, command=command, environment=env,
-                                         impact_covered=True, coverage=coverage)["reusable"])
+            if env["executable_sha256"] == "unavailable":
+                verdict = {"reusable": False, "reason": "executable_unconfirmed"}
+            elif old.get("scope") != scope or old.get("intent") != intent:
+                verdict = {"reusable": False, "reason": "scope_or_intent_changed"}
+            else:
+                verdict = E.reusable_check(root, run_id, reuse_from, command=command, environment=env,
+                                           impact_covered=True, coverage=coverage)
+            decision["reason"] = verdict["reason"]
+            reusable = verdict["reusable"]
         except (OSError, ValueError, KeyError, TypeError):
             reusable = False
         if reusable:
-            path = E.write_report(root, run_id, owner_token, "check_reuse", name, {"source": reuse_from, "coverage": coverage})
+            path = E.write_report(root, run_id, owner_token, "check_reuse", name,
+                                  {"source": reuse_from, "coverage": coverage, "reuse_decision": decision})
             return {"report": reuse_from, "reuse_report": path, "reused": True,
-                    "exit_code": 0, "result_class": "success", "seconds": 0.0}
+                    "exit_code": 0, "result_class": "success", "seconds": 0.0, "reuse_decision": decision}
     _claim(root, run_id, owner_token, name, write_paths, testing=intent not in {"search", "locate"})
     process, interrupted = None, None
     try:
@@ -204,12 +214,13 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
                               {"command": command, "argv": argv, "intent": intent, "result_class": result_class,
                                "scope": scope, "fingerprint": before, "environment": env, "coverage": coverage,
                                "inputs_stable": stable, "exit_code": exit_code, "seconds": seconds,
+                               "reuse_decision": decision,
                                "started_at": started_at, "finished_at": finished_at, "log_path": relative,
                                "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()})
         if interrupted is not None:
             raise interrupted
         return {"report": path, "reused": False, "exit_code": exit_code, "result_class": result_class,
-                "seconds": seconds, "inputs_stable": stable}
+                "seconds": seconds, "inputs_stable": stable, "reuse_decision": decision}
     finally:
         if process is not None and process.poll() is None:
             _stop(process)
