@@ -1,5 +1,6 @@
 """Synthetic page observations test handoff logic, not live browser acceptance."""
 from pathlib import Path
+from copy import deepcopy
 import sys
 import tempfile
 import unittest
@@ -115,6 +116,41 @@ class BrowserHandoffTests(unittest.TestCase):
         after = {p:p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
         self.assertEqual(before, after)
         self.assertTrue(all(b"ephemeral-secret" not in data for data in after.values()))
+
+
+class FirstProbeTests(unittest.TestCase):
+    def setUp(self):
+        self.conditions = {"origin":"http://127.0.0.1:5173", "path":"/review", "markers":["target-visible"]}
+        self.page = {"url":"http://127.0.0.1:5173/review", "markers":{"target-visible":True}}
+
+    def test_first_time_probe_needs_no_recipe_or_run_and_cannot_produce_acceptance(self):
+        result = B.probe(self.conditions, self.page)
+        self.assertTrue(result["ready"])
+        self.assertEqual(result["acceptance"], "not_run")
+        self.assertNotIn("script", result)
+        self.assertNotIn("report", result)
+        self.assertEqual(result["probe_timeout_ms"], 1500)
+
+    def test_missing_or_unknown_target_stops_before_any_click_is_proposed(self):
+        for markers in ({}, {"target-visible":False}, {"target-visible":None}):
+            result = B.probe(self.conditions, {**self.page, "markers":markers})
+            self.assertFalse(result["ready"])
+            self.assertIn("required_marker_missing_or_unknown", result["reasons"])
+        self.assertFalse(B.probe(self.conditions, {**self.page, "url":"http://127.0.0.1:5173/wrong"})["ready"])
+
+    def test_bad_conditions_and_observations_are_not_treated_as_ready(self):
+        for conditions in (None, {**self.conditions,"origin":17}, {**self.conditions,"markers":[]}):
+            self.assertEqual(B.probe(conditions,self.page)["reasons"],["page_conditions_invalid"])
+        self.assertEqual(B.probe(self.conditions,{})["reasons"],["page_observation_missing"])
+        self.assertEqual(B.probe(self.conditions,{"url":"https://[invalid"})["reasons"],["page_observation_invalid"])
+
+    def test_probe_does_not_mutate_inputs_or_return_private_url_query(self):
+        page = {**self.page,"url":self.page["url"]+"?session=ephemeral-secret"}
+        before = deepcopy((self.conditions,page))
+        result = B.probe(self.conditions,page)
+        self.assertTrue(result["ready"])
+        self.assertEqual(before,(self.conditions,page))
+        self.assertNotIn("ephemeral-secret",str(result))
 
 
 if __name__ == "__main__":

@@ -14,7 +14,10 @@ import run_state as R
 def _conditions(value):
     if not isinstance(value, dict) or set(value) - {"origin", "path", "markers", "version"}:
         raise ValueError("explicit browser conditions required")
-    origin = urlsplit(value.get("origin", ""))
+    origin_value = value.get("origin", "")
+    if not isinstance(origin_value, str):
+        raise ValueError("origin must be a string")
+    origin = urlsplit(origin_value)
     if (origin.scheme not in {"http", "https"} or not origin.netloc or origin.username or origin.password
             or origin.path or origin.query or origin.fragment):
         raise ValueError("origin must omit path, credentials and query")
@@ -97,6 +100,24 @@ def preflight(project_root, run_id, reference, snapshot):
     except (OSError, ValueError, KeyError, TypeError):
         result["reasons"] = ["recipe_evidence_invalid"]
         return result
+    result = probe(expected, snapshot)
+    if result["ready"]:
+        result.update(script=packet["script"], fixtures=deepcopy(packet["fixtures"]))
+    return result
+
+
+def probe(preconditions, snapshot):
+    """Pure readiness check for first-time tests too; never certifies a recipe.
+
+    The caller supplies fresh observations after normal page readiness. The
+    budget is for a host's short target probe, not a page-load deadline.
+    """
+    result = {"ready": False, "reasons": [], "probe_timeout_ms": 1500, "acceptance": "not_run"}
+    try:
+        expected = _conditions(preconditions)
+    except (ValueError, TypeError):
+        result["reasons"] = ["page_conditions_invalid"]
+        return result
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("url"), str):
         result["reasons"] = ["page_observation_missing"]
         return result
@@ -113,5 +134,5 @@ def preflight(project_root, run_id, reference, snapshot):
     if "version" in expected and snapshot.get("version") != expected["version"]:
         result["reasons"].append("version_mismatch_or_unknown")
     if not result["reasons"]:
-        result.update(ready=True, script=packet["script"], fixtures=deepcopy(packet["fixtures"]))
+        result["ready"] = True
     return result
