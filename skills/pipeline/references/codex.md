@@ -6,7 +6,7 @@
 
 fast/standard 默认当前 agent 直接执行，不创建角色或交接文件。下表及角色生命周期规则仅适用于实际委派；首次委派才建立 base/run/角色差量。thorough 保留完整角色链。
 
-使用 `$pipeline <任务描述>` 触发。不要创建用户侧栏 task；流水线角色是当前任务的子 agent。派发前，先以当前 `SKILL.md` 的真实路径（跟随软链接）解析角色目录：`<skill-dir>/../../agents`。把解析出的绝对路径传给子 agent，不能使用相对项目根的 `agents/...` 路径。
+使用 `$pipeline <任务描述>` 触发。不要创建用户侧栏 task；流水线角色是当前任务的子agent。直通路径用pipeline_cli.py paths取得实际developer规则；委派角色仍以当前SKILL.md真实路径（跟随软链接）的`<skill-dir>/../../agents`窄范围定位。角色文件按真实存在的pipeline-*.md绝对路径传递，不猜相对项目根的agents/...或不存在的别名。
 
 | 流程角色 | Codex 实现 | 提示内容 |
 | --- | --- | --- |
