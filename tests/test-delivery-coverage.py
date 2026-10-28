@@ -138,6 +138,29 @@ class DeliveryCoverageTests(unittest.TestCase):
         final = self.finish(next_stage)
         self.assertTrue(self.packet(final)["coverage"]["complete"])
 
+    def test_seal_explains_stale_checks_and_does_not_revive_them_after_revert(self):
+        state = self.start()
+        self.record(state, "unit", coverage=["unit"])
+        self.record(state, "metadata", coverage=["metadata"])
+        original = (self.root / "unit.py").read_text()
+        (self.root / "unit.py").write_text("changed during release preparation")
+        final = self.finish(state, ["unit", "metadata"])
+        packet = self.packet(final)
+        self.assertEqual(packet["coverage"]["missing"], ["unit"])
+        excluded = packet["excluded_checks"]
+        self.assertEqual(len(excluded), 1)
+        self.assertEqual(excluded[0]["coverage"], ["unit"])
+        self.assertEqual(excluded[0]["reason"], "inputs_changed")
+        self.assertIn(excluded[0], packet["coverage"]["unavailable"])
+        self.assertNotIn(excluded[0]["reference"], packet["checks"])
+        (self.root / "unit.py").write_text(original)
+        adopted = self.start("latest")
+        self.assertEqual(adopted["delivery_status"]["coverage"]["missing"], ["unit"])
+        self.assertEqual(len(adopted["delivery_status"]["checks"]), 1)
+        again = self.finish(adopted)
+        self.assertEqual(self.packet(again)["coverage"]["missing"], ["unit"])
+        self.assertIn(excluded[0], self.packet(again)["coverage"]["unavailable"])
+
     def test_relabeling_metadata_as_unit_requires_execution_not_cached_acceptance(self):
         state = self.start()
         argv = [sys.executable, "-c", "from pathlib import Path; p=Path('counter'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1')"]

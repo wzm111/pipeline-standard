@@ -95,6 +95,22 @@ class PipelineCliTests(unittest.TestCase):
         self.assertTrue(final["coverage_complete"])
         self.assertIsNone(R.status(self.root)["active"])
 
+    def test_finish_explains_missing_reusable_categories_without_promoting_qa(self):
+        self.start()
+        self.check("original", coverage="unit")
+        (self.root / "source.py").write_text("changed release input")
+        (self.root / "metadata.py").write_text("release fixture")
+        self.cli("check", "--receipt", self.receipt, "--name", "metadata", "--scope", "metadata.py",
+                 "--coverage", "metadata", "--", sys.executable, "-c", "print('fixture metadata PASS')")
+        self.cli("report", "--receipt", self.receipt, "--kind", "qa", "--name", "final", "--json",
+                 json.dumps({"gate": "PASS", "required_checks": ["unit", "metadata", "lint"]}))
+        final = self.cli("finish", "--receipt", self.receipt, "--direct", "--stopped", "--stop-evidence", "fixture commands ended")
+        self.assertTrue(final["delivery_sealed"])
+        self.assertFalse(final["coverage_complete"])
+        self.assertEqual(final["coverage_missing"], ["lint", "unit"])
+        self.assertEqual(final["coverage_issues"], {"unit": ["inputs_changed"], "lint": ["no_valid_evidence"]})
+        self.assertNotIn("owner_token", json.dumps(final))
+
     def test_explicit_receipt_cannot_be_replaced_by_an_active_marker_or_wrong_owner(self):
         self.start()
         marker = "tmp/pipeline/.active"
