@@ -91,9 +91,11 @@ flowchart TD
 | 精简直通入口 | 智能体用统一 CLI 启动、检查、记录与收口，取得真实路径，不为调用接口反复读内部源码 |
 | 上下文差量复用 | 已读未变的文件片段直接沿用；修改后优先核对 diff；实际交接才使用缓存基线与角色差量 |
 | 有效验证复用 | 核验输入、工具环境、日志和来源；只补缺失或失效项，局部检查不冒充全量验收 |
+| 验收定义一致 | 多项检查与QA使用同一份计划，避免执行轮次与覆盖类别不一致；简单检查保持原入口 |
 | 浏览器前置探测 | 页面正常就绪后，首次验收也先短查目标控件；已有脚本、样本和前置条件可继续沿用 |
 | 开发到发布承接 | 同一交付跨阶段保留有效证据，不因换角色或 run 就重新规划、测试和构建 |
 | 发布前置与有界恢复 | 先做现场和真实运行器快检；合格候选可复用时保留产物，连续激活失败停止自动尝试 |
+| 产物分层核验 | 源码传输与实际目标平台构建产物分别核验，避免跨平台生成文件误比较 |
 | 单次收尾 | 必要线上身份、关键路径验收完成后复用同一份收尾报告；搜索收录等外部结果单列待确认 |
 
 产物复用取决于项目已有的可靠构建、验收及激活接口；没有支持时保留现有部署门禁，不猜“跳过构建”参数。代码、环境、证据变化或真实缺陷仍需相应验证。
@@ -134,7 +136,7 @@ flowchart TD
 | --- | --- |
 | 流程与直通命令 | [SKILL.md](skills/pipeline/SKILL.md)、[standard](skills/pipeline/references/standard.md) |
 | 项目接入 | [对话接入](skills/pipeline/references/interaction.md)、[init-project.sh](init-project.sh) |
-| 检查证据与发布 | [证据复用](skills/pipeline/references/evidence.md)、[交付承接](skills/pipeline/references/delivery.md) |
+| 检查证据与发布 | [检查计划](skills/pipeline/references/check-plan.md)、[证据复用](skills/pipeline/references/evidence.md)、[交付承接](skills/pipeline/references/delivery.md) |
 | 状态与中断恢复 | [运行接口](skills/pipeline/references/operations.md) |
 | 工具按需准备 | [工具说明](tools/quick-install.md) |
 | 版本与建设进度 | [发布说明](docs/releases/)、[实施记录](docs/IMPLEMENTATION.md)、[路线图](docs/ROADMAP.md) |
