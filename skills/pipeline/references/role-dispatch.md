@@ -9,6 +9,8 @@
 
 同一角色后续新批次先begin续用，不冷启动替代。幂等重复accepted/complete不增加事件；不允许把closed结果改成另一结论。恢复前后未接受的旧派发先按真实停止情况关闭，再发新请求，不把中断空档算作工作。
 
+需要核对模型是否真正传参时，begin可加`native_parameters={"model": "实际传值", "reasoning_effort": "实际传值", "fork_turns": "none"}`；Claude使用其原生effort字段，省略宿主未传字段。只记录模型/强度/上下文继承方式，不存prompt或凭据。显式请求与提供的原生参数必须相符；旧调用不传该字段仍兼容，但不能据此声称已验证传参。accepted可加`host_executor_id="宿主实际返回的ID"`关联本run短别名，续用保持映射不变。登记是调度员记录，仍需实际原生调用与返回证据，不能将记录本身当宿主证明。
+
 role_dispatch.summary只读输出请求/实际反馈、尝试状态与role_metrics的区间并集。未知实际模型和token保持unknown，不根据API单价或请求推算。finish只对接入本适配器且尚未闭合的派发拒绝收口，不能据此声称所有宿主工具都已被强制拦截。
 
 当前会话全程直做、没有真实委派时，结束前`confirm_direct(root, run_id, owner_token)`；摘要将角色统计标not_applicable，不报漏事件。有角色事件/派发历史时不能改写为直做。旧上下文只用底层role_metrics的历史继续保留，缺的派发边界不事后补造。

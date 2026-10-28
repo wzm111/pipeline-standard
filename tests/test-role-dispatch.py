@@ -46,6 +46,33 @@ class RoleDispatchTests(unittest.TestCase):
         counts = D.summary(self.root)["metrics"]["roles"]["tester"]
         self.assertEqual((counts["created_count"], counts["reused_count"]), (1, 1))
 
+    def test_native_parameters_and_host_mapping_do_not_infer_actual_model(self):
+        parameters = {"model": "gpt-6.1-sol", "reasoning_effort": "medium", "fork_turns": "none"}
+        ticket = D.begin(*self.args, "developer", requested_model="gpt-6.1-sol", requested_effort="medium",
+                         native_parameters=parameters)
+        parameters["model"] = "changed-after-request"
+        result = D.accepted(*self.args, ticket["id"], "dev", host_executor_id="/root/native-dev")
+        self.assertEqual(result["native_parameters"]["model"], "gpt-6.1-sol")
+        self.assertEqual(result["host_executor_id"], "/root/native-dev")
+        self.assertEqual(result["actual_model"], "unknown")
+        self.assertEqual(result["actual_effort"], "unknown")
+        with self.assertRaises(ValueError):
+            D.accepted(*self.args, ticket["id"], "dev", host_executor_id="/root/another-dev")
+        self.done(ticket)
+        followup = D.begin(*self.args, "developer", executor_id="dev")
+        with self.assertRaises(ValueError):
+            D.accepted(*self.args, followup["id"], "dev", host_executor_id="/root/another-dev")
+        D.accepted(*self.args, followup["id"], "dev", host_executor_id="/root/native-dev")
+        self.done(followup)
+
+    def test_native_parameter_mismatch_and_unrelated_payload_are_rejected(self):
+        for parameters in ({"model": "another-model"}, {"fork_turns": "none"},
+                           {"model": "gpt-6.1-sol", "prompt": "unrelated body"},
+                           {"model": "gpt-6.1-sol", "reasoning_effort": "high"}):
+            with self.assertRaises(ValueError):
+                D.begin(*self.args, "developer", requested_model="gpt-6.1-sol", requested_effort="medium",
+                        native_parameters=parameters)
+
     def test_known_preexisting_executor_has_unknown_creation_history(self):
         ticket = D.begin(*self.args, "scope_guardian", executor_id="existing-guardian")
         D.accepted(*self.args, ticket["id"], "existing-guardian")
