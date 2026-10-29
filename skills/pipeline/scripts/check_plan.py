@@ -22,7 +22,7 @@ def _digest(root, ref):
     return hashlib.sha256(E._local(Path(root).resolve(strict=True), ref).read_bytes()).hexdigest()
 
 
-def _validate(root, checks, required, owner, inherited):
+def _validate(root, checks, required, owner, inherited, *, scan_inputs=True):
     inherited = E.coverage_labels(inherited)
     if not isinstance(checks, dict) or not checks:
         raise ValueError("nonempty checks required")
@@ -38,7 +38,15 @@ def _validate(root, checks, required, owner, inherited):
         labels = E.coverage_labels(value.get("coverage"))
         if not labels:
             raise ValueError("nonempty coverage required")
-        E.fingerprint(root, value.get("scope"))
+        scope = value.get("scope")
+        project = Path(root).resolve(strict=True)
+        if not isinstance(scope, list) or not scope:
+            raise ValueError("nonempty scope required")
+        for relative in scope:
+            if E._local(project, relative) == project:
+                raise ValueError("declare narrow input directories, not the project root")
+        if scan_inputs:
+            E.fingerprint(root, scope)
         E.write_paths_conflict(root, value.get("write_paths"), [])
         project = Path(root).resolve(strict=True)
         cwd = C._workdir(project, value.get("cwd")).relative_to(project).as_posix()
@@ -76,54 +84,109 @@ def save_plan(root, run_id, owner, name, checks, required_checks=None):
     return ref
 
 
-def read_plan(root, run_id, owner, plan_ref):
-    state = _owned(root, run_id, owner)
+def _read_plan(root, run_id, owner, plan_ref, state, snapshot):
     if (plan_ref not in state.get("artifacts", []) or plan_ref not in state.get("check_plans", {})
-            or _digest(root, plan_ref) != state["check_plans"][plan_ref]):
+            or _cached_digest(root, plan_ref, snapshot) != state["check_plans"][plan_ref]):
         raise ValueError("unregistered or changed plan")
-    payload = E.read_report(root, run_id, plan_ref, kind="check_plan")["payload"]
+    payload = _report(root, run_id, plan_ref, "check_plan", snapshot)
     checked = _validate(root, payload["checks"], payload["required_checks"], owner,
-                        state.get("inherited_required_checks", []))
+                        state.get("inherited_required_checks", []), scan_inputs=False)
     if checked != payload:
         raise ValueError("invalid plan")
     return payload
 
 
-def _bindings(root, run_id, state, plan_ref, check_id):
-    for ref in reversed(state["artifacts"]):
+def read_plan(root, run_id, owner, plan_ref):
+    return _read_plan(root, run_id, owner, plan_ref, _owned(root, run_id, owner),
+                      {"reports": {}, "digests": {}})
+
+
+def _report(root, run_id, ref, kind, snapshot):
+    key = (ref, kind)
+    if key not in snapshot["reports"]:
+        snapshot["reports"][key] = E.read_report(root, run_id, ref, kind=kind)["payload"]
+    return snapshot["reports"][key]
+
+
+def _cached_digest(root, ref, snapshot):
+    if ref not in snapshot["digests"]:
+        snapshot["digests"][ref] = _digest(root, ref)
+    return snapshot["digests"][ref]
+
+
+def _identity(proof):
+    return json.dumps([proof.get("command"), proof.get("scope"), proof.get("intent", "test"),
+                       proof.get("cwd", ".")], sort_keys=True)
+
+
+def _snapshot(root, run_id, state):
+    # One operation-local index; never reuse across a later execution or QA.
+    snapshot = {"reports": {}, "digests": {}, "bindings": {}, "observations": {},
+                "positions": {ref: i for i, ref in enumerate(state["artifacts"])}}
+    for ref in state["artifacts"]:
         if "/artifacts/planned_check/" in ref:
-            payload = E.read_report(root, run_id, ref, kind="planned_check")["payload"]
-            if payload.get("plan_ref") == plan_ref and payload.get("check_id") == check_id:
-                yield payload
+            p = _report(root, run_id, ref, "planned_check", snapshot)
+            snapshot["bindings"][(p["plan_ref"], p["check_id"])] = (ref, p)
+        elif "/artifacts/check/" in ref:
+            p = _report(root, run_id, ref, "check", snapshot)
+            snapshot["observations"][_identity(p)] = ref
+    return snapshot
 
 
 def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=False):
-    plan = read_plan(root, run_id, owner, plan_ref)
+    state = _owned(root, run_id, owner)
+    snapshot = _snapshot(root, run_id, state)
+    plan = _read_plan(root, run_id, owner, plan_ref, state, snapshot)
     check = plan["checks"][check_id]
-    previous = next(_bindings(root, run_id, _owned(root, run_id, owner), plan_ref, check_id), None)
+    candidate_plan = plan_ref
+    previous = snapshot["bindings"].get((plan_ref, check_id), (None, None))[1]
+    if previous is None and impact_covered is True:
+        candidates = sorted(snapshot["bindings"].items(),
+                            key=lambda item: snapshot["positions"][item[1][0]], reverse=True)
+        for (old_plan, old_id), (_, binding) in candidates:
+            if old_id != check_id or old_plan == plan_ref:
+                continue
+            try:
+                source = _read_plan(root, run_id, owner, old_plan, state, snapshot)
+                if source["checks"].get(check_id) == check:
+                    candidate_plan, previous = old_plan, binding
+                    break
+            except (OSError, ValueError, KeyError, TypeError):
+                # Unconfirmed history cannot authorize reuse.
+                continue
     args = dict(check)
-    reusable = previous is not None and _valid(root, run_id, owner, _owned(root, run_id, owner),
-                                               plan_ref, check_id, check)[0] is not None
-    # Restrict automatic reuse to this exact plan/check; no relabeling older work.
+    reusable = previous is not None and _valid(root, run_id, owner, state,
+                                               candidate_plan, check_id, check, snapshot)[0] is not None
     result = C.execute_check(root, run_id, owner, name, **args,
                              reuse_from=previous["result"]["report"] if previous else None,
                              impact_covered=impact_covered is True and reusable)
-    binding = E.write_report(root, run_id, owner, "planned_check", name,
-                             {"plan_ref": plan_ref, "plan_sha256": _digest(root, plan_ref),
-                              "check_id": check_id, "result": result})
+    payload = {"plan_ref": plan_ref, "plan_sha256": _cached_digest(root, plan_ref, snapshot),
+               "check_id": check_id, "result": result}
+    if result["reused"] and (candidate_plan != plan_ref or previous.get("carried_from_plan")):
+        origin = previous.get("carried_from_plan", candidate_plan)
+        payload.update(carried_from_plan=origin,
+                       carried_from_plan_sha256=_cached_digest(root, origin, snapshot))
+    binding = E.write_report(root, run_id, owner, "planned_check", name, payload)
     return {**result, "plan_ref": plan_ref, "check_id": check_id, "planned_report": binding}
 
 
-def _valid(root, run_id, owner, state, plan_ref, check_id, check):
-    latest = next(_bindings(root, run_id, state, plan_ref, check_id), None)
+def _valid(root, run_id, owner, state, plan_ref, check_id, check, snapshot=None):
+    snapshot = snapshot if snapshot is not None else _snapshot(root, run_id, state)
+    latest = snapshot["bindings"].get((plan_ref, check_id), (None, None))[1]
     if latest is None:
         return None, "not_executed"
-    if latest.get("plan_sha256") != _digest(root, plan_ref):
+    if latest.get("plan_sha256") != _cached_digest(root, plan_ref, snapshot):
         return None, "plan_changed"
+    if latest.get("carried_from_plan"):
+        origin = latest["carried_from_plan"]
+        original = _read_plan(root, run_id, owner, origin, state, snapshot)
+        if (latest.get("carried_from_plan_sha256") != _cached_digest(root, origin, snapshot)
+                or original["checks"].get(check_id) != check):
+            return None, "carried_plan_changed"
     ref = latest["result"]["report"]
     if ref not in state["artifacts"]:
         return None, "unregistered_evidence"
-    proof = E.read_report(root, run_id, ref, kind="check")["payload"]
+    proof = _report(root, run_id, ref, "check", snapshot)
     command = shlex.join(check["argv"])
     env = _environment(root, owner, check)
     if (proof.get("argv") != check["argv"] or proof.get("scope") != check["scope"]
@@ -132,18 +195,13 @@ def _valid(root, run_id, owner, state, plan_ref, check_id, check):
         return None, "check_identity_changed"
     # A later observation of this command supersedes an older bound PASS,
     # including unplanned failure observations with different coverage labels.
-    for candidate in reversed(state["artifacts"]):
-        if candidate == ref:
-            break
-        if "/artifacts/check/" in candidate:
-            newer = E.read_report(root, run_id, candidate, kind="check")["payload"]
-            if (newer.get("command"), newer.get("scope"), newer.get("intent", "test"), newer.get("cwd", ".")) == (
-                    command, check["scope"], check.get("intent", "test"), check.get("cwd", ".")):
-                verdict = E.reusable_check(root, run_id, candidate, command=command, environment=env,
-                                           impact_covered=True, coverage=newer.get("coverage"))
-                if not verdict["reusable"]:
-                    return None, "superseded_observation"
-                break
+    candidate = snapshot["observations"].get(_identity(proof))
+    if candidate and snapshot["positions"][candidate] > snapshot["positions"][ref]:
+        newer = _report(root, run_id, candidate, "check", snapshot)
+        verdict = E.reusable_check(root, run_id, candidate, command=command, environment=env,
+                                   impact_covered=True, coverage=newer.get("coverage"))
+        if not verdict["reusable"]:
+            return None, "superseded_observation"
     verdict = E.reusable_check(root, run_id, ref, command=command, environment=env,
                                impact_covered=True, coverage=check["coverage"])
     return (ref, None) if verdict["reusable"] else (None, verdict["reason"])
@@ -156,15 +214,14 @@ def _environment(root, owner, check):
                           project_root=Path(root).resolve(strict=True))
 
 
-def _inherited(root, run_id, owner, state):
+def _inherited(root, run_id, owner, state, snapshot):
     covered, refs, seen = set(), [], set()
     for ref in reversed(state["artifacts"]):
         if "/artifacts/check/" not in ref:
             continue
         try:
-            proof = E.read_report(root, run_id, ref, kind="check")["payload"]
-            key = json.dumps([proof.get("command"), proof.get("scope"), proof.get("intent", "test"),
-                              proof.get("cwd", ".")], sort_keys=True)
+            proof = _report(root, run_id, ref, "check", snapshot)
+            key = _identity(proof)
             if key in seen:
                 continue
             seen.add(key)
@@ -189,27 +246,47 @@ def _inherited(root, run_id, owner, state):
     return covered, refs
 
 
-def qa_from_plan(root, run_id, owner, plan_ref, name, summary=""):
-    plan = read_plan(root, run_id, owner, plan_ref)
+def inspect_plan(root, run_id, owner, plan_ref, summary=""):
+    """Read-only current evidence evaluation; never invent a business judgment."""
     state = _owned(root, run_id, owner)
-    checks, failures = [], {}
+    snapshot = _snapshot(root, run_id, state)
+    plan = _read_plan(root, run_id, owner, plan_ref, state, snapshot)
+    checks, failures, diagnostics = [], {}, {}
     for check_id, check in plan["checks"].items():
         try:
-            ref, reason = _valid(root, run_id, owner, state, plan_ref, check_id, check)
+            ref, reason = _valid(root, run_id, owner, state, plan_ref, check_id, check, snapshot)
         except (OSError, ValueError, KeyError, TypeError):
             ref, reason = None, "unconfirmed_evidence"
         if ref:
             checks.append(ref)
         else:
             failures[check_id] = reason
+            if reason in {"command_or_environment_changed", "superseded_observation"}:
+                binding = snapshot["bindings"].get((plan_ref, check_id), (None, None))[1]
+                if binding:
+                    proof = _report(root, run_id, binding["result"]["report"], "check", snapshot)
+                    observed = snapshot["observations"].get(_identity(proof), binding["result"]["report"])
+                    latest = _report(root, run_id, observed, "check", snapshot)
+                    child_env = {k: v for k, v in os.environ.items()
+                                 if k != "PIPELINE_OWNER_TOKEN" and owner not in v}
+                    diagnostics[check_id] = C.environment_changes(
+                        latest.get("observed_environment_diagnostics"), C.environment_diagnostics(child_env))
     covered = {label for key, check in plan["checks"].items() if key not in failures for label in check["coverage"]}
-    inherited, inherited_refs = _inherited(root, run_id, owner, state)
+    inherited, inherited_refs = _inherited(root, run_id, owner, state, snapshot)
     covered.update(inherited & set(E.coverage_labels(state.get("inherited_required_checks"))))
     checks.extend(ref for ref in inherited_refs if ref not in checks)
     required = sorted(set(plan["required_checks"])
                       | set(E.coverage_labels(state.get("planned_required_checks"))))
     missing = sorted(set(required) - covered)
+    current = _owned(root, run_id, owner)
+    if current["artifacts"] != state["artifacts"] or current.get("check_plans") != state.get("check_plans"):
+        failures["snapshot"] = "evidence_changed_during_qa"
+    return {"gate": "CONCERNS" if failures or missing else "PASS", "plan_ref": plan_ref,
+            "required_checks": required, "missing_checks": missing,
+            "checks": checks, "check_failures": failures,
+            "environment_diagnostics": diagnostics, "summary": summary}
+
+
+def qa_from_plan(root, run_id, owner, plan_ref, name, summary=""):
     return E.write_report(root, run_id, owner, "qa", name,
-                          {"gate": "CONCERNS" if failures or missing else "PASS", "plan_ref": plan_ref,
-                           "required_checks": required, "missing_checks": missing,
-                           "checks": checks, "check_failures": failures, "summary": summary})
+                          inspect_plan(root, run_id, owner, plan_ref, summary))
