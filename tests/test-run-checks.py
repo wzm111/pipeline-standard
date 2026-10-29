@@ -72,6 +72,49 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(C.check_summary(self.root)["reused"], 1)
         self.assertEqual(C.check_summary(self.root)["executed"], 1)
 
+    def test_environment_diagnostics_are_private_and_strict_drift_blocks_reuse(self):
+        previous = {"PATH": "private-path", "SECRET_FIXTURE": "private-secret"}
+        current = dict(previous, PATH="changed-path", SECRET_FIXTURE="changed-secret")
+        diagnostic = C.environment_diagnostics(previous)
+        encoded = json.dumps(diagnostic)
+        for private in ("private-path", "private-secret", "SECRET_FIXTURE"):
+            self.assertNotIn(private, encoded)
+        self.assertNotIn(__import__("hashlib").sha256(json.dumps("private-secret").encode()).hexdigest(), encoded)
+        self.assertEqual(C.environment_changes(diagnostic, C.environment_diagnostics(current)),
+                         {"status": "known", "changed_keys": ["PATH"], "other_environment_changed": True})
+        self.assertEqual(C.environment_changes(None, diagnostic), {"status": "unknown"})
+        with patch.dict(os.environ, {"NODE_ENV": "fixture-a", "SECRET_FIXTURE": "private-secret"}):
+            first = self.execute("diagnostic-first")
+            self.assertTrue(self.execute("diagnostic-hit", impact_covered=True)["reused"])
+        with patch.dict(os.environ, {"NODE_ENV": "fixture-b", "SECRET_FIXTURE": "changed-secret"}):
+            changed = self.execute("diagnostic-drift", impact_covered=True)
+            self.assertFalse(changed["reused"])
+            delta = changed["reuse_decision"]["environment_changes"]
+            self.assertIn("NODE_ENV", delta["changed_keys"])
+            self.assertTrue(delta["other_environment_changed"])
+            self.assertEqual(changed["reuse_decision"]["reason"], "command_or_environment_changed")
+        self.assertIn("observed_environment_diagnostics", self.payload(first))
+
+    def test_legacy_diagnostics_are_optional_and_explicit_superseded_drift_is_explained(self):
+        with patch.dict(os.environ, {"NODE_ENV": "legacy"}):
+            first = self.execute("legacy-original")
+            proof = self.payload(first)
+            legacy = E.record_check(self.root, self.state["run_id"], self.state["owner_token"],
+                                    "legacy-proof", command=proof["command"], scope=proof["scope"],
+                                    environment=proof["environment"], exit_code=0, log_path=proof["log_path"],
+                                    started_fingerprint=proof["fingerprint"])
+            self.assertTrue(self.execute("legacy-hit", reuse_from=legacy, impact_covered=True)["reused"])
+        with patch.dict(os.environ, {"NODE_ENV": "new"}):
+            changed = self.execute("legacy-drift", impact_covered=True)
+            self.assertEqual(changed["reuse_decision"]["environment_changes"], {"status": "unknown"})
+        with patch.dict(os.environ, {"NODE_ENV": "legacy"}):
+            superseded = self.execute("superseded-drift", reuse_from=first["report"], impact_covered=True)
+            self.assertFalse(superseded["reused"])
+            decision = superseded["reuse_decision"]
+            self.assertEqual(decision["reason"], "superseded_observation")
+            self.assertEqual(decision["latest_reason"], "command_or_environment_changed")
+            self.assertEqual(decision["environment_changes"]["changed_keys"], ["NODE_ENV"])
+
     def test_actual_package_cwd_is_used_and_prevents_cross_package_reuse(self):
         for package in ("one", "two"):
             (self.root / package).mkdir()

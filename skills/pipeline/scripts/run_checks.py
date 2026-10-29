@@ -20,6 +20,30 @@ INTENTS = {"test", "search", "locate", "reproduce", "check"}
 RESULTS = {"success", "search_no_match", "path_lookup_failure", "reproduction_nonzero",
            "test_failure", "command_failure", "command_unavailable", "timeout", "interrupted"}
 REVIEW_RESULTS = {"environment_failure", "fixture_failure", "regression_failure"}
+_OPERATIONAL_KEYS = {"PWD", "SHLVL", "_", "PATH", "NODE_ENV", "NODE_OPTIONS", "PYTHONPATH", "LANG",
+                     "LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MESSAGES", "LC_MONETARY", "LC_NUMERIC", "LC_TIME"}
+
+
+def environment_diagnostics(child_env):
+    """Private-value diagnostics, separate from the strict full environment identity."""
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    return {"schema": 1,
+            "operational": {key: digest(value) for key, value in child_env.items() if key in _OPERATIONAL_KEYS},
+            "other_sha256": digest({key: value for key, value in child_env.items() if key not in _OPERATIONAL_KEYS})}
+
+
+def environment_changes(previous, current):
+    """Report only fixed operational names or one aggregate unknown category."""
+    for item in (previous, current):
+        if (not isinstance(item, dict) or item.get("schema") != 1
+                or not isinstance(item.get("operational"), dict)
+                or set(item["operational"]) - _OPERATIONAL_KEYS
+                or not isinstance(item.get("other_sha256"), str)):
+            return {"status": "unknown"}
+    return {"status": "known", "changed_keys": sorted(key for key in _OPERATIONAL_KEYS
+            if previous["operational"].get(key) != current["operational"].get(key)),
+            "other_environment_changed": previous["other_sha256"] != current["other_sha256"]}
 
 
 def classify_result(exit_code, intent, error=None):
@@ -158,6 +182,7 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
     before = E.fingerprint(root, scope)
     child_env = {k: v for k, v in os.environ.items() if k != "PIPELINE_OWNER_TOKEN" and owner_token not in v}
     env = _environment(directory, argv, child_env, environment, project_root=root)
+    diagnostics = environment_diagnostics(child_env)
     command = shlex.join(argv)
     if owner_token in command:
         raise ValueError("owner token cannot be passed to a command")
@@ -201,10 +226,16 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
                     if not current["reusable"]:
                         verdict = {"reusable": False, "reason": "superseded_observation"}
                         decision.update(latest_source=latest, latest_reason=current["reason"])
+                        if current["reason"] == "command_or_environment_changed":
+                            decision["environment_changes"] = environment_changes(
+                                newer.get("observed_environment_diagnostics"), diagnostics)
                 if verdict is None:
                     verdict = E.reusable_check(root, run_id, reuse_from, command=command, environment=env,
                                                impact_covered=True, coverage=coverage)
             decision["reason"] = verdict["reason"]
+            if verdict["reason"] == "command_or_environment_changed":
+                decision["environment_changes"] = environment_changes(
+                    old.get("observed_environment_diagnostics"), diagnostics)
             reusable = verdict["reusable"]
         except (OSError, ValueError, KeyError, TypeError):
             reusable = False
@@ -251,6 +282,7 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
         path = E.write_report(root, run_id, owner_token, "check", name,
                               {"command": command, "argv": argv, "intent": intent, "result_class": result_class,
                                "scope": scope, "fingerprint": before, "environment": env, "coverage": coverage,
+                               "observed_environment_diagnostics": diagnostics,
                                "cwd": directory.relative_to(root).as_posix(),
                                "inputs_stable": stable, "exit_code": exit_code, "seconds": seconds,
                                "reuse_decision": decision,
