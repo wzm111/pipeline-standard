@@ -50,6 +50,12 @@ def parser():
     status = sub.add_parser("status", help="compact read-only status, no credentials")
     status.add_argument("--project", default=".")
     status.add_argument("--run-id")
+    status.add_argument("--host-status", choices=["unknown", "running", "idle"], default="unknown")
+    status.add_argument("--host-ended-at", help="explicit native host idle boundary, never inferred from run age")
+    release_timing = sub.add_parser("release-timing", help="read-only measured release steps, no extra deployment")
+    release_timing.add_argument("--project", default=".")
+    release_timing.add_argument("--run-id", required=True)
+    release_timing.add_argument("--check", help="optional current-run monolithic release check reference")
     start = sub.add_parser("start", help="start after reading contract; retain the returned private receipt path")
     start.add_argument("--project", default=".")
     start.add_argument("--stage", default="execution")
@@ -59,7 +65,7 @@ def parser():
     preflight.add_argument("--cwd")
     preflight.add_argument("argv", nargs=argparse.REMAINDER)
     owned = {}
-    for name in ("update", "check", "report", "finish", "plan", "run", "qa"):
+    for name in ("update", "check", "report", "finish", "plan", "run", "qa", "wait", "continue"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
@@ -67,6 +73,9 @@ def parser():
     update.add_argument("--stage")
     update.add_argument("--activity", choices=sorted(R.ACTIVITIES))
     update.add_argument("--next")
+    for option in ("reason", "action", "verify"):
+        owned["wait"].add_argument("--" + option, required=True, dest="wait_" + option)
+    owned["continue"].add_argument("--evidence", required=True)
     check = owned["check"]
     check.add_argument("--name", required=True, help="unique attempt name, separate from stable coverage")
     check.add_argument("--scope", nargs="+", required=True)
@@ -107,8 +116,18 @@ def dispatch(args):
         return result, 0 if result["available"] else 1
     if args.action == "status":
         snapshot = R.status(root, args.run_id)
-        return {**_public(snapshot["state"]), "active": snapshot["active"] is not None,
-                "unrecognized_active": snapshot["active"] == "unrecognized"}, 0
+        result = {**_public(snapshot["state"]), "active": snapshot["active"] is not None,
+                  "unrecognized_active": snapshot["active"] == "unrecognized"}
+        if args.host_status != "unknown" or args.host_ended_at is not None:
+            import run_continuity as T
+            identity = args.run_id or result["run_id"]
+            if identity is not None:
+                result["observation"] = T.inspect(root, identity, host_status=args.host_status,
+                                                  host_ended_at=args.host_ended_at)
+        return result, 0
+    if args.action == "release-timing":
+        import release_timing as T
+        return T.summary(root, args.run_id, check_ref=args.check), 0
     if args.action == "start":
         initial = {"stage": args.stage}
         if args.delivery_from:
@@ -122,6 +141,15 @@ def dispatch(args):
         return {**_public(state), "receipt": str(receipt), **paths()}, 0
     receipt = _receipt(root, args.receipt)
     run_id, owner = receipt["run_id"], receipt["owner_token"]
+    if args.action in {"wait", "continue"}:
+        import run_continuity as T
+        if args.action == "wait":
+            state = T.wait_for_user(root, run_id, owner, reason=args.wait_reason,
+                                    action=args.wait_action, verify=args.wait_verify)
+        else:
+            state = T.resume_work(root, run_id, owner, evidence=args.evidence)
+        return {**_public(state), "handoff": {key: state["continuity_wait"].get(key)
+                for key in ("status", "reason", "action", "verify")}}, 0
     if args.action in {"plan", "run", "qa"}:
         import check_plan as P
         if args.action == "plan":

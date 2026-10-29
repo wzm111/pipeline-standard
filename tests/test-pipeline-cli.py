@@ -133,6 +133,47 @@ class PipelineCliTests(unittest.TestCase):
         self.assertIsNotNone(final["delivery_reason"])
         self.assertIn("accepted", final["delivery_detail"])
 
+    def test_human_handoff_keeps_task_and_requires_verification_after_continue(self):
+        started = self.start()
+        self.cli("update", "--receipt", self.receipt, "--next", "finish original acceptance")
+        proof = self.check("before-wait")
+        waited = self.cli("wait", "--receipt", self.receipt, "--reason", "platform login required",
+                          "--action", "log in to the platform console", "--verify", "verify server receipt and dedup")
+        self.assertEqual(waited["activity"], "human_wait")
+        self.assertEqual(waited["next"], "finish original acceptance")
+        self.assertEqual(waited["run_id"], started["run_id"])
+        self.assertNotIn("owner_token", json.dumps(waited))
+        self.cli("finish", "--receipt", self.receipt, "--direct", "--stopped",
+                 "--stop-evidence", "fixture stopped", expected=2)
+        self.assertIsNotNone(R.status(self.root)["active"])
+        resumed = self.cli("continue", "--receipt", self.receipt, "--evidence", "user reports login complete")
+        self.assertEqual(resumed["next"], "verify server receipt and dedup")
+        state = R.status(self.root)["state"]
+        self.assertIn(proof["report"], state["artifacts"])
+        self.assertFalse(any("/qa/" in item for item in state["artifacts"]))
+
+    def test_host_idle_status_is_explicit_read_only_and_not_inferred_from_age(self):
+        started = self.start()
+        state = R.status(self.root)["state"]
+        before = {str(p): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        observed = self.cli("status", "--run-id", started["run_id"], "--host-status", "idle",
+                            "--host-ended-at", state["updated_at"])["observation"]
+        self.assertTrue(observed["unclosed"])
+        self.assertEqual(observed["host_observation"], "idle")
+        self.assertGreaterEqual(observed["known_idle_seconds"], 0)
+        self.assertNotIn("owner_token", json.dumps(observed))
+        self.assertNotIn("observation", self.cli("status"))
+        after = {str(p): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        self.assertEqual(before, after)
+
+    def test_release_timing_cli_is_read_only_with_unknown_unmeasured_steps(self):
+        started = self.start()
+        before = R.status(self.root)
+        result = self.cli("release-timing", "--run-id", started["run_id"])
+        self.assertEqual(result["coverage"], "unknown")
+        self.assertIsNone(result["step_seconds"]["build"])
+        self.assertEqual(R.status(self.root), before)
+
     def test_planned_finish_rejects_stale_pass_and_keeps_active_run(self):
         original_root = self.root
         for mutation in ("input", "log", "later_failure", "new_plan"):
