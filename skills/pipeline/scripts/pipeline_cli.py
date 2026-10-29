@@ -138,7 +138,7 @@ def dispatch(args):
         ref = P.qa_from_plan(root, run_id, owner, args.plan, args.name, summary=args.summary)
         payload = E.read_report(root, run_id, ref, kind="qa")["payload"]
         return {"run_id": run_id, "report": ref, **{k: payload[k] for k in
-                ("gate", "required_checks", "missing_checks", "check_failures")}}, 0 if payload["gate"] == "PASS" else 1
+                ("gate", "required_checks", "missing_checks", "check_failures", "environment_diagnostics")}}, 0 if payload["gate"] == "PASS" else 1
     if args.action == "update":
         changes = {key: value for key in ("stage", "activity", "next") if (value := getattr(args, key)) is not None}
         if not changes:
@@ -154,6 +154,27 @@ def dispatch(args):
         relative = E.write_report(root, run_id, owner, args.kind, args.name, json.loads(args.payload))
         return {"run_id": run_id, "report": relative}, 0
     R._stopped(args.stopped, args.stop_evidence)
+    current = R.status(root, run_id)["state"]
+    if args.outcome == "completed" and current.get("check_plans"):
+        latest_qa = next((ref for ref in reversed(current.get("artifacts", []))
+                          if "/artifacts/qa/" in ref), None)
+        payload = E.read_report(root, run_id, latest_qa, kind="qa")["payload"] if latest_qa else None
+        current_plan = next(ref for ref in reversed(current["artifacts"]) if ref in current["check_plans"])
+        if (not isinstance(payload, dict) or payload.get("gate") != "PASS"
+                or current["artifacts"].index(latest_qa) < current["artifacts"].index(current_plan)
+                or payload.get("plan_ref", current_plan) != current_plan):
+            return {**_public(current), "error": "qa_required_before_finish",
+                    "message": "Record the current QA judgment before finishing this planned run; command success alone is not QA acceptance.",
+                    "next_action": "qa --receipt <current receipt> --plan <current plan> --name <new QA attempt>",
+                    "latest_qa": latest_qa, "active_preserved": True}, 1
+        import check_plan as P
+        validation = P.inspect_plan(root, run_id, owner, current_plan)
+        if validation["gate"] != "PASS":
+            return {**_public(current), "error": "qa_evidence_invalid_before_finish",
+                    "message": "The accepted plan evidence is no longer current; revalidate before finishing.",
+                    "latest_qa": latest_qa, "active_preserved": True,
+                    "next_action": "Revalidate failed or missing checks and record the current QA judgment.",
+                    **{key: validation[key] for key in ("missing_checks", "check_failures", "environment_diagnostics")}}, 1
     if args.direct:
         D.confirm_direct(root, run_id, owner)
     state = R.finish(root, run_id, owner, args.outcome,
@@ -165,6 +186,7 @@ def dispatch(args):
                             if label in item.get("coverage", [])}) or ["no_valid_evidence"]
               for label in missing or []}
     return {**_public(state), "delivery_sealed": delivery.get("sealed", False),
+            "delivery_reason": delivery.get("reason"), "delivery_detail": delivery.get("detail"),
             "coverage_complete": coverage.get("complete"), "coverage_missing": missing,
             "coverage_issues": issues}, 0
 

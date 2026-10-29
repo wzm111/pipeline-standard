@@ -12,8 +12,10 @@ python3 <runner> qa --receipt <receipt> --plan <同一plan引用> --name final -
 
 所有命令均接受`--project <root>`。cwd相对项目根，scope和write_paths仍相对项目根；省略cwd沿用项目根。不确定子包/运行器时先用`preflight --project <root> --cwd web -- pnpm test:unit`只读核对cwd与可执行文件；它不运行测试，也不证明脚本/依赖/业务通过。
 
-计划是本run登记的不可变报告；实际命令、目录和coverage不能在run时另行覆盖。相同计划和检查ID可复用仍有效的结果，核验输入、环境、日志、来源链及最新失败，不重贴旧PASS标签。仅保存计划不执行命令。每个声明检查都须有有效结果，不能用共享coverage让漏跑项通过。
+计划是本run登记的不可变报告；实际命令、目录和coverage不能在run时另行覆盖。相同检查ID可复用仍有效的结果；计划增项时，只有规范化定义与coverage完全相同才可承接，并保留原计划摘要和原始结果引用。输入、环境、日志、来源及最新失败仍逐次校验，不重贴旧PASS标签。每个声明检查都须有有效结果，不能用共享coverage让漏跑项通过。读取计划不再反复哈希所有输入；执行与QA仍检查当前输入。QA索引仅限本次操作，证据中途变化会拒绝该快照。
 
 QA自动包含计划的全部coverage和继承的必要类别；本run已声明计划的必要类别也不能通过另建窄计划或手写QA删除。真实范围变化时保存新版本并明确处理原有要求；缺项继续显示CONCERNS/coverage_missing。命令通过不能替代业务验收，独立QA仍核对真实行为和计划是否完整。专用浏览器等保留原证据接口，已继承且有效的记录无需改造成OS命令。
+
+采用计划的CLI任务先生成当前QA判断，再finish。缺少当前计划的QA PASS，或完成前只读复核发现输入、环境、日志及后续观察已使证据失效时，finish保留活动run并给出下一步提示，不生成新的通过结论。需要暂停时仍可用原paused流程。环境不匹配时，QA及检查返回安全的差异诊断：只展示允许的运行环境键名，其他环境归为聚合变化；旧证据无诊断时标unknown。严格环境校验不变，不靠改标签、忽略未知环境或强写PASS消除CONCERNS。
 
 Python对应接口：`check_plan.save_plan`、`run_planned`、`qa_from_plan`，参数与CLI一致。不得将凭据放进argv、计划environment或summary；environment只是身份信息，子进程仍由统一入口管理。

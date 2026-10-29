@@ -12,6 +12,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "skills/pipeline/scripts"
 CLI = SCRIPTS / "pipeline_cli.py"
 sys.path.insert(0, str(SCRIPTS))
 import run_state as R
+import run_evidence as E
 
 
 class PipelineCliTests(unittest.TestCase):
@@ -105,6 +106,70 @@ class PipelineCliTests(unittest.TestCase):
                           "--cwd", "package", "--", sys.executable, "-c", "open('proof','w').write('observed')")
         self.assertEqual(result["exit_code"], 0)
         self.assertTrue((self.root / "package/proof").exists())
+
+    def test_planned_finish_requires_real_qa_and_keeps_owned_run_active(self):
+        self.start()
+        plan = {"checks": {"unit": {"argv": [sys.executable, "-c", "print('fixture PASS')"],
+                                    "scope": ["source.py"], "coverage": ["unit"]}}}
+        ref = self.cli("plan", "--receipt", self.receipt, "--name", "acceptance", "--json", json.dumps(plan))["plan"]
+        self.cli("run", "--receipt", self.receipt, "--plan", ref, "--id", "unit", "--name", "unit-r1")
+        args = ("finish", "--receipt", self.receipt, "--direct", "--stopped", "--stop-evidence", "fixture commands ended")
+        blocked = self.cli(*args, expected=1)
+        self.assertEqual(blocked["error"], "qa_required_before_finish")
+        self.assertTrue(blocked["active_preserved"])
+        self.assertEqual(R.status(self.root)["state"]["status"], "running")
+        self.cli("report", "--receipt", self.receipt, "--kind", "qa", "--name", "concerns", "--json", '{"gate":"CONCERNS"}')
+        self.assertEqual(self.cli(*args, expected=1)["error"], "qa_required_before_finish")
+        self.cli("qa", "--receipt", self.receipt, "--plan", ref, "--name", "final")
+        final = self.cli(*args)
+        self.assertTrue(final["delivery_sealed"])
+        self.assertTrue(final["coverage_complete"])
+
+    def test_legacy_finish_without_plan_stays_compatible_and_explains_unsealed_receipt(self):
+        self.start()
+        final = self.cli("finish", "--receipt", self.receipt, "--direct", "--stopped", "--stop-evidence", "fixture ended")
+        self.assertEqual(final["status"], "completed")
+        self.assertFalse(final["delivery_sealed"])
+        self.assertIsNotNone(final["delivery_reason"])
+        self.assertIn("accepted", final["delivery_detail"])
+
+    def test_planned_finish_rejects_stale_pass_and_keeps_active_run(self):
+        original_root = self.root
+        for mutation in ("input", "log", "later_failure", "new_plan"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                self.root = Path(directory).resolve()
+                try:
+                    (self.root / "PIPELINE.md").write_text("fixture contract")
+                    (self.root / "source.py").write_text("stable")
+                    self.start()
+                    check = {"argv": [sys.executable, "-c", "print('fixture PASS')"],
+                             "scope": ["source.py"], "coverage": ["unit"]}
+                    plan = {"checks": {"unit": check}}
+                    ref = self.cli("plan", "--receipt", self.receipt, "--name", "initial", "--json", json.dumps(plan))["plan"]
+                    result = self.cli("run", "--receipt", self.receipt, "--plan", ref, "--id", "unit", "--name", "executed")
+                    self.cli("qa", "--receipt", self.receipt, "--plan", ref, "--name", "approved")
+                    proof = json.loads((self.root / result["report"]).read_text())["payload"]
+                    if mutation == "input":
+                        (self.root / "source.py").write_text("changed after QA")
+                    elif mutation == "log":
+                        (self.root / proof["log_path"]).write_text("changed after QA")
+                    elif mutation == "later_failure":
+                        identity = json.loads(Path(self.receipt).read_text())
+                        (self.root / "later.log").write_text("observed failure")
+                        E.record_check(self.root, identity["run_id"], identity["owner_token"], "later",
+                                       command=proof["command"], scope=proof["scope"], environment=proof["environment"],
+                                       exit_code=1, log_path="later.log", coverage=["other"],
+                                       started_fingerprint=E.fingerprint(self.root, proof["scope"]))
+                    else:
+                        plan["checks"]["added"] = {**check, "coverage": ["metadata"]}
+                        self.cli("plan", "--receipt", self.receipt, "--name", "new-plan", "--json", json.dumps(plan))
+                    blocked = self.cli("finish", "--receipt", self.receipt, "--direct", "--stopped",
+                                       "--stop-evidence", "fixture ended", expected=1)
+                    self.assertTrue(blocked["active_preserved"])
+                    self.assertEqual(R.status(self.root)["state"]["status"], "running")
+                    self.assertIsNotNone(R.status(self.root)["active"])
+                finally:
+                    self.root = original_root
 
     def test_changed_source_reruns_and_coverage_is_not_silently_relabelled(self):
         self.start()
