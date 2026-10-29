@@ -23,6 +23,89 @@ def _owned(base, run_id, owner):
     return path, state
 
 
+def _held(plan):
+    return any(a.get("recovery_hold", {}).get("status") == "held" for a in plan.get("attempts", []))
+
+
+def _recovery_blocked(root, state):
+    for attempt in state.get("release_plan", {}).get("attempts", []):
+        hold = attempt.get("recovery_hold")
+        if not hold:
+            continue
+        if hold.get("status") != "resolved":
+            return True
+        try:
+            _recovery_evidence(root, state, attempt, hold["evidence"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return True
+    return False
+
+
+def _recovery_evidence(root, state, attempt, evidence):
+    run_id, owner = state["run_id"], state["owner_token"]
+    if (not isinstance(evidence, dict) or evidence.get("run_id") != run_id
+            or evidence.get("path") not in state["artifacts"]):
+        raise ValueError("recovery evidence must be registered in this run")
+    payload = D._read_reference(Path(root).resolve(strict=True), evidence, "release_recovery")
+    report = E.read_report(root, run_id, evidence["path"], kind="release_recovery")
+    recorded = R._timestamp(report["recorded_at"])
+    stop = payload.get("stop_evidence")
+    boundary = R._timestamp(attempt["recovery_hold"]["held_at"])
+    if attempt.get("cancel_requested_at"):
+        boundary = max(boundary, R._timestamp(attempt["cancel_requested_at"]))
+    if (not boundary < recorded <= R._timestamp(R._now())
+            or payload.get("attempt") != attempt["name"] or payload.get("executors_stopped") is not True
+            or payload.get("remote_state") not in {"not_activated", "safely_rolled_back"}
+            or not isinstance(stop, str) or not stop.strip() or owner in stop):
+        raise ValueError("fresh attempt-bound stopped and safe remote recovery evidence required")
+
+
+def _hold(attempt, reason):
+    if attempt.get("recovery_hold", {}).get("status") != "held":
+        attempt["recovery_hold"] = {"status": "held", "held_at": R._now(), "reason": reason}
+
+
+def cancel_attempt(root, run_id, owner_token, name, *, reason):
+    """Record caller cancellation only; this API does not stop local or remote work."""
+    if not isinstance(reason, str) or not reason.strip() or owner_token in reason:
+        raise ValueError("cancellation reason must be nonempty and exclude owner credentials")
+    with R._write_guard(root) as base:
+        path, state = _owned(base, run_id, owner_token)
+        attempt = next((a for a in state.get("release_plan", {}).get("attempts", []) if a["name"] == name), None)
+        if not attempt or attempt["phase"] not in {"build", "activate"}:
+            raise ValueError("cancellation requires a registered build or activation attempt")
+        if attempt.get("cancel_requested_at") and attempt.get("recovery_hold", {}).get("status") == "held":
+            return deepcopy(attempt)
+        attempt.update(cancel_requested_at=R._now(), cancel_reason=reason)
+        _hold(attempt, "cancellation_requested")
+        state["release_plan"].pop("closeout", None)
+        state["updated_at"] = R._now()
+        R._atomic(path, state)
+        return deepcopy(attempt)
+
+
+def reconcile(root, run_id, owner_token, name, *, evidence):
+    """Release a hold using current immutable caller-verified recovery evidence.
+
+    The caller must inspect the real executor and remote target. This adapter
+    validates the observation's binding; it cannot itself establish remote state.
+    """
+    with R._write_guard(root) as base:
+        path, state = _owned(base, run_id, owner_token)
+        attempt = next((a for a in state.get("release_plan", {}).get("attempts", []) if a["name"] == name), None)
+        if not attempt or attempt.get("recovery_hold", {}).get("status") != "held":
+            raise ValueError("attempt has no unresolved recovery hold")
+        if attempt["status"] == "running" or any(c["name"] == name for c in state.get("running_checks", [])):
+            raise ValueError("original executor is still registered running")
+        _recovery_evidence(root, state, attempt, evidence)
+        hold = attempt["recovery_hold"]
+        hold.update(status="resolved", resolved_at=R._now(), evidence=deepcopy(evidence))
+        state["updated_at"] = R._now()
+        R._atomic(path, state)
+        return {"attempt": name, "recovery_blocked": _recovery_blocked(root, state),
+                "release_accepted": False}
+
+
 def prepare(root, run_id, owner_token, *, required_before=None, required_after=None):
     """Agent-maintained extra requirements can strengthen, never erase defaults."""
     before = sorted({"release_preflight", "runner_compatibility"} | set(E.coverage_labels(required_before)))
@@ -134,7 +217,7 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
     candidate = _candidate(root, state, coverage)
     if phase == "activate" and not candidate:
         raise ValueError("validated candidate missing or changed; do not activate")
-    if phase == "smoke" and not _activated(plan, candidate):
+    if phase == "smoke" and not _activated(plan, candidate) and not (_held(plan) and candidate):
         raise ValueError("candidate has not been successfully activated")
     labels = sorted(set(E.coverage_labels(options.pop("coverage", None))) | {PHASES[phase]})
     # Let the common runner verify requested command, scope and CURRENT process
@@ -155,19 +238,29 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
     with R._write_guard(root) as base:
         path, current = _owned(base, run_id, owner_token)
         attempts = current["release_plan"]["attempts"]
+        if phase in {"build", "activate"}:
+            if _recovery_blocked(root, current):
+                raise ValueError("release recovery hold unresolved; inspect and reconcile before retry")
+            if any(a["phase"] in {"build", "activate"} and a["status"] == "running" for a in attempts):
+                raise ValueError("build or activation already running")
+            current_coverage = _coverage(root, current, current["release_plan"]["required_before"])
+            latest_candidate = _candidate(root, current, current_coverage)
+            if (current_coverage["missing"] or (latest_candidate or {}).get("id") != (candidate or {}).get("id")):
+                raise ValueError("release prechecks or candidate changed while registering")
         identity = candidate["id"] if candidate else None
         related = [a for a in attempts if a["phase"] == "activate" and a["candidate_id"] == identity]
         if phase == "activate" and any(a["status"] == "passed" for a in related):
             raise ValueError("candidate already activated; continue smoke and closeout")
         if phase == "activate" and (any(a["status"] == "running" for a in related) or len(related) >= 2):
             raise ValueError("activation recovery limit reached or activation running; stop and report blocker")
-        attempt = {"name": name, "phase": phase, "candidate_id": identity, "status": "running", "report": None}
+        attempt = {"name": name, "phase": phase, "candidate_id": identity, "status": "running", "report": None,
+                   "started_at": R._now()}
         if any(a["name"] == name for a in attempts):
             raise ValueError("release attempt name already exists")
         attempts.append(attempt)
         current["release_plan"].pop("closeout", None)
         R._atomic(path, current)
-    result, accepted = None, False
+    result, accepted, completed_normally = None, False, False
     try:
         result = C.execute_check(root, run_id, owner_token, name, coverage=labels, **options)
         passed = result["exit_code"] == 0 and result.get("inputs_stable", result.get("reused") is True) is True
@@ -181,17 +274,41 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
             identity = {"assets": assets, **{k: payload[k] for k in ("command", "fingerprint", "environment")}}
             candidate["id"] = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         accepted = passed
-        return result
+        completed_normally = True
     finally:
         with R._write_guard(root) as base:
             path, current = _owned(base, run_id, owner_token)
             recorded = next(a for a in current["release_plan"]["attempts"] if a["name"] == name)
+            if phase in {"build", "activate"}:
+                if (not completed_normally or result is None or result.get("exit_code") in {124, 130, 137, 143, 255}
+                        or result.get("exit_code", 0) < 0
+                        or result.get("result_class") in {"timeout", "interrupted"}):
+                    _hold(recorded, "execution_outcome_unknown")
+                if recorded.get("cancel_requested_at") or recorded.get("recovery_hold", {}).get("status") == "held":
+                    accepted = False
+            report = result["report"] if result else None
+            if report is None:
+                observed = f"tmp/pipeline/runs/{run_id}/artifacts/check/{name}.json"
+                if observed in current["artifacts"]:
+                    report = observed
             recorded.update(status="passed" if accepted else "failed",
-                            report=result["report"] if result else None)
+                            report=report, finished_at=R._now())
+            if result is None and report is not None:
+                # The runner can register raw interruption evidence before it
+                # re-raises. Preserve that observation without declaring PASS.
+                try:
+                    observed = E.read_report(root, run_id, report, kind="check")["payload"]
+                    recorded["result"] = {k: observed[k] for k in ("exit_code", "result_class") if k in observed}
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
+            if result is not None:
+                recorded["result"] = {k: result[k] for k in ("exit_code", "result_class") if k in result}
+                result.update(release_accepted=accepted, recovery_blocked=_recovery_blocked(root, current))
             if phase == "build" and recorded["status"] == "passed" and candidate:
                 current["release_plan"]["candidate"] = candidate
             current["updated_at"] = R._now()
             R._atomic(path, current)
+    return result
 
 
 def _activated(plan, candidate):
@@ -201,6 +318,8 @@ def _activated(plan, candidate):
 
 def _acceptance(root, state, pending):
     plan = state.get("release_plan", {})
+    if _recovery_blocked(root, state):
+        raise ValueError("release recovery hold unresolved; cannot accept or finish")
     required = sorted(set(plan.get("required_before", [])) | set(plan.get("required_after", []))
                       | {"build", "release_activation"} | set(state.get("inherited_required_checks") or []))
     coverage = _coverage(root, state, required)
