@@ -163,6 +163,40 @@ class InputFingerprintTests(unittest.TestCase):
                  for path in self.root.rglob("*") if path.is_file()}
         self.assertEqual(before, after)
 
+    def test_overlapping_scopes_read_each_file_once_and_validate_all_declarations(self):
+        original = Path.read_bytes
+        reads = []
+        def counted(path):
+            reads.append(path)
+            return original(path)
+        expected = self.both()
+        for index, interface in enumerate((lambda scope: METRICS.fingerprint(self.root, scope, self.environment),
+                                           lambda scope: EVIDENCE.fingerprint(self.root, scope))):
+            for scope in (["src", "src/a.py", "src/.", "src"], ["src/a.py", "src"]):
+                reads.clear()
+                with patch.object(Path, "read_bytes", counted):
+                    self.assertEqual(interface(scope), expected[index])
+                self.assertEqual(reads, [self.file])
+            with self.assertRaises(ValueError):
+                interface(["src", "src/../src/a.py"])
+            (self.source / "alias").symlink_to(self.file)
+            with self.assertRaises(ValueError):
+                interface(["src/a.py", "src/alias"])
+            (self.source / "alias").unlink()
+
+    def test_later_sibling_mutation_of_cached_or_missing_input_is_rejected(self):
+        second = self.root / "second"
+        second.write_text("second")
+        original = Path.read_bytes
+        for first in ("src/a.py", "missing"):
+            def changing(path):
+                value = original(path)
+                if path == second:
+                    (self.root / first).write_text("changed")
+                return value
+            with patch.object(Path, "read_bytes", changing), self.assertRaisesRegex(ValueError, "changed during fingerprint"):
+                SHARED.fingerprint(self.root, [first, "second", first])
+
     @unittest.skipUnless(hasattr(os, "mkfifo"), "requires POSIX fifo")
     def test_special_files_fail_without_attempting_blocking_read(self):
         os.mkfifo(self.source / "pipe")
