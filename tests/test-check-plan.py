@@ -115,7 +115,11 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(self.qa(plan, "inputchanged")["gate"], "CONCERNS")
         (self.root / "input").write_text("stable")
         with patch.dict(os.environ, {"PLAN_TEST_CONTEXT": "changed"}):
-            self.assertEqual(self.qa(plan, "envchanged")["gate"], "CONCERNS")
+            changed = self.qa(plan, "envchanged")
+            self.assertEqual(changed["gate"], "CONCERNS")
+            self.assertEqual(changed["environment_diagnostics"]["unit"]["status"], "known")
+            self.assertTrue(changed["environment_diagnostics"]["unit"]["other_environment_changed"])
+            self.assertNotIn("PLAN_TEST_CONTEXT", json.dumps(changed["environment_diagnostics"]))
         proof = E.read_report(self.root, self.run, result["report"])["payload"]
         (self.root / proof["log_path"]).write_text("edited")
         self.assertEqual(self.qa(plan, "logchanged")["gate"], "CONCERNS")
@@ -250,6 +254,83 @@ class PlanTests(unittest.TestCase):
             payload = P.read_plan(self.root, self.run, self.owner, plan)
             self.assertEqual(payload["checks"]["unit"]["argv"], argv)
             self.assertEqual(self.qa(plan)["gate"], "CONCERNS")
+
+    def test_read_plan_does_not_rehash_inactive_check_inputs(self):
+        plan = self.save({f"case{i}": copy.deepcopy(self.check) for i in range(12)})
+        with patch.object(E, "fingerprint", side_effect=AssertionError("plan reads must not scan input contents")):
+            for _ in range(12):
+                self.assertEqual(len(P.read_plan(self.root, self.run, self.owner, plan)["checks"]), 12)
+
+    def test_qa_report_reads_grow_linearly_for_one_operation(self):
+        checks = {f"case{i}": {**self.check, "argv": [sys.executable, "-B", "-c", f"print({i})"]}
+                  for i in range(10)}
+        plan = self.save(checks)
+        for key in checks:
+            self.execute(plan, name=key, key=key)
+        with patch.object(E, "read_report", wraps=E.read_report) as reads:
+            result = self.qa(plan)
+        self.assertEqual(result["gate"], "PASS")
+        self.assertLessEqual(reads.call_count, 4 * len(checks) + 3)
+
+    def test_additive_plan_reuses_identical_check_and_preserves_origin(self):
+        self.check["argv"][-1] = "from pathlib import Path; p=Path('count'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1')"
+        first_plan = self.save(name="first-plan")
+        first = self.execute(first_plan)
+        metadata = {**self.check, "argv": [sys.executable, "-B", "-c", "print('metadata')"], "coverage": ["metadata"]}
+        second_plan = self.save({"unit": self.check, "metadata": metadata}, name="second-plan")
+        carried = self.execute(second_plan, "carried", impact_covered=True)
+        self.assertTrue(carried["reused"])
+        self.assertEqual(carried["report"], first["report"])
+        self.assertEqual((self.root / "count").read_text(), "1")
+        self.assertEqual(self.qa(second_plan)["check_failures"], {"metadata": "not_executed"})
+        self.execute(second_plan, "metadata", key="metadata")
+        again = self.execute(second_plan, "carried-again", impact_covered=True)
+        binding = E.read_report(self.root, self.run, again["planned_report"])["payload"]
+        self.assertEqual(binding["carried_from_plan"], first_plan)
+        self.assertEqual(self.qa(second_plan, "complete")["gate"], "PASS")
+        data = json.loads((self.root / first_plan).read_text())
+        data["payload"]["checks"]["unit"]["coverage"] = ["altered"]
+        (self.root / first_plan).write_text(json.dumps(data))
+        self.assertEqual(self.qa(second_plan, "originchanged")["gate"], "CONCERNS")
+
+    def test_plan_carry_forward_cannot_ignore_new_failure_or_relabel_coverage(self):
+        self.check["argv"][-1] = "from pathlib import Path; p=Path('count'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1')"
+        first_plan = self.save(name="first-plan")
+        first = self.execute(first_plan)
+        proof = E.read_report(self.root, self.run, first["report"])["payload"]
+        (self.root / "failed.log").write_text("observed failure")
+        E.record_check(self.root, self.run, self.owner, "newfailure", command=proof["command"],
+                       scope=proof["scope"], environment=proof["environment"], exit_code=1,
+                       log_path="failed.log", started_fingerprint=E.fingerprint(self.root, proof["scope"]),
+                       coverage=proof["coverage"])
+        next_plan = self.save(name="next-plan")
+        self.assertFalse(self.execute(next_plan, "retry", impact_covered=True)["reused"])
+        renamed = self.save({"unit": {**self.check, "coverage": ["other"]}}, name="relabeled")
+        self.assertFalse(self.execute(renamed, "differentcoverage", impact_covered=True)["reused"])
+        self.assertEqual((self.root / "count").read_text(), "3")
+
+    def test_input_path_safety_remains_at_execution_after_plan_read(self):
+        (self.root / "directory").mkdir()
+        (self.root / "directory/file").write_text("safe")
+        self.check["scope"] = ["directory"]
+        plan = self.save()
+        (self.root / "directory/file").unlink()
+        (self.root / "directory/file").symlink_to(self.root / "input")
+        P.read_plan(self.root, self.run, self.owner, plan)
+        with self.assertRaises(ValueError):
+            self.execute(plan)
+        self.assertEqual(self.qa(plan)["gate"], "CONCERNS")
+
+    def test_qa_rejects_evidence_appended_during_snapshot_validation(self):
+        plan = self.save()
+        self.execute(plan)
+        original = E.reusable_check
+        def observe(*args, **kwargs):
+            result = original(*args, **kwargs)
+            E.write_report(self.root, self.run, self.owner, "review", "concurrent", {"observed": True})
+            return result
+        with patch.object(E, "reusable_check", side_effect=observe):
+            self.assertEqual(self.qa(plan)["check_failures"]["snapshot"], "evidence_changed_during_qa")
 
 
 if __name__ == "__main__":
