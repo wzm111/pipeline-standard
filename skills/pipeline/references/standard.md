@@ -44,7 +44,7 @@ python3 <runner> finish --project <root> --receipt <receipt> --direct --stopped 
 
 scope包含命令真实依赖的源码、用例、工具/配置与依赖身份；例中路径不是所有项目的固定范围。name区分批次/轮次，coverage使用不随重试变化的语义类别；局部用例不能冒充全量门禁。impact-covered仅在影响面确已覆盖时传入。report的PASS由实际验收决定，CLI不会自动将命令成功转为业务通过。finish不代替终止执行者；实际委派时省略direct并先关闭角色派发。update可调整stage/activity，--help按需查参数；高级恢复、浏览器等继续用既有接口。
 
-多个验收项或开发/QA交接改用[检查计划](check-plan.md)的plan/run/qa，共享稳定类别，不手工抄写两份列表。子包检查可传`check --cwd <真实子目录>`；目录或运行器不确定时先用只读preflight，scope仍从项目根计算。成功finish自动置done；开发、测试和等待的实际切换仍及时update，不在收尾推算旧阶段耗时。
+多个验收项或开发/QA交接改用[检查计划](check-plan.md)的plan/run/qa，共享稳定类别，不手工抄写两份列表；采用计划后，CLI缺少QA PASS会保留活动run并提示先验收，不能跑完命令就直接finish。子包检查可传`check --cwd <真实子目录>`；目录或运行器不确定时先用只读preflight，scope仍从项目根计算。成功finish自动置done，并返回未封存交付的具体原因；开发、测试和等待的实际切换仍及时update，不在收尾推算旧阶段耗时。
 
 CLI不生成Python字节码缓存，避免自身导入改动被计入源码输入。直接通过Python API操作且脚本目录也在检查scope内时，使用`python3 -B`或`PYTHONDONTWRITEBYTECODE=1`运行，避免无关缓存更新使证据失效；这不允许忽略真实生成产物或源码变化。
 
