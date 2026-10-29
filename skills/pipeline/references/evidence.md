@@ -43,6 +43,8 @@ environment补充本次实际使用的运行时、工具版本和必要外部状
 
 统一入口和CLI的`reuse_decision`随结果返回并落盘，给出命中或未复用原因及候选引用，如impact_not_confirmed、no_matching_check、inputs_changed、command_or_environment_changed、coverage_changed、log_changed、check_not_passed。不输出环境原值；通常据此决定是否需要排查，不再为解释一次重跑重新读取全部报告。最新同命令/范围/用途的失败或失效证据阻止回退旧PASS，即使环境不同；未复用本身不代表浪费，不能为命中率忽略依赖或改贴覆盖标签。
 
+新记录的observed_environment_diagnostics独立于原环境身份；环境失配时environment_changes只给允许的运行环境键名、其他环境是否变化或unknown，不返回原值及任意未知键名。它用于定位差异，不放宽匹配。单次输入扫描复用已核验路径，避免重叠scope重复读内容，仍校验所有声明及扫描结束时的变化；操作间不沿用旧快照。
+
 coverage标明该命令实际覆盖的验收类别（如unit/e2e/build/browser/metadata），QA required_checks来自本需求及契约。交付凭证逐项列required/covered/missing及实际来源；metadata检查不能补足unit，未声明的旧证据完整性为unknown。缺项只补对应检查，不丢弃其他有效证据；后续提交阶段不能清掉继承的原验收要求。标签变化不会直接重贴旧PASS，仍需实际匹配的证据。
 
 name是执行轮次，coverage是稳定的验收含义；不能把a-e2e-r2、a-browser-final之类每次变化的执行名直接复制为coverage。相同局部检查可用稳定e2e_service_context类别，最后全量e2e门禁使用独立类别；不能把局部PASS改标签冒充全量。直通可用pipeline_cli.py check/report，沿用同一验证引擎，不额外读取本模块源码。
