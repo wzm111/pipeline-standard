@@ -31,15 +31,21 @@ def fingerprint(project_root, paths, environment=None, *, narrow=False):
     root = Path(project_root).resolve(strict=True)
     if not root.is_dir():
         raise ValueError("project root must be a directory")
-    entries = {}
+    entries, snapshots = {}, {}
 
     def visit(path):
         _local(root, path.relative_to(root).as_posix())
         key = path.relative_to(root).as_posix()
+        if key in snapshots:
+            changed = path.exists() if snapshots[key] is None else _identity(path.stat()) != _identity(snapshots[key])
+            if changed:
+                raise ValueError("input changed during fingerprint")
+            return
         try:
             before = path.stat()
         except FileNotFoundError:
             entries[key] = {"missing": True}
+            snapshots[key] = None
             return
         if stat.S_ISDIR(before.st_mode):
             entries[key] = {"directory": True}
@@ -53,12 +59,22 @@ def fingerprint(project_root, paths, environment=None, *, narrow=False):
         _local(root, key)
         if _identity(before) != _identity(path.stat()):
             raise ValueError("input changed during fingerprint")
+        snapshots[key] = before
 
     for relative in paths:
         path = _local(root, relative)
         if narrow and path == root:
             raise ValueError("declare narrow input directories, not the project root")
         visit(path)
+    # Recheck cached inputs after the entire scan, including earlier siblings.
+    for key, before in snapshots.items():
+        path = _local(root, key)
+        if before is None:
+            if path.exists():
+                raise ValueError("input changed during fingerprint")
+            continue
+        if _identity(before) != _identity(path.stat()):
+            raise ValueError("input changed during fingerprint")
     if not entries:
         raise ValueError("at least one input required")
     if environment is not None:
