@@ -47,6 +47,45 @@ class PipelineCliTests(unittest.TestCase):
         self.assertEqual(self.cli("status")["active"], False)
         self.assertEqual(before, sorted(self.root.iterdir()))
 
+    def test_recovery_without_active_and_explicit_old_run_remains_read_only(self):
+        before = sorted(self.root.iterdir())
+        empty = self.cli("status", "--recovery")["recovery"]
+        self.assertIsNone(empty["progress"]["run_id"])
+        self.assertFalse(empty["selected_run_active"])
+        self.assertEqual(before, sorted(self.root.iterdir()))
+        old = self.start()
+        self.cli("finish", "--receipt", self.receipt, "--direct", "--stopped", "--stop-evidence", "ended")
+        current = self.start()
+        before = {str(p): (p.read_bytes(), p.stat().st_mtime_ns) for p in self.root.rglob("*") if p.is_file()}
+        result = self.cli("status", "--run-id", old["run_id"], "--recovery")
+        self.assertEqual(result["run_id"], old["run_id"])
+        self.assertEqual(result["status"], "completed")
+        self.assertFalse(result["recovery"]["selected_run_active"])
+        self.assertTrue(result["active"])
+        self.assertNotIn("owner_token", json.dumps(result))
+        self.assertNotIn("recovery", self.cli("status"))
+        self.assertEqual(self.cli("status", "--recovery")["run_id"], current["run_id"])
+        self.assertEqual(before, {str(p): (p.read_bytes(), p.stat().st_mtime_ns) for p in self.root.rglob("*") if p.is_file()})
+
+    def test_recovery_pointers_preserve_strict_reuse_and_later_failure_supersedes_pass(self):
+        self.start()
+        first = self.check("first")
+        summary = self.cli("status", "--recovery")["recovery"]
+        self.assertIn(first["report"], summary["checks"]["items"])
+        self.assertEqual((self.root / "counter").read_text(), "1")
+        self.assertTrue(self.check("valid-reuse")["reused"])
+        proof = E.read_report(self.root, R.status(self.root)["state"]["run_id"], first["report"], kind="check")["payload"]
+        state = R.status(self.root)["state"]
+        (self.root / "failed.log").write_text("observed failure")
+        E.record_check(self.root, state["run_id"], state["owner_token"], "later-failure",
+                       command=proof["command"], scope=proof["scope"], environment=proof["environment"],
+                       exit_code=1, log_path="failed.log", coverage=proof["coverage"],
+                       started_fingerprint=E.fingerprint(self.root, proof["scope"]))
+        self.cli("status", "--recovery")
+        rerun = self.check("after-failure")
+        self.assertFalse(rerun["reused"])
+        self.assertEqual((self.root / "counter").read_text(), "2")
+
     def test_cli_without_environment_flag_does_not_generate_source_caches(self):
         scripts = self.root / "isolated-skill/scripts"
         shutil.copytree(SCRIPTS, scripts, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -82,6 +121,7 @@ class PipelineCliTests(unittest.TestCase):
         plan = {"checks": {"unit": {"argv": [sys.executable, "-c", "print('fixture PASS')"],
                                     "scope": ["source.py"], "coverage": ["unit"]}}}
         ref = self.cli("plan", "--receipt", self.receipt, "--name", "acceptance", "--json", json.dumps(plan))["plan"]
+        self.assertIn(ref, self.cli("status", "--recovery")["recovery"]["plans"]["items"])
         missing = self.cli("qa", "--receipt", self.receipt, "--plan", ref, "--name", "before", expected=1)
         self.assertEqual(missing["gate"], "CONCERNS")
         self.assertEqual(missing["missing_checks"], ["unit"])
