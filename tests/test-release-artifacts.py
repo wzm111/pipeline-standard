@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -54,6 +55,33 @@ class ReleaseArtifactTests(unittest.TestCase):
         self.assertEqual(result["added"], ["generated.png", "new-empty"])
         self.file.unlink()
         self.assertIn("app.py", ARTIFACTS.compare(original, self.capture())["missing"])
+
+    def test_source_manifest_uses_actual_upload_tree_not_unfiltered_project(self):
+        project = self.root / "project"
+        project.mkdir()
+        (project / "app.py").write_bytes(self.file.read_bytes())
+        (project / "empty").mkdir()
+        (project / ".npmrc").write_text("fixture-local-config-only\n")
+        # Existing packager's output is self.tree; it intentionally omitted
+        # local config. Both manifest and transfer consume that same output.
+        shutil.copytree(self.tree, self.root / "received")
+        expected = self.capture()
+        observed = self.capture("received")
+        self.assertTrue(ARTIFACTS.compare(expected, observed)["complete"])
+        self.assertNotIn(".npmrc", expected["entries"])
+        mismatch = ARTIFACTS.compare(self.capture("project"), observed)
+        self.assertFalse(mismatch["complete"])
+        self.assertEqual(mismatch["missing"], [".npmrc"])
+
+    def test_config_in_actual_upload_remains_required_and_hash_checked(self):
+        (self.tree / ".npmrc").write_text("fixture-required-build-config\n")
+        expected = self.capture()
+        shutil.copytree(self.tree, self.root / "received")
+        config = self.root / "received/.npmrc"
+        config.write_text("changed-required-config\n")
+        self.assertEqual(ARTIFACTS.compare(expected, self.capture("received"))["changed"], [".npmrc"])
+        config.unlink()
+        self.assertEqual(ARTIFACTS.compare(expected, self.capture("received"))["missing"], [".npmrc"])
 
     def test_executable_permission_changes_and_file_directory_replacement(self):
         original = self.capture()

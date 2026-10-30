@@ -55,9 +55,11 @@ PIPELINE.md保存稳定的权限、范围、测试与上线规则；本次版本
 
 ### 源码与目标平台产物清单
 
-项目需要文件级传输/完整性核验时，可用`scripts/release_artifacts.py`的纯本地POSIX工具；既有可靠部署适配器无需重写。`capture(root, relative_directory, layer="source"|"artifact", identity={"build_id": ..., "platform": ...})`生成含文件hash、可执行位和目录的完整清单，`compare(expected, observed)`返回added/missing/changed/complete；`loads_manifest(text)`严格读取JSON。拒绝越界、软链接、扫描期间输入变化及格式歧义，不调用网络或发布命令。
+优先复用项目已有的打包、上传和完整性校验命令；已有可靠校验覆盖本次目标时，不临时再造清单或增加第二层发布协议。只有确有文件级校验缺口时，才使用`scripts/release_artifacts.py`的纯本地POSIX工具。`capture(root, relative_directory, layer="source"|"artifact", identity={"build_id": ..., "platform": ...})`完整扫描传入目录，不解析项目的上传排除规则；`compare(expected, observed)`返回added/missing/changed/complete，`loads_manifest(text)`严格读取JSON。拒绝越界、软链接、扫描期间输入变化及格式歧义，不调用网络或发布命令。
 
-- source对：传输前的源码包与目标机实际收到的同一源码包比较，保留来源build_id/platform身份。
+源码清单必须从**本次实际打包、上传的同一暂存目录**采集，文件集与排除规则由原打包步骤确定。不要对项目根或另一份Git文件列表生成清单，再与过滤后的上传包比较；不手抄一套排除规则、事后忽略差异或改变原上传策略来凑齐清单。只有归档包且已有可靠包校验时，沿用原校验，不为调用目录扫描工具重新打包。配置文件是否纳入取决于实际上传包：原流程不上传的本地配置不会进入暂存目录，实际需要上传的配置仍须完整核验，禁止为此全局忽略`.npmrc`等文件。
+
+- source对：原打包步骤形成的实际上传暂存目录与目标机实际收到的同一源码包比较，保留来源build_id/platform身份；复用这次形成的文件集，不再次扫描项目目录另造范围。
 - artifact对：在真正构建目标（如Linux）生成最终产物清单，与激活前/后实际候选产物比较，身份为实际构建ID和目标平台。
 - 两层分开保存，不把macOS本地生成的文件列表直接当Linux最终产物清单；源码一致不代表目标产物完整。layer或identity不同会拒绝比较，不能靠忽略差异放行。
 
