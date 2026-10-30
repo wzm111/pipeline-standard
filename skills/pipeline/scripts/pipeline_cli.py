@@ -50,6 +50,7 @@ def parser():
     status = sub.add_parser("status", help="compact read-only status, no credentials")
     status.add_argument("--project", default=".")
     status.add_argument("--run-id")
+    status.add_argument("--recovery", action="store_true", help="bounded registered recovery pointers; no retry permission")
     status.add_argument("--host-status", choices=["unknown", "running", "idle"], default="unknown")
     status.add_argument("--host-ended-at", help="explicit native host idle boundary, never inferred from run age")
     release_timing = sub.add_parser("release-timing", help="read-only measured release steps, no extra deployment")
@@ -118,12 +119,21 @@ def dispatch(args):
         snapshot = R.status(root, args.run_id)
         result = {**_public(snapshot["state"]), "active": snapshot["active"] is not None,
                   "unrecognized_active": snapshot["active"] == "unrecognized"}
+        if args.recovery:
+            import run_continuity as T
+            result["recovery"] = T.recovery(root, args.run_id, _snapshot=snapshot)
+            # Recovery has a bounded, credential-filtered progress projection.
+            result.update({key: result["recovery"]["progress"].get(key)
+                           for key in ("run_id", "status", "stage", "activity", "pending", "next")})
+            result["pending"] = result["recovery"]["progress"]["pending"]["items"]
         if args.host_status != "unknown" or args.host_ended_at is not None:
             import run_continuity as T
             identity = args.run_id or result["run_id"]
             if identity is not None:
                 result["observation"] = T.inspect(root, identity, host_status=args.host_status,
                                                   host_ended_at=args.host_ended_at)
+        if args.recovery and R.status(root, args.run_id) != snapshot:
+            raise ValueError("run changed during recovery snapshot; recheck status --recovery")
         return result, 0
     if args.action == "release-timing":
         import release_timing as T

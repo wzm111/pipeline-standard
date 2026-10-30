@@ -4,8 +4,104 @@ Callers must adopt these APIs explicitly; this module cannot intercept a native
 host final response or establish that an external acceptance check passed.
 """
 from copy import deepcopy
+from pathlib import PurePosixPath
 
 import run_state as R
+
+
+def recovery(project_root, run_id=None, *, _snapshot=None):
+    """Bounded registered pointers only; never validates PASS or permits retry.
+
+    Read only the run document and active marker. No receipt, report, log,
+    environment, command, old prompt or candidate asset content is inspected.
+    """
+    snapshot = R.status(project_root, run_id) if _snapshot is None else _snapshot
+    state, active = snapshot["state"], snapshot["active"]
+    owner = state.get("owner_token", "") if state else ""
+
+    def safe(value):
+        if isinstance(value, str):
+            return value.replace(owner, "[redacted]")[:256] if owner else value[:256]
+        if value is None or type(value) in {bool, int, float}:
+            return value
+        return None
+
+    def fields(item, keys):
+        return {key: safe(item[key]) for key in keys if key in item}
+
+    def bounded(items):
+        return {"items": items[-20:], "total": len(items), "omitted": max(0, len(items) - 20)}
+
+    progress = fields(state or {}, ("run_id", "status", "stage", "activity", "next", "updated_at"))
+    progress.setdefault("run_id", run_id)
+    progress.setdefault("status", None)
+    progress["pending"] = bounded([safe(v) for v in (state or {}).get("pending", [])])
+    result = {"progress": progress, "active": active is not None,
+              "unrecognized_active": active == "unrecognized",
+              "selected_run_active": bool(state and isinstance(active, dict)
+                                          and active.get("run_id") == state["run_id"]
+                                          and active.get("owner_token") == owner),
+              "notice": "Registered pointers only, not validated PASS or permission to rerun. "
+                        "Reuse requires execute_check validation; release holds require original recovery rules. "
+                        "Dispatching/working roles remain live; inspect the host before any continuation.",
+              "checks": bounded([]), "reports": bounded([]), "plans": bounded([]),
+              "roles": bounded([]), "live_role_count": 0, "running_check_count": 0,
+              "running_checks": bounded([]), "release": None}
+    if state:
+        if run_id is not None and state["run_id"] != run_id:
+            raise ValueError("run identity mismatch")
+        prefix = f"tmp/pipeline/runs/{state['run_id']}/artifacts/"
+
+        def pointer(ref):
+            if (isinstance(ref, str) and ref.startswith(prefix) and len(ref) <= 256
+                    and PurePosixPath(ref).as_posix() == ref and ".." not in PurePosixPath(ref).parts
+                    and ref.endswith(".json")):
+                return safe(ref)
+            return None
+
+        refs = [p for ref in state.get("artifacts", []) if (p := pointer(ref))]
+        result["checks"] = bounded([p for p in refs if p.startswith(prefix + "check/")])
+        result["reports"] = bounded([p for p in refs if not p.startswith(prefix + "check/")])
+        result["plans"] = bounded([p for ref in state.get("check_plans", []) if (p := pointer(ref))])
+        result["running_checks"] = bounded([fields(c, ("name", "started_at"))
+                                             for c in state.get("running_checks", [])])
+        result["running_check_count"] = len(state.get("running_checks", []))
+        actors = {}
+        for event in state.get("role_events", []):
+            actors[event["executor_id"]] = {**fields(event, ("role", "executor_id", "at")),
+                                              "event": safe(event.get("event"))}
+        for dispatch in state.get("role_dispatches", []):
+            key = dispatch.get("executor_id") or "dispatch:" + dispatch["id"]
+            actor = actors.setdefault(key, fields(dispatch, ("role", "executor_id")))
+            actor.update(fields(dispatch, ("host_executor_id", "status", "requested_at", "accepted_at", "completed_at")))
+            actor["dispatch_id"] = safe(dispatch["id"])
+        for actor in actors.values():
+            actor["live"] = (actor.get("event") not in {None, "stopped"}
+                             or actor.get("status") in {"dispatching", "working"})
+        result["live_role_count"] = sum(actor["live"] for actor in actors.values())
+        # Keep live entries ahead of closed history when the output is capped.
+        result["roles"] = bounded(sorted(actors.values(), key=lambda actor: actor["live"]))
+        plan = state.get("release_plan")
+        if plan:
+            candidate = plan.get("candidate") or {}
+            latest, holds = {}, []
+            for attempt in plan.get("attempts", []):
+                item = fields(attempt, ("name", "phase", "candidate_id", "status", "started_at", "finished_at"))
+                item["report"] = pointer(attempt.get("report"))
+                latest[attempt["phase"]] = item
+                if hold := attempt.get("recovery_hold"):
+                    holds.append({"attempt": safe(attempt["name"]),
+                                  **fields(hold, ("status", "held_at", "resolved_at", "reason")),
+                                  "evidence": pointer((hold.get("evidence") or {}).get("path"))})
+            result["release"] = {"candidate": {"id": safe(candidate.get("id")),
+                                                "check": pointer((candidate.get("check") or {}).get("path"))},
+                                 "latest_phases": bounded(list(latest.values())),
+                                 "holds": bounded(sorted(holds, key=lambda hold: hold.get("status") != "resolved")),
+                                 "unresolved_hold_count": sum(hold.get("status") != "resolved" for hold in holds),
+                                 "rerun_permitted": False, "hold_evidence_validated": False}
+    if R.status(project_root, run_id) != snapshot:
+        raise ValueError("run changed during recovery snapshot; recheck status --recovery")
+    return result
 
 
 def _text(value, name, owner):

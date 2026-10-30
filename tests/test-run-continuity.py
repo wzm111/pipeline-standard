@@ -11,6 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills/pipeline/sc
 import run_continuity as C
 import run_state as R
 import role_metrics
+import role_dispatch as D
+import release_checks as F
+import run_evidence as E
+import run_checks
 
 
 class ContinuityTests(unittest.TestCase):
@@ -40,6 +44,104 @@ class ContinuityTests(unittest.TestCase):
     def files(self):
         return {str(p): (p.read_bytes(), p.stat().st_mtime_ns)
                 for p in self.root.rglob("*") if p.is_file()}
+
+    def test_recovery_projects_latest_roles_without_reading_reports_or_writing(self):
+        first = D.begin(self.root, self.run, self.owner, "developer")
+        D.accepted(self.root, self.run, self.owner, first["id"], "worker", host_executor_id="native/worker")
+        D.complete(self.root, self.run, self.owner, first["id"], executors_stopped=True, stop_evidence="host stopped")
+        latest = D.begin(self.root, self.run, self.owner, "developer", executor_id="worker")
+        D.accepted(self.root, self.run, self.owner, latest["id"], "worker", host_executor_id="native/worker")
+        pending = D.begin(self.root, self.run, self.owner, "tester")
+        R.update(self.root, self.run, self.owner, {"next": "verify " + self.owner})
+        before = self.files()
+        with patch.object(E, "read_report", side_effect=AssertionError("must not read evidence")), \
+                patch.object(run_checks, "execute_check", side_effect=AssertionError("must not execute")):
+            summary = C.recovery(self.root)
+        roles = summary["roles"]["items"]
+        worker = next(item for item in roles if item.get("executor_id") == "worker")
+        self.assertEqual(worker["dispatch_id"], latest["id"])
+        self.assertEqual(worker["host_executor_id"], "native/worker")
+        self.assertEqual(worker["status"], "working")
+        self.assertEqual(next(item for item in roles if item["dispatch_id"] == pending["id"])["status"], "dispatching")
+        self.assertTrue(summary["selected_run_active"])
+        self.assertNotIn(self.owner, json.dumps(summary))
+        self.assertNotIn("owner_token", json.dumps(summary))
+        self.assertEqual(self.files(), before)
+        with self.assertRaisesRegex(ValueError, "live checks or roles"):
+            self.wait()
+
+    def test_recovery_is_bounded_and_rejects_concurrent_snapshot(self):
+        refs = [f"tmp/pipeline/runs/{self.run}/artifacts/qa/attempt-{i}.json" for i in range(25)]
+        R.update(self.root, self.run, self.owner, {"artifacts": refs, "pending": ["x" * 500] * 25})
+        summary = C.recovery(self.root)
+        self.assertEqual(summary["reports"]["omitted"], 5)
+        self.assertEqual(summary["reports"]["items"], refs[-20:])
+        self.assertEqual(len(summary["progress"]["pending"]["items"][0]), 256)
+        before = R.status(self.root)
+        self.at(10)
+        R.update(self.root, self.run, self.owner, {"next": "new transition"})
+        after = R.status(self.root)
+        with patch.object(R, "status", side_effect=[before, after]):
+            with self.assertRaisesRegex(ValueError, "changed during recovery"):
+                C.recovery(self.root)
+
+    def test_recovery_limits_prioritize_live_roles_and_unresolved_holds(self):
+        role_metrics.record_role_event(self.root, self.run, self.owner, "developer", "live-first", "created")
+        for i in range(25):
+            role_metrics.record_role_event(self.root, self.run, self.owner, "tester", f"closed-{i}", "created")
+            role_metrics.record_role_event(self.root, self.run, self.owner, "tester", f"closed-{i}", "stopped")
+        with R._write_guard(self.root) as base:
+            path, state = R._load_owned(base, self.run, self.owner)
+            state["running_checks"] = [{"name": f"running-{i}"} for i in range(25)]
+            state["release_plan"] = {"attempts": [
+                {"name": "old-held", "phase": "activate", "status": "failed", "recovery_hold": {"status": "held"}},
+                *[{"name": f"resolved-{i}", "phase": "activate", "status": "failed",
+                   "recovery_hold": {"status": "resolved"}} for i in range(25)]]}
+            R._atomic(path, state)
+        summary = C.recovery(self.root)
+        self.assertEqual(summary["live_role_count"], 1)
+        self.assertEqual(summary["running_check_count"], 25)
+        self.assertEqual(summary["running_checks"]["omitted"], 5)
+        self.assertTrue(next(actor for actor in summary["roles"]["items"]
+                             if actor["executor_id"] == "live-first")["live"])
+        self.assertEqual(summary["release"]["unresolved_hold_count"], 1)
+        self.assertIn("old-held", [hold["attempt"] for hold in summary["release"]["holds"]["items"]])
+        self.assertFalse(summary["release"]["rerun_permitted"])
+
+    def test_recovery_release_hold_and_activated_candidate_do_not_authorize_retry(self):
+        (self.root / "PIPELINE.md").write_text("isolated fixture")
+        (self.root / "source.py").write_text("stable input")
+        args = self.root, self.run, self.owner
+
+        def execute(name, phase, code="print('fixture')", **options):
+            return F.execute(*args, name, phase=phase, argv=[sys.executable, "-c", code],
+                             scope=["source.py"], timeout=10, **options)
+
+        execute("preflight", "preflight")
+        execute("compatibility", "compatibility")
+        execute("build", "build", "open('artifact', 'w').write('candidate')", artifact_paths=["artifact"])
+        execute("interrupted", "activate", "raise SystemExit(130)")
+        before = self.files()
+        summary = C.recovery(self.root)["release"]
+        self.assertIsNotNone(summary["candidate"]["id"])
+        self.assertEqual(summary["holds"]["items"][0]["status"], "held")
+        self.assertFalse(summary["rerun_permitted"])
+        self.assertEqual(self.files(), before)
+        with self.assertRaisesRegex(ValueError, "hold unresolved"):
+            execute("retry", "activate")
+        self.at(10)
+        evidence = E.write_report(self.root, self.run, self.owner, "release_recovery", "safe", {
+            "attempt": "interrupted", "executors_stopped": True, "stop_evidence": "host stopped",
+            "remote_state": "not_activated"})
+        import delivery
+        F.reconcile(*args, "interrupted", evidence=delivery._reference(self.root, self.run, evidence))
+        execute("activated", "activate")
+        summary = C.recovery(self.root)["release"]
+        self.assertEqual(next(item for item in summary["latest_phases"]["items"]
+                              if item["phase"] == "activate")["status"], "passed")
+        self.assertFalse(summary["rerun_permitted"])
+        with self.assertRaisesRegex(ValueError, "already activated"):
+            execute("duplicate", "activate")
 
     def test_owned_atomic_wait_preserves_identity_evidence_and_is_idempotent(self):
         before = self.files()
