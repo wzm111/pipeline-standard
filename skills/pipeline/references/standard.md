@@ -20,6 +20,8 @@
 
 每次真实派发前按models.md解析该角色模型与强度，通过role-dispatch.md在原生工具传入实际参数并记录请求/反馈；Claude与Codex分别使用其支持的参数。简单直做沿用主会话模型。后续批次复用原角色和差量上下文；QA核验已有证据并补测缺口，不重新执行相同输入/环境下有效的全部检查。生成目录或浏览器资源冲突时顺序运行，不为并行相互覆盖。
 
+真实开始实现/派发开发前更新当前run为implementation/execution；进入独立验收前更新为verification/testing。直做在首次写入前执行同样切换，不把已发生的实现时间留在planning。使用现有`update --receipt <receipt> --stage <当前阶段> --activity <实际活动>`，不为每条命令或报告新增事件；角色并行只更新主流程的真实阶段，不按单个角色反复抢写。
+
 ## 简单任务直接执行
 
 1. 契约和锁确认后尽早初始化本run，再读取paths给出的developer规则，在会话内列简短计划与验收项并直接实现。无需planner/dev/qa子agent、context、plan或retro文件；角色文件的交接路径要求只在委派时适用。使用下方CLI即可，不读run_state/run_checks等内部源码猜参数或角色路径。
