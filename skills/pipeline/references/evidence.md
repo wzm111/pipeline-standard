@@ -37,7 +37,21 @@ argv是原有获授权检查的参数列表，脚本不做shell展开或新增�
 
 environment补充本次实际使用的运行时、工具版本和必要外部状态标识，不含凭据。scope取自命令真实依赖范围；目录指纹包含新增/删除文件及可执行权限。两个证据接口共用input_fingerprint.py扫描与读取一致性校验，保留原有digest编码。`impact_covered=True`只能在确认当前变更及外部依赖均被记录范围覆盖时提供；脚本不会推断语义影响。未覆盖的服务数据、浏览器状态或未知环境变化均需补测。检查过程中输入或工具变化会标inputs_stable=false，不能在稍后恢复原文件后重新认领该PASS。
 
-必须通过浏览器等专用工具执行时，可保留run_evidence.py的fingerprint/record_check/reusable_check接口，由智能体记录真实结果；不伪称专用工具已经经由本地执行入口运行。没有Python时按报告头部规则手动核验。
+必须通过浏览器等专用工具执行时，使用`observed_checks.begin/finish`包住原宿主调用；它只记录观察，不启动工具。begin声明本次唯一observation_id、真实command/scope/environment/coverage和write_paths，保存开始指纹并占用共用检查资源、进入testing；finish仅在宿主已返回或已确认停止后，传真实exit_code、已有脱敏log_path、host_stopped=True及stop_evidence，保存起止/耗时/分类并释放资源、恢复原阶段。环境只存整体摘要；未知宿主环境不宣称机器核验。
+
+```python
+import observed_checks as O
+ticket = O.begin(root, run_id, owner_token, "browser-r1", command="native-browser acceptance",
+                 scope=["src", "tests/browser"], environment={"browser": observed_browser_version},
+                 coverage=["browser"], write_paths=["tmp/browser-profile"])
+# 仅首次begin后调用一次原生工具；返回后再执行finish。
+ref = O.finish(root, run_id, owner_token, "browser-r1", exit_code=observed_exit,
+               log_path=redacted_log_path, host_stopped=True, stop_evidence=actual_host_return)
+```
+
+同一observation_id表示同一次调用，重复begin只取原ticket，不授权再次调用宿主；恢复时先查真实宿主状态。相同返回重复finish只引用原report，结果/日志/输入冲突会拒绝。真实新调用用新ID，即使命令和日志内容相同也不能合并；开始后输入变化会保留不可复用的结果，不能贴回PASS。工具中断可在真实停止后用非零exit_code及error="interrupted"登记；没有可保存结果时按operations.md的显式恢复确认停止，不能仅因超时或无消息清理。耗时是begin至实际返回登记的观察区间，包含宿主交接，不声称是纯浏览器引擎耗时。
+
+已有`record_check/reusable_check`记录继续兼容，未知旧时间不回填；原日志、来源链和实际业务断言仍须有效。没有Python时按报告头部规则手动核验，不伪称专用工具经由本地进程执行。
 
 复用要求原exit_code=0且命令/环境/输入/日志指纹相同、影响面明确；默认只查本run登记的证据。impact_covered=True时入口自动查找最新匹配结果，无需手动传reuse_from；命中记check_reuse并跳过执行。跨run仅允许按[交付承接](delivery.md)显式继承并验证来源链，不能直接读取别的run报告作为本轮PASS。底层reusable_check仍只读，统计区分继承与实际执行。必要全量门禁在冻结后集中收口；最终业务产物验收保留。
 
