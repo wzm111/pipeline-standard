@@ -201,6 +201,10 @@ def finish(project_root, run_id, owner_token, outcome, *, executors_stopped=Fals
     _stopped(executors_stopped, stop_evidence)
     with _write_guard(project_root) as base:
         path, state = _load_owned(base, run_id, owner_token)
+        if "tasks" in state:
+            import run_tasks
+            if any(item["status"] == "running" for item in run_tasks._tasks(state)):
+                raise ValueError("end the current task explicitly before finishing the run")
         if any(item.get("status") in {"dispatching", "working"} for item in state.get("role_dispatches", [])):
             raise ValueError("close observed role dispatches after host stop before finishing")
         if outcome == "completed":

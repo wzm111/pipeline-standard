@@ -53,6 +53,9 @@ def parser():
     status.add_argument("--recovery", action="store_true", help="bounded registered recovery pointers; no retry permission")
     status.add_argument("--host-status", choices=["unknown", "running", "idle"], default="unknown")
     status.add_argument("--host-ended-at", help="explicit native host idle boundary, never inferred from run age")
+    task_status = sub.add_parser("task-status", help="read-only execution task records, not acceptance")
+    task_status.add_argument("--project", default=".")
+    task_status.add_argument("--run-id")
     release_timing = sub.add_parser("release-timing", help="read-only measured release steps, no extra deployment")
     release_timing.add_argument("--project", default=".")
     release_timing.add_argument("--run-id", required=True)
@@ -66,7 +69,7 @@ def parser():
     preflight.add_argument("--cwd")
     preflight.add_argument("argv", nargs=argparse.REMAINDER)
     owned = {}
-    for name in ("update", "check", "report", "finish", "plan", "run", "qa", "wait", "continue"):
+    for name in ("update", "check", "report", "finish", "plan", "run", "qa", "wait", "continue", "task-start", "task-end"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
@@ -74,6 +77,12 @@ def parser():
     update.add_argument("--stage")
     update.add_argument("--activity", choices=sorted(R.ACTIVITIES))
     update.add_argument("--next")
+    for action in ("task-start", "task-end"):
+        owned[action].add_argument("--task-id", required=True)
+    owned["task-start"].add_argument("--goal", required=True)
+    owned["task-start"].add_argument("--accept", action="append", required=True, dest="acceptance")
+    owned["task-end"].add_argument("--outcome", choices=["execution_ended", "paused", "aborted"], default="execution_ended")
+    owned["task-end"].add_argument("--report", action="append", dest="report_refs")
     for option in ("reason", "action", "verify"):
         owned["wait"].add_argument("--" + option, required=True, dest="wait_" + option)
     owned["continue"].add_argument("--evidence", required=True)
@@ -111,6 +120,9 @@ def dispatch(args):
     if args.action == "paths":
         return paths(), 0
     root = Path(args.project).resolve(strict=True)
+    if args.action == "task-status":
+        import run_tasks as T
+        return T.status(root, args.run_id), 0
     if args.action == "preflight":
         argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
         result = C.inspect_runner(root, argv, cwd=args.cwd)
@@ -151,6 +163,13 @@ def dispatch(args):
         return {**_public(state), "receipt": str(receipt), **paths()}, 0
     receipt = _receipt(root, args.receipt)
     run_id, owner = receipt["run_id"], receipt["owner_token"]
+    if args.action in {"task-start", "task-end"}:
+        import run_tasks as T
+        if args.action == "task-start":
+            item = T.start(root, run_id, owner, args.task_id, args.goal, args.acceptance)
+        else:
+            item = T.end(root, run_id, owner, args.task_id, outcome=args.outcome, report_refs=args.report_refs)
+        return {"run_id": run_id, "task": item, "notice": T.NOTICE}, 0
     if args.action in {"wait", "continue"}:
         import run_continuity as T
         if args.action == "wait":

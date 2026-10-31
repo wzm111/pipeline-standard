@@ -40,6 +40,14 @@
 
 状态放在 `tmp/pipeline/runs/<run_id>.json`，各 run 独立保留；不覆盖旧 `state.md` 或代码/产物。`.active` 仅保存 schema_version/run_id/owner_token。owner token 是本地归属凭证，不要写入公开报告。模块不操作 agent/进程，也不能验证调用方提供的停止证据是否真实；不能把传入 true 当作工具已替人终止 agent。旧纯文本锁无法经此接口自动迁移，调度员需先独立确认其归属与执行者，保留证据后再做受授权的迁移，不能通过猜测 token 或删除锁绕过。
 
+### 同一 run 的当前执行任务
+
+智能体可用 `pipeline_cli.py task-start --project <root> --receipt <当前receipt> --task-id <短标识> --goal '<当前目标>' --accept '<可观察验收条目>'` 开始当前需求执行段；多个验收条目重复 `--accept`。后续提交/发布需求仍沿用原 run，但须先显式结束当前 task，再用新 task-id 开始，目标和验收不能覆盖已有身份。同值重试幂等，不重复写盘；旧 task 不会重新打开。
+
+`task-end --receipt <当前receipt> --task-id <标识> [--outcome execution_ended|paused|aborted] [--report <本run原报告引用>]` 只记录调用时观测的执行段结束边界，不回填未知历史停止时间。报告必须已登记在当前 run，引用不证明 QA 仍有效。结束内容不可覆盖，同值重试幂等。状态标签不是宿主角色/进程停止证据，不替代原停止确认、QA、run 完成、发布授权或外部验收；pending、continuity_wait、计划、历史失败和 QA 次数均保留，不能通过换 task 重置。
+
+`task-status --project <root> [--run-id <已知ID>]` 只读输出当前 task 及本 run 全部 task 的目标、验收、独立起止、状态和报告引用，不输出 owner。API 对应 `run_tasks.start(root, run_id, owner, task_id, goal, acceptance)`、`end(..., outcome="execution_ended", report_refs=None)`、`status(root, run_id=None)`。起止使用原 run 时钟与归属锁，只覆盖实际登记的任务；启用之前的时间保持未知，不借 run 创建时间倒推。旧无 task 的 run 不加门禁；已启用且尚有 running task 时，finish 的所有结局均拒绝，须先显式结束 task，再走原完成/暂停/中止流程。
+
 ### 轻量计时
 
 activity仅为execution/testing/human_wait/role_wait/handoff之一，默认execution。调度员在真实阶段或等待状态改变时随update一起更新，不按命令、轮询或每条消息写事件；角色并行时仍是一条run墙钟时间线，不累加角色用时。
