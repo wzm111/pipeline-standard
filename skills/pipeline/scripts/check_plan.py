@@ -26,12 +26,14 @@ def _validate(root, checks, required, owner, inherited, *, scan_inputs=True):
     inherited = E.coverage_labels(inherited)
     if not isinstance(checks, dict) or not checks:
         raise ValueError("nonempty checks required")
-    allowed = {"argv", "scope", "coverage", "cwd", "timeout", "write_paths", "environment", "intent"}
+    allowed = {"argv", "scope", "coverage", "cwd", "timeout", "write_paths", "environment", "intent", "layer"}
     normalized = {}
     for key, value in checks.items():
         E._label(key)
         if not isinstance(value, dict) or set(value) - allowed:
             raise ValueError("unknown check fields")
+        if "layer" in value and value["layer"] not in ("quick", "final"):
+            raise ValueError("check layer must be quick or final")
         argv = value.get("argv")
         if not isinstance(argv, list) or not argv or any(not isinstance(a, str) or not a or "\0" in a for a in argv):
             raise ValueError("nonempty argv required")
@@ -119,6 +121,11 @@ def _identity(proof):
                        proof.get("cwd", ".")], sort_keys=True)
 
 
+def _execution_spec(check):
+    # Scheduling metadata cannot change the identity of the executed command.
+    return {key: value for key, value in check.items() if key != "layer"}
+
+
 def _snapshot(root, run_id, state):
     # One operation-local index; never reuse across a later execution or QA.
     snapshot = {"reports": {}, "digests": {}, "bindings": {}, "observations": {},
@@ -148,13 +155,14 @@ def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=Fa
                 continue
             try:
                 source = _read_plan(root, run_id, owner, old_plan, state, snapshot)
-                if source["checks"].get(check_id) == check:
+                if (check_id in source["checks"]
+                        and _execution_spec(source["checks"][check_id]) == _execution_spec(check)):
                     candidate_plan, previous = old_plan, binding
                     break
             except (OSError, ValueError, KeyError, TypeError):
                 # Unconfirmed history cannot authorize reuse.
                 continue
-    args = dict(check)
+    args = _execution_spec(check)
     reusable = previous is not None and _valid(root, run_id, owner, state,
                                                candidate_plan, check_id, check, snapshot)[0] is not None
     result = C.execute_check(root, run_id, owner, name, **args,
@@ -181,7 +189,8 @@ def _valid(root, run_id, owner, state, plan_ref, check_id, check, snapshot=None)
         origin = latest["carried_from_plan"]
         original = _read_plan(root, run_id, owner, origin, state, snapshot)
         if (latest.get("carried_from_plan_sha256") != _cached_digest(root, origin, snapshot)
-                or original["checks"].get(check_id) != check):
+                or check_id not in original["checks"]
+                or _execution_spec(original["checks"][check_id]) != _execution_spec(check)):
             return None, "carried_plan_changed"
     ref = latest["result"]["report"]
     if ref not in state["artifacts"]:
@@ -301,8 +310,9 @@ def verify_plan(root, run_id, owner, plan_ref, name, summary=""):
     """
     E._label(name)
     plan = read_plan(root, run_id, owner, plan_ref)
+    ordered = sorted(plan["checks"], key=lambda key: plan["checks"][key].get("layer") != "quick")
     attempts = [(check_id, f"{name}-c{index}")
-                for index, check_id in enumerate(plan["checks"], 1)]
+                for index, check_id in enumerate(ordered, 1)]
     for _, attempt in attempts:
         E._label(attempt)
     results = []
@@ -315,7 +325,7 @@ def verify_plan(root, run_id, owner, plan_ref, name, summary=""):
     ref = qa_from_plan(root, run_id, owner, plan_ref, name, summary)
     payload = E.read_report(root, run_id, ref, kind="qa")["payload"]
     return {"run_id": run_id, "plan_ref": plan_ref, "report": ref,
-            "results": results, "skipped_checks": list(plan["checks"])[len(results):],
+            "results": results, "skipped_checks": ordered[len(results):],
             **{key: payload[key] for key in ("gate", "required_checks", "missing_checks",
                                              "check_failures", "environment_diagnostics")},
             "notice": "Plan evidence judgment only; independent business QA and original completion guards still apply."}
