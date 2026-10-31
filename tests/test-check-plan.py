@@ -38,6 +38,30 @@ class PlanTests(unittest.TestCase):
         ref = P.qa_from_plan(self.root, self.run, self.owner, plan, name)
         return E.read_report(self.root, self.run, ref, kind="qa")["payload"]
 
+    def test_verify_api_reuses_valid_results_and_does_not_finish(self):
+        plan = self.save()
+        first = P.verify_plan(self.root, self.run, self.owner, plan, "first")
+        second = P.verify_plan(self.root, self.run, self.owner, plan, "second")
+        self.assertEqual(first["gate"], "PASS")
+        self.assertFalse(first["results"][0]["reused"])
+        self.assertTrue(second["results"][0]["reused"])
+        self.assertEqual(second["skipped_checks"], [])
+        self.assertEqual(R.status(self.root)["state"]["status"], "running")
+
+    def test_verify_api_failure_stops_later_commands_but_records_missing_qa(self):
+        failed = copy.deepcopy(self.check)
+        failed["argv"][-1] = "raise SystemExit(1)"
+        other = copy.deepcopy(self.check)
+        other["argv"][-1] = "from pathlib import Path; Path('heavy-ran').touch()"
+        other["coverage"] = ["heavy"]
+        plan = self.save({"first": failed, "heavy": other})
+        result = P.verify_plan(self.root, self.run, self.owner, plan, "verify")
+        self.assertEqual(result["gate"], "CONCERNS")
+        self.assertEqual(result["skipped_checks"], ["heavy"])
+        self.assertEqual(result["check_failures"]["heavy"], "not_executed")
+        self.assertFalse((self.root / "heavy-ran").exists())
+        self.assertIn(result["report"], R.status(self.root)["state"]["artifacts"])
+
     def test_one_plan_defines_real_coverage_required_and_reuse(self):
         self.check["argv"][-1] = "from pathlib import Path; p=Path('count'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1')"
         plan = self.save(required=["unit"])

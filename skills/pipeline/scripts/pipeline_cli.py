@@ -69,7 +69,7 @@ def parser():
     preflight.add_argument("--cwd")
     preflight.add_argument("argv", nargs=argparse.REMAINDER)
     owned = {}
-    for name in ("update", "check", "report", "finish", "plan", "run", "qa", "wait", "continue", "task-start", "task-end"):
+    for name in ("update", "check", "report", "finish", "plan", "run", "qa", "verify", "wait", "continue", "task-start", "task-end"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
@@ -102,12 +102,18 @@ def parser():
     report.add_argument("--json", required=True, dest="payload")
     owned["plan"].add_argument("--name", required=True)
     owned["plan"].add_argument("--json", required=True, dest="payload", help="agent-maintained checks and required_checks")
-    for action in ("run", "qa"):
+    for action in ("run", "qa", "verify"):
         owned[action].add_argument("--plan", required=True)
         owned[action].add_argument("--name", required=True)
     owned["run"].add_argument("--id", required=True, dest="check_id")
     owned["run"].add_argument("--impact-covered", action="store_true")
     owned["qa"].add_argument("--summary", default="")
+    verify = owned["verify"]
+    verify.add_argument("--summary", default="")
+    verify.add_argument("--finish", action="store_true", help="explicitly complete after PASS using original completion guards")
+    verify.add_argument("--stopped", action="store_true", help="only after host confirms all run executors stopped")
+    verify.add_argument("--stop-evidence")
+    verify.add_argument("--direct", action="store_true", help="with --finish only; confirm no actual role delegation occurred")
     finish = owned["finish"]
     finish.add_argument("--outcome", choices=sorted(R.FINAL), default="completed")
     finish.add_argument("--stopped", action="store_true", help="only after host confirms all run executors stopped")
@@ -179,8 +185,21 @@ def dispatch(args):
             state = T.resume_work(root, run_id, owner, evidence=args.evidence)
         return {**_public(state), "handoff": {key: state["continuity_wait"].get(key)
                 for key in ("status", "reason", "action", "verify")}}, 0
-    if args.action in {"plan", "run", "qa"}:
+    if args.action in {"plan", "run", "qa", "verify"}:
         import check_plan as P
+        if args.action == "verify":
+            if args.finish:
+                R._stopped(args.stopped, args.stop_evidence)
+            elif args.direct or args.stopped or args.stop_evidence is not None:
+                raise ValueError("verify stopping/direct options require explicit --finish")
+            result = P.verify_plan(root, run_id, owner, args.plan, args.name, summary=args.summary)
+            if result["gate"] != "PASS":
+                return result, 1
+            if args.finish:
+                completion, code = _finish(root, run_id, owner, stopped=args.stopped,
+                                            stop_evidence=args.stop_evidence, direct=args.direct)
+                return {**result, "completion": completion}, code
+            return result, 0
         if args.action == "plan":
             payload = json.loads(args.payload)
             if not isinstance(payload, dict) or set(payload) - {"checks", "required_checks"}:
@@ -210,9 +229,15 @@ def dispatch(args):
     if args.action == "report":
         relative = E.write_report(root, run_id, owner, args.kind, args.name, json.loads(args.payload))
         return {"run_id": run_id, "report": relative}, 0
-    R._stopped(args.stopped, args.stop_evidence)
+    return _finish(root, run_id, owner, outcome=args.outcome, stopped=args.stopped,
+                   stop_evidence=args.stop_evidence, direct=args.direct)
+
+
+def _finish(root, run_id, owner, *, outcome="completed", stopped=False, stop_evidence=None, direct=False):
+    """Shared original closeout path, including same-process verify completion."""
+    R._stopped(stopped, stop_evidence)
     current = R.status(root, run_id)["state"]
-    if args.outcome == "completed" and current.get("check_plans"):
+    if outcome == "completed" and current.get("check_plans"):
         latest_qa = next((ref for ref in reversed(current.get("artifacts", []))
                           if "/artifacts/qa/" in ref), None)
         payload = E.read_report(root, run_id, latest_qa, kind="qa")["payload"] if latest_qa else None
@@ -232,10 +257,10 @@ def dispatch(args):
                     "latest_qa": latest_qa, "active_preserved": True,
                     "next_action": "Revalidate failed or missing checks and record the current QA judgment.",
                     **{key: validation[key] for key in ("missing_checks", "check_failures", "environment_diagnostics")}}, 1
-    if args.direct:
+    if direct:
         D.confirm_direct(root, run_id, owner)
-    state = R.finish(root, run_id, owner, args.outcome,
-                     executors_stopped=args.stopped, stop_evidence=args.stop_evidence)
+    state = R.finish(root, run_id, owner, outcome,
+                     executors_stopped=stopped, stop_evidence=stop_evidence)
     delivery = state.get("delivery_status", {})
     coverage = delivery.get("coverage", {})
     missing = coverage.get("missing")

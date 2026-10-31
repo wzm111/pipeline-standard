@@ -290,3 +290,32 @@ def inspect_plan(root, run_id, owner, plan_ref, summary=""):
 def qa_from_plan(root, run_id, owner, plan_ref, name, summary=""):
     return E.write_report(root, run_id, owner, "qa", name,
                           inspect_plan(root, run_id, owner, plan_ref, summary))
+
+
+def verify_plan(root, run_id, owner, plan_ref, name, summary=""):
+    """Execute/revalidate one plan then record QA in this actual environment.
+
+    Stops scheduling after the first failed command. Existing evidence is only
+    reused through run_planned's full current validation; no environment replay.
+    This records evidence, not independent business acceptance or run completion.
+    """
+    E._label(name)
+    plan = read_plan(root, run_id, owner, plan_ref)
+    attempts = [(check_id, f"{name}-c{index}")
+                for index, check_id in enumerate(plan["checks"], 1)]
+    for _, attempt in attempts:
+        E._label(attempt)
+    results = []
+    for check_id, attempt in attempts:
+        result = run_planned(root, run_id, owner, plan_ref, check_id, attempt, impact_covered=True)
+        results.append({key: result[key] for key in ("check_id", "exit_code", "reused", "report", "planned_report")})
+        if result["exit_code"] != 0:
+            break
+    R.update(root, run_id, owner, {"stage": "acceptance", "activity": "testing"})
+    ref = qa_from_plan(root, run_id, owner, plan_ref, name, summary)
+    payload = E.read_report(root, run_id, ref, kind="qa")["payload"]
+    return {"run_id": run_id, "plan_ref": plan_ref, "report": ref,
+            "results": results, "skipped_checks": list(plan["checks"])[len(results):],
+            **{key: payload[key] for key in ("gate", "required_checks", "missing_checks",
+                                             "check_failures", "environment_diagnostics")},
+            "notice": "Plan evidence judgment only; independent business QA and original completion guards still apply."}
