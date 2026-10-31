@@ -209,7 +209,8 @@ class RunStateTests(unittest.TestCase):
             blocked.append(active_exists)
         with patch.object(RUN.os, "fsync", side_effect=try_settings):
             state = RUN.start(self.root)
-        self.assertEqual(blocked, [False, True])
+        # State, active marker and lifecycle audit all flush under the same lock.
+        self.assertEqual(blocked, [False, True, True])
         self.finish(state)
         def try_start(_fd):
             with self.assertRaises(FileExistsError):

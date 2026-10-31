@@ -133,7 +133,11 @@ class EvidenceTests(unittest.TestCase):
         for name in ("../escape", "with/slash", ""):
             with self.assertRaises(ValueError):
                 self.report(name)
-        (self.root / "tmp/pipeline/runs" / self.state["run_id"]).symlink_to(self.root / "src", target_is_directory=True)
+        run_dir = self.root / "tmp/pipeline/runs" / self.state["run_id"]
+        # start now creates lifecycle audit artifacts; preserve those while
+        # replacing the fixture namespace with the malicious symlink.
+        run_dir.rename(self.root / "original-run-artifacts")
+        run_dir.symlink_to(self.root / "src", target_is_directory=True)
         with self.assertRaises(ValueError):
             self.report()
 

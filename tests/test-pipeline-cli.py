@@ -96,6 +96,25 @@ class PipelineCliTests(unittest.TestCase):
         self.assertFalse(list(scripts.rglob("*.pyc")))
         self.assertFalse(list(scripts.rglob("__pycache__")))
 
+    def test_missing_optional_audit_preserves_start_and_finish_success(self):
+        scripts = self.root / "isolated-skill/scripts"
+        shutil.copytree(SCRIPTS, scripts, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "run_audit.py"))
+        command = [sys.executable, "-B", str(scripts / "pipeline_cli.py")]
+        started = subprocess.run([*command, "start", "--project", str(self.root)], capture_output=True, text=True)
+        state = R.status(self.root)["state"]
+        self.assertEqual(state["status"], "running")
+        receipt = self.root / f"tmp/pipeline/runs/{state['run_id']}/receipt.json"
+        finished = subprocess.run([*command, "finish", "--project", str(self.root), "--receipt", str(receipt),
+                                   "--outcome", "aborted", "--stopped", "--stop-evidence", "observed test exit"],
+                                  capture_output=True, text=True)
+        self.assertEqual(R.status(self.root, state["run_id"])["state"]["status"], "aborted")
+        for result, status in ((started, "running"), (finished, "aborted")):
+            with self.subTest(status=status):
+                self.assertEqual(result.returncode, 0, result.stderr)
+                output = json.loads(result.stdout)
+                self.assertEqual(output["status"], status)
+                self.assertEqual(output["audit"], {"status": "error", "error": "collector_unavailable"})
+
     def test_start_records_early_stage_without_printing_credentials(self):
         s = self.start()
         receipt = json.loads(Path(self.receipt).read_text())

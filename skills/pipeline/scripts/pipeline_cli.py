@@ -43,10 +43,26 @@ def _public(state):
     return {key: state.get(key) for key in ("run_id", "status", "stage", "activity", "pending", "next")}
 
 
+def _optional_audit(root, run_id):
+    # The lifecycle already succeeded. Optional diagnostics cannot undo it.
+    try:
+        import run_audit as A
+        return A.audit(root, run_id)
+    except Exception:
+        return {"status": "error", "error": "collector_unavailable"}
+
+
 def parser():
     cli = argparse.ArgumentParser(description=__doc__)
     sub = cli.add_subparsers(dest="action", required=True)
     sub.add_parser("paths", help="resolve installed skill, runner and developer paths without starting a run")
+    audit = sub.add_parser("audit", help="read a safe existing audit; --live computes metadata in memory only")
+    audit.add_argument("--project", default=".")
+    audit.add_argument("--run-id", required=True)
+    audit.add_argument("--live", action="store_true")
+    scan = sub.add_parser("scan", help="bounded read-only existing audit discovery, no repair")
+    scan.add_argument("--project", default=".")
+    scan.add_argument("--limit", type=int, default=20)
     status = sub.add_parser("status", help="compact read-only status, no credentials")
     status.add_argument("--project", default=".")
     status.add_argument("--run-id")
@@ -125,6 +141,10 @@ def parser():
 def dispatch(args):
     if args.action == "paths":
         return paths(), 0
+    if args.action in {"audit", "scan"}:
+        import run_audit as A
+        result = A.audit(args.project, args.run_id, live=args.live) if args.action == "audit" else A.scan(args.project, args.limit)
+        return result, int(result["status"] == "error")
     root = Path(args.project).resolve(strict=True)
     if args.action == "task-status":
         import run_tasks as T
@@ -166,7 +186,7 @@ def dispatch(args):
         receipt = E._local(root, f"tmp/pipeline/runs/{state['run_id']}/receipt.json")
         receipt.parent.mkdir(parents=True, exist_ok=True)
         R._atomic(receipt, {**{k: state[k] for k in ("schema_version", "run_id", "owner_token")}, "project_root": str(root)})
-        return {**_public(state), "receipt": str(receipt), **paths()}, 0
+        return {**_public(state), "receipt": str(receipt), "audit": _optional_audit(root, state["run_id"]), **paths()}, 0
     receipt = _receipt(root, args.receipt)
     run_id, owner = receipt["run_id"], receipt["owner_token"]
     if args.action in {"task-start", "task-end"}:
@@ -268,6 +288,7 @@ def _finish(root, run_id, owner, *, outcome="completed", stopped=False, stop_evi
                             if label in item.get("coverage", [])}) or ["no_valid_evidence"]
               for label in missing or []}
     return {**_public(state), "delivery_sealed": delivery.get("sealed", False),
+            "audit": _optional_audit(root, run_id),
             "delivery_reason": delivery.get("reason"), "delivery_detail": delivery.get("detail"),
             "coverage_complete": coverage.get("complete"), "coverage_missing": missing,
             "coverage_issues": issues}, 0
