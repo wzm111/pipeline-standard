@@ -12,6 +12,8 @@ python3 <runner> qa --receipt <receipt> --plan <同一plan引用> --name final -
 
 所有命令均接受`--project <root>`。cwd相对项目根，scope和write_paths仍相对项目根；省略cwd沿用项目根。不确定子包/运行器时先用`preflight --project <root> --cwd web -- pnpm test:unit`只读核对cwd与可执行文件；它不运行测试，也不证明脚本/依赖/业务通过。
 
+本次已识别的高影响边界（缺参、旧数据归属、异步/跨时段状态）用已有可独立运行的定向用例声明`layer:"quick"`；重型或最终组合检查为`layer:"final"`（默认可省略）。verify先执行quick再执行其余检查，首个失败就停止后续重检查，QA仍保留所有缺项；不删除终验或把暂停的检查当PASS。仅调整layer不会改变命令/输入/环境/coverage身份，不使仍有效的结果重跑；真实变更和最新失败仍失效。个别run调用保持原有显式顺序，需自动前置时使用verify；分类由智能体维护，不新增用户配置或通用矩阵文档。
+
 已登记计划可用 `verify --receipt <receipt> --plan <原plan引用> --name verify-r1 --summary '<真实业务结论与未验证项>'` 在同一进程逐项执行/严格复核并记录QA，避免拆成多个宿主命令导致环境漂移。仍有效的原证据经原 `run_planned` 校验后复用；实际环境（包括SHLVL）、输入、日志和最新失败均保留原校验，不回放旧环境。首个命令非零即停止安排后续检查，返回skipped_checks并照常记录缺项与CONCERNS；不能将跳过视为通过。每次使用新name，检查尝试名自动为 `<name>-c<序号>`，连同后缀须满足原64字符标识限制。默认仅生成证据/QA，不结束run。
 
 只有用户已显式要求收口且宿主确已确认全部执行者停止时，才在同一条verify命令附加 `--finish --stopped --stop-evidence '<真实宿主停止证据>'`；无委派时可附 `--direct`。PASS后调用原finish路径并在原归属锁内封存，原task、角色、人工等待、release和当前QA有效性门禁全部保留；有过角色派发不得用direct重标。缺停止证据会在执行检查前拒绝，CONCERNS保留活动run。统一入口的证据判断不代替独立业务QA或发布授权，原分开的run/qa/finish命令仍可用。
