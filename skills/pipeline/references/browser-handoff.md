@@ -10,11 +10,16 @@
 // 页面加载、hydration和打开目标入口的既有步骤已完成。
 const target = page.getByTestId('实际观察到的目标标识');
 await target.waitFor({ state: 'visible', timeout: 1500 });
+if (!await target.isEnabled() || !await target.isEditable()) {
+  throw new Error('目标尚未可填写，先核对页面状态');
+}
 await target.fill('合成验收数据');
 // 继续原有业务断言及其合理等待；短查不代表业务已通过。
 ```
 
 短查失败保留原异常，停止这条依赖目标的操作链，核对入口、选择器、状态和夹具后有界复验；不catch后继续fill/click，不把真实界面缺陷一概归为夹具问题。已有可靠宿主snapshot时直接判断，无需另开浏览器或重复截图；专用工具按其原生状态接口处理。
+
+可见不等于可操作：点击目标还须enabled，填写目标另须editable；禁用的保存按钮先核对工作区是否处于编辑/有变更状态，不强制点击或靠增加超时放行。仅本次需要操作的控件声明`targets={"save":"click","name":"fill"}`，宿主新观察传`targets={"save":{"visible":true,"enabled":true},"name":{"visible":true,"enabled":true,"editable":true}}`；probe/preflight对false或unknown返回ready=false和缺少的状态。旧recipe未声明targets仍兼容，但实际调用方仍须核对当前目标可交互性；不为纯阅读目标机械增加这些字段。
 
 改动涉及SSR、共享状态或缓存时，在耗时全量终验/构建前，先用一条代表性链路覆盖实际适用的生命周期：SSR首屏→hydration→真实客户端刷新/重取→缓存后重载，并轻量切换受影响的另一入口检查状态一致性。涉及第三方SDK时，也尽早核对实际初始化、回调时序和失败恢复；VM/mock通过与真实SDK兼容分开记录，使用已有可靠入口，不为快检额外发布或调用付费服务。缺陷尽早修复，再执行必要终验。纯静态/非浏览器改动不机械增加这些步骤，已有有效链路直接复用。
 
