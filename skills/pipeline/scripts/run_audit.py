@@ -114,11 +114,32 @@ def _counts(state, key, field, values):
             for value in sorted(values)}
 
 
+def _log_source(payload):
+    """Metadata-only shared-source candidate; never an execution/reuse identity."""
+    fields = ("command", "scope", "environment", "fingerprint", "log_path", "log_sha256")
+    if (not isinstance(payload.get("command"), str) or not payload["command"]
+            or not isinstance(payload.get("scope"), list) or not payload["scope"]
+            or any(not isinstance(p, str) for p in payload["scope"])
+            or not isinstance(payload.get("environment"), dict) or not payload["environment"]
+            or any(not isinstance(k, str) or not k or not isinstance(v, str) or not v
+                   for k, v in payload["environment"].items())
+            or any(not isinstance(payload.get(key), str) or not re.fullmatch(r"[0-9a-f]{64}", payload[key])
+                   for key in ("fingerprint", "log_sha256"))
+            or not isinstance(payload.get("log_path"), str) or not payload["log_path"]):
+        return None
+    identity = {key: payload[key] for key in fields}
+    identity.update(cwd=payload.get("cwd", "."), intent=payload.get("intent", "test"))
+    return hashlib.sha256(json.dumps(identity, sort_keys=True,
+                                     allow_nan=False).encode()).hexdigest()
+
+
 def _checks(root, state):
     result = {"executed": 0, "reused": 0, "inherited": 0, "reviews": 0,
               "unavailable": 0, "by_raw_result_class": {k: 0 for k in sorted(RESULTS)},
-              "by_result_class": {k: 0 for k in sorted(RESULTS)}, "coverage": "unknown"}
-    checks, reviews = {}, {}
+              "by_result_class": {k: 0 for k in sorted(RESULTS)}, "coverage": "unknown",
+              "check_records": 0, "host_observation_records": 0,
+              "shared_log_source_candidates": 0, "source_identity_unknown": 0}
+    checks, reviews, sources = {}, {}, set()
     refs = state.get("artifacts")
     if not isinstance(refs, list):
         return result
@@ -139,6 +160,17 @@ def _checks(root, state):
                 raise AuditError("invalid_report")
             payload = report["payload"]
             kind = match[2]
+            if kind == "check":
+                result["check_records"] += 1
+                if payload.get("observation_kind") == "host_tool":
+                    result["host_observation_records"] += 1
+                source = _log_source(payload)
+                if source is None:
+                    result["source_identity_unknown"] += 1
+                elif source in sources:
+                    result["shared_log_source_candidates"] += 1
+                else:
+                    sources.add(source)
             if kind == "check_reuse":
                 result["reused"] += 1
             elif kind == "check_review":
@@ -226,7 +258,9 @@ KEYS = {"schema_version", "run_id", "notice", "source_state_hash", "implementati
         "checks", "coverage", "actual_model", "tokens", "activity_seconds", "tracked_seconds",
         "count", "boundaries", "executed", "reused", "inherited", "reviews", "unavailable",
         "by_raw_result_class", "by_result_class", "missing_count", "complete", "created", "stopped",
-        "by_status", "index", "started_at", "ended_at", "execution_ended", "running", *R.ACTIVITIES, *R.FINAL, *RESULTS}
+        "by_status", "index", "started_at", "ended_at", "execution_ended", "running",
+        "check_records", "host_observation_records", "shared_log_source_candidates", "source_identity_unknown",
+        *R.ACTIVITIES, *R.FINAL, *RESULTS}
 WORDS = {NOTICE, "partial", "recorded_only", "unknown", "complete", "running", "execution_ended", *R.FINAL}
 
 

@@ -147,6 +147,64 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(checks["unavailable"], 0)
         self.assertEqual(checks["coverage"], "recorded_only")
 
+    def test_shared_log_candidates_do_not_merge_checks_or_coverage(self):
+        state = R.start(self.root)
+        run, owner = state["run_id"], state["owner_token"]
+        payload = {"command": "SECRET browser", "scope": ["SECRET fixture"],
+                   "environment": {"runtime": "SECRET"}, "fingerprint": "a" * 64,
+                   "log_path": "SECRET.log", "log_sha256": "b" * 64,
+                   "result_class": "success", "exit_code": 0, "observation_kind": "host_tool"}
+        E.write_report(self.root, run, owner, "check", "first", {**payload, "observation_id": "first", "coverage": ["browser"]})
+        E.write_report(self.root, run, owner, "check", "second", {**payload, "observation_id": "second", "coverage": ["visual"]})
+        before = self.files()
+        with patch.object(E, "validate_lineage", side_effect=AssertionError("metadata only")), \
+                patch.object(E, "fingerprint", side_effect=AssertionError("no project scans")):
+            checks = A.audit(self.root, run, live=True)["live"]["checks"]
+        self.assertEqual(checks["check_records"], 2)
+        self.assertEqual(checks["host_observation_records"], 2)
+        self.assertEqual(checks["shared_log_source_candidates"], 1)
+        self.assertEqual(checks["executed"], 2)  # Two IDs remain two reported invocations.
+        self.assertEqual(checks["source_identity_unknown"], 0)
+        self.assertNotIn("SECRET", json.dumps(checks))
+        self.assertEqual(before, self.files())
+
+    def test_shared_log_identity_changes_and_unknown_legacy_stay_distinct(self):
+        state = R.start(self.root)
+        run, owner = state["run_id"], state["owner_token"]
+        payload = {"command": "browser", "scope": ["fixture"], "environment": {"runtime": "fixture"},
+                   "fingerprint": "a" * 64, "log_path": "result.log", "log_sha256": "b" * 64,
+                   "result_class": "success", "exit_code": 0}
+        variations = [{}, {"log_path": "other.log"}, {"fingerprint": "c" * 64},
+                      {"environment": {"runtime": "other"}}, {"cwd": "other"}, {"intent": "check"}]
+        for index, delta in enumerate(variations):
+            E.write_report(self.root, run, owner, "check", f"case-{index}", {**payload, **delta})
+        E.write_report(self.root, run, owner, "check", "legacy", {"exit_code": 0})
+        checks = A.audit(self.root, run, live=True)["live"]["checks"]
+        self.assertEqual(checks["check_records"], 7)
+        self.assertEqual(checks["shared_log_source_candidates"], 0)
+        self.assertEqual(checks["source_identity_unknown"], 1)
+        self.assertEqual(checks["executed"], 7)
+
+    def test_old_summary_without_source_counters_remains_readable(self):
+        state = R.start(self.root)
+        document = json.loads(self.target(state).read_text())
+        for key in ("check_records", "host_observation_records", "shared_log_source_candidates", "source_identity_unknown"):
+            document["checks"].pop(key)
+        self.target(state).write_text(json.dumps(document))
+        self.assertEqual(A.audit(self.root, state["run_id"])["status"], "current")
+
+    def test_incomplete_environment_identity_is_unknown_not_shared(self):
+        state = R.start(self.root)
+        run, owner = state["run_id"], state["owner_token"]
+        payload = {"command": "browser", "scope": ["fixture"], "fingerprint": "a" * 64,
+                   "log_path": "result.log", "log_sha256": "b" * 64, "exit_code": 0}
+        for index, env in enumerate(({}, {"runtime": None}, {"runtime": ""}, {"runtime": 4})):
+            E.write_report(self.root, run, owner, "check", f"case-{index}", {**payload, "environment": env})
+        checks = A.audit(self.root, run, live=True)["live"]["checks"]
+        self.assertEqual(checks["source_identity_unknown"], 4)
+        self.assertEqual(checks["shared_log_source_candidates"], 0)
+        self.assertEqual(checks["executed"], 4)
+
     def test_latest_registered_review_wins_across_hash_seeds(self):
         state = R.start(self.root)
         run, owner = state["run_id"], state["owner_token"]
