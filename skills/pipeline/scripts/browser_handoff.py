@@ -12,7 +12,7 @@ import run_state as R
 
 
 def _conditions(value):
-    if not isinstance(value, dict) or set(value) - {"origin", "path", "markers", "version"}:
+    if not isinstance(value, dict) or set(value) - {"origin", "path", "markers", "version", "targets"}:
         raise ValueError("explicit browser conditions required")
     origin_value = value.get("origin", "")
     if not isinstance(origin_value, str):
@@ -27,6 +27,13 @@ def _conditions(value):
     markers = E.coverage_labels(value.get("markers"))
     if not markers or ("version" in value and (not isinstance(value["version"], str) or not value["version"].strip())):
         raise ValueError("at least one observed marker and nonempty optional version required")
+    targets = value.get("targets", {})
+    if not isinstance(targets, dict):
+        raise ValueError("target actions must be a mapping")
+    for name, action in targets.items():
+        E._label(name)
+        if not isinstance(action, str) or action not in {"click", "fill"}:
+            raise ValueError("target action must be click or fill")
     return {**value, "markers": markers}
 
 
@@ -133,6 +140,17 @@ def probe(preconditions, snapshot):
         result["reasons"].append("required_marker_missing_or_unknown")
     if "version" in expected and snapshot.get("version") != expected["version"]:
         result["reasons"].append("version_mismatch_or_unknown")
+    failures = {}
+    observed = snapshot.get("targets", {})
+    for name, action in expected.get("targets", {}).items():
+        target = observed.get(name) if isinstance(observed, dict) else None
+        fields = ("visible", "enabled", "editable") if action == "fill" else ("visible", "enabled")
+        missing = [field for field in fields if not isinstance(target, dict) or target.get(field) is not True]
+        if missing:
+            failures[name] = missing
+    if failures:
+        result["reasons"].append("target_not_interactable_or_unknown")
+        result["target_failures"] = failures
     if not result["reasons"]:
         result["ready"] = True
     return result

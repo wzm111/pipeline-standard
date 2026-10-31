@@ -118,6 +118,23 @@ class BrowserHandoffTests(unittest.TestCase):
         self.assertTrue(all(b"ephemeral-secret" not in data for data in after.values()))
 
 
+    def test_visible_disabled_target_blocks_recipe_until_host_observes_enabled(self):
+        self.conditions["targets"] = {"save": "click"}
+        ref = self.record()
+        disabled = {**self.page, "targets": {"save": {"visible": True, "enabled": False}}}
+        before = deepcopy(disabled)
+        result = self.preflight(ref, disabled)
+        self.assertFalse(result["ready"])
+        self.assertNotIn("script", result)
+        self.assertEqual(result["target_failures"], {"save": ["enabled"]})
+        self.assertEqual(disabled, before)
+        enabled = deepcopy(disabled)
+        enabled["targets"]["save"]["enabled"] = True
+        ready = self.preflight(ref, enabled)
+        self.assertTrue(ready["ready"])
+        self.assertEqual(ready["acceptance"], "not_run")
+
+
 class FirstProbeTests(unittest.TestCase):
     def setUp(self):
         self.conditions = {"origin":"http://127.0.0.1:5173", "path":"/review", "markers":["target-visible"]}
@@ -151,6 +168,27 @@ class FirstProbeTests(unittest.TestCase):
         self.assertTrue(result["ready"])
         self.assertEqual(before,(self.conditions,page))
         self.assertNotIn("ephemeral-secret",str(result))
+
+    def test_fill_needs_observed_editable_but_click_does_not(self):
+        conditions = {**self.conditions, "targets": {"field": "fill", "save": "click"}}
+        page = {**self.page, "targets": {name: {"visible": True, "enabled": True}
+                                         for name in ("field", "save")}}
+        self.assertEqual(B.probe(conditions, page)["target_failures"], {"field": ["editable"]})
+        page["targets"]["field"]["editable"] = True
+        self.assertTrue(B.probe(conditions, page)["ready"])
+        for bad in (False, None, 1, "true"):
+            page["targets"]["field"]["editable"] = bad
+            self.assertFalse(B.probe(conditions, page)["ready"])
+
+    def test_target_observation_missing_and_invalid_action_do_not_authorize_action(self):
+        conditions = {**self.conditions, "targets": {"save": "click"}}
+        for targets in ({}, None, {"save": True}, {"save": {"visible": True}}):
+            result = B.probe(conditions, {**self.page, "targets": targets})
+            self.assertFalse(result["ready"])
+            self.assertEqual(result["acceptance"], "not_run")
+        for targets in ([], {"save": "force-click"}, {"../private": "click"}):
+            self.assertEqual(B.probe({**self.conditions, "targets": targets}, self.page)["reasons"],
+                             ["page_conditions_invalid"])
 
 
 if __name__ == "__main__":
