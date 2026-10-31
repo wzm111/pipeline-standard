@@ -60,6 +60,8 @@ coverage=complete表示新run有完整事件边界，partial表示只能覆盖�
 
 ### 非测试操作归因
 
+项目目录长期分析优先读[安全运行摘要](audit.md)，而不是直接复制包含归属凭证的run状态或原始命令输出；摘要不替代以下原始事实和权限校验。
+
 `operation_metrics.py`补充读取、定位、交接、Git和网络等实际操作区间。统一检查入口自动记录包含缓存判定的整次调用；原检查报告的seconds仍只是子进程耗时，两者不能相加。其他宿主工具由调度员在确有分析价值的操作边界记录，不逐条消息、轮询或重复同值写盘，不新建计时角色。
 
 普通Python调用可用`call(root, run_id, owner_token, category, label, callback, *args, **kwargs)`包住现有操作，或用`with span(root, run_id, owner_token, category, label): ...`。跨宿主工具边界则先`begin(...)`保存返回的span_id，实际工具返回后`end(root, run_id, owner_token, span_id)`；异常如实记failed/interrupted并保留原异常。category仅read/write/locate/handoff/git/network/verify/other，label为安全短标识。无需用户填写配置。

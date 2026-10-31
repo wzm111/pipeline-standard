@@ -38,6 +38,7 @@ description: 对话式研发流水线：描述需求即可按风险开发、测�
 1. 读取项目根 `PIPELINE.md`。不存在或关键字段仍是占位符时，按 interaction.md 自动接入并继续原需求；不把填写模板交给用户。已有契约只补必要缺项，保留用户规则。
 2. 若 `tmp/pipeline/.active` 存在或 state 显示未完成，先处理续跑/新开，禁止同项目并行两条流水线。有Python时标准直通优先使用scripts/pipeline_cli.py的paths/start/check/report/finish（例见standard.md），不为调用接口读取内部源码。读契约并确认锁归属后尽早start，再做业务扫描，使准备阶段进入真实计时。保存start返回的私有receipt路径，不打印其内容或自动认领别人的active；复杂状态/恢复才读[本地状态接口](references/operations.md)。真实状态位于runs/<run_id>.json，不并行维护state.md。无Python保留旧格式；收口确认执行者停止后只清自己的标记。
    阶段或执行/测试/人工等待/角色等待/交接实际改变时更新stage/activity，脚本自动记事件；查询和监控不制造事件，不反推旧记录缺失的耗时。
+   本地状态接口会在生命周期节点留下[安全运行摘要](references/audit.md)，供以后扫描项目分析；不逐条记对话、不复制业务输出。需要分析时先scan/audit，未知字段保留未知，不因日志新增角色或重跑检查。
 3. 用户显式档位优先；未声明时按风险选择并在首条简报说明。只能自动升级，不能自动降级：
    - **fast**：单个内聚、可定向验证的低风险改动；无新依赖、迁移、公开 API/数据结构、权限/支付/安全、部署配置、自动提交；范围和验收明确。文件数量不作为硬门槛，关联测试与样式可同批修改。只读 [fast 流程](references/fast.md)。
    - **standard**：默认。按[standard 流程](references/standard.md)先判断执行方式：范围清楚、可内聚验证的任务直做；跨模块耦合、多入口一致性、复杂排错或需多维独立验证的任务自动委派必要角色。复杂度与风险分别判断，不能把“非高风险”当作“简单”。进入 QA 时再读 [QA 循环](references/qa-loop.md)。

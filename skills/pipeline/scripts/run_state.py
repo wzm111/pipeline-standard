@@ -10,6 +10,7 @@ import secrets
 import sys
 import tempfile
 import uuid
+import warnings
 
 # Keep file-based imports usable when finish/start load the optional delivery adapter.
 if str(Path(__file__).resolve().parent) not in sys.path:
@@ -114,6 +115,20 @@ def _claim(base, state):
         os.fsync(stream.fileno())
 
 
+def _capture_audit(project_root, state):
+    # Logging must never change lifecycle success, QA or ownership cleanup.
+    try:
+        import run_audit
+        result = run_audit.capture(project_root, state)
+    except Exception:
+        result = {"status": "error", "error": "collector_unavailable"}
+    if result.get("status") != "recorded":
+        try:
+            warnings.warn("pipeline audit capture: " + result["error"], RuntimeWarning)
+        except Exception:
+            pass  # Even warnings configured as errors cannot block execution.
+
+
 def status(project_root, run_id=None):
     """Read-only snapshot; never creates paths, adopts ownership or cleans locks."""
     _, base = _paths(project_root)
@@ -158,6 +173,7 @@ def start(project_root, initial=None):
             raise ValueError("run_id collision")
         _atomic(path, state)
         _claim(base, state)
+        _capture_audit(project_root, state)
         return deepcopy(state)
 
 
@@ -231,6 +247,7 @@ def finish(project_root, run_id, owner_token, outcome, *, executors_stopped=Fals
         # Recheck ownership before removing only this run's marker.
         _owned(_read(base / ".active"), run_id, owner_token)
         (base / ".active").unlink()
+        _capture_audit(project_root, state)
         return deepcopy(state)
 
 
@@ -257,6 +274,7 @@ def resume(project_root, run_id, owner_token, *, executors_stopped=False, stop_e
             _owned(_read(base / ".active"), run_id, owner_token)
         else:
             _claim(base, state)
+        _capture_audit(project_root, state)
         return deepcopy(state)
 
 
