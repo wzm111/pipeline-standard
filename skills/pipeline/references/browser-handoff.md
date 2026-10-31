@@ -25,7 +25,7 @@ await target.fill('合成验收数据');
 
 测试helper操作应用内单例、缓存或诊断状态时，先沿用页面实际使用的测试桥接/模块实例。Vite等开发环境可能把带`?t`的实际模块与bare import分成不同ESM实例；不要通过删query或猜路径另导一份状态。确需导入时按本次页面已观察的模块图使用相同URL，并用合成状态核对helper写入与页面读取一致、随后清理。该检查并入原夹具快检，不新增一轮浏览器验收。已修正的helper和样本随recipe交接，后续仅刷新失效部分；不为测试修改生产业务逻辑或增加全局暴露。运行时URL/query只用于当次定位，不作为凭据或业务数据落盘；recipe仍遵守下方origin/path边界。怀疑夹具问题时保留原失败，依据真实实例差异和原业务断言的复测结果再分类，不能仅凭猜测豁免FAIL。
 
-1. 完成一次真实验收后，用run_evidence记录带browser覆盖标签的成功检查。scope须包含实际脚本、合成样本及相关依赖；保存真实日志和运行环境，不把客户数据、登录凭据放进样本。
+1. 在原生浏览器调用前后按[evidence.md](evidence.md)使用observed_checks登记一次真实观察，保存带browser覆盖标签的检查结果；成功仍须有实际业务断言。scope须包含实际脚本、合成样本及相关依赖；保存真实日志和运行环境，不把客户数据、登录凭据放进样本。同一次返回的补充说明只引用原check，不再新建一条同源check；同内容的新执行使用新observation_id。
 2. 调用`browser_handoff.record_recipe(root, run_id, owner_token, name, script=..., fixtures=[...], preconditions=..., validated_check=...)`。它核验成功证据和脚本/样本归属，保存不可变recipe并自动加入handoff_files。preconditions为origin（不含路径、凭据、query）、精确path、至少一个实际观察到的marker短标识；必要时带version。
 3. 下一批或发布承接原recipe引用，不重写相同脚本或重新猜入口。先通过浏览器当前页面状态做一次短探测（缺控件探测预算1500ms；若有可靠的现成状态直接使用），向`preflight(root, current_run_id, reference, snapshot)`传入url、markers字典及可选version。只传真实新观察，不能拿上次snapshot冒充当前页面。query仅用于当次解析，不落盘。
 4. ready=true后沿用脚本与样本执行本次需要的验收；ready=false只返回原因，不提供执行脚本入口。页面错位、marker缺失或unknown时先修正入口/前置条件，不启动默认30秒的盲等。正常页面加载或确实耗时的业务动作仍遵守项目所需等待，不能为了快而跳过。

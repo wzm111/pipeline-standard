@@ -104,35 +104,45 @@ def _environment(root, argv, child_env, context, *, project_root=None):
 def _claim(root, run_id, owner, name, write_paths, *, testing=True):
     with R._write_guard(root) as base:
         path, state = R._load_owned(base, run_id, owner)
-        if state["status"] != "running":
-            raise ValueError("check requires an active owned run")
-        claims = state.setdefault("running_checks", [])
-        if any(c["name"] == name or E.write_paths_conflict(root, write_paths, c["write_paths"]) for c in claims):
-            raise ValueError("check resources conflict; wait or declare verified isolated write paths")
-        report = E._local(root, f"tmp/pipeline/runs/{run_id}/artifacts/check/{name}.json")
-        if report.exists():
-            raise FileExistsError("check report exists; choose a new round/name")
-        if not claims:
-            state["check_previous_progress"] = {k: state.get(k, "execution") for k in ("stage", "activity")}
-            if testing and (state["stage"], state.get("activity")) != ("checking", "testing"):
-                state.update(stage="checking", activity="testing")
-                state["history"].append(R._event(state, "transition", R._now()))
-        claims.append({"name": name, "write_paths": write_paths})
+        _claim_state(root, run_id, state, name, write_paths, testing=testing)
         state["updated_at"] = R._now()
         R._atomic(path, state)
+
+
+def _claim_state(root, run_id, state, name, write_paths, *, testing=True):
+    """Shared claim mutation; caller holds the owned run's write guard."""
+    if state["status"] != "running":
+        raise ValueError("check requires an active owned run")
+    E.write_paths_conflict(root, write_paths, [])
+    claims = state.setdefault("running_checks", [])
+    if any(c["name"] == name or E.write_paths_conflict(root, write_paths, c["write_paths"]) for c in claims):
+        raise ValueError("check resources conflict; wait or declare verified isolated write paths")
+    report = E._local(root, f"tmp/pipeline/runs/{run_id}/artifacts/check/{name}.json")
+    if report.exists():
+        raise FileExistsError("check report exists; choose a new round/name")
+    if not claims:
+        state["check_previous_progress"] = {k: state.get(k, "execution") for k in ("stage", "activity")}
+    if testing and (state["stage"], state.get("activity")) != ("checking", "testing"):
+        state.update(stage="checking", activity="testing")
+        state["history"].append(R._event(state, "transition", R._now()))
+    claims.append({"name": name, "write_paths": write_paths})
+
+
+def _release_state(state, name):
+    state["running_checks"] = [c for c in state.get("running_checks", []) if c["name"] != name]
+    if not state["running_checks"]:
+        previous = state.pop("check_previous_progress", None)
+        if previous and (state["stage"], state.get("activity")) == ("checking", "testing"):
+            changed = any(state.get(k) != v for k, v in previous.items())
+            state.update(previous)
+            if changed:
+                state["history"].append(R._event(state, "transition", R._now()))
 
 
 def _release(root, run_id, owner, name):
     with R._write_guard(root) as base:
         path, state = R._load_owned(base, run_id, owner)
-        state["running_checks"] = [c for c in state.get("running_checks", []) if c["name"] != name]
-        if not state["running_checks"]:
-            previous = state.pop("check_previous_progress", None)
-            if previous and (state["stage"], state.get("activity")) == ("checking", "testing"):
-                changed = any(state.get(k) != v for k, v in previous.items())
-                state.update(previous)
-                if changed:
-                    state["history"].append(R._event(state, "transition", R._now()))
+        _release_state(state, name)
         state["updated_at"] = R._now()
         R._atomic(path, state)
 

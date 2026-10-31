@@ -217,6 +217,8 @@ def finish(project_root, run_id, owner_token, outcome, *, executors_stopped=Fals
     _stopped(executors_stopped, stop_evidence)
     with _write_guard(project_root) as base:
         path, state = _load_owned(base, run_id, owner_token)
+        if any(t.get("status") == "running" for t in state.get("observed_checks", {}).values()):
+            raise ValueError("close observed host checks after confirmed stop before finishing")
         if "tasks" in state:
             import run_tasks
             if any(item["status"] == "running" for item in run_tasks._tasks(state)):
@@ -266,6 +268,9 @@ def resume(project_root, run_id, owner_token, *, executors_stopped=False, stop_e
         # Resume requires fresh evidence that all previous executors stopped.
         state.pop("running_checks", None)
         state.pop("check_previous_progress", None)
+        for ticket in state.get("observed_checks", {}).values():
+            if ticket.get("status") == "running":
+                ticket.update(status="closed", stop_evidence=stop_evidence)
         state["history"].append(_event(state, "resumed", state["updated_at"], stop_evidence=stop_evidence))
         # Keep ownership stable so a crash between state and marker writes can
         # be retried with the same explicit ownership and fresh stop evidence.
