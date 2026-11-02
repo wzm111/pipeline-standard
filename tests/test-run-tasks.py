@@ -207,6 +207,11 @@ class TaskTests(unittest.TestCase):
 
     def test_cli_owned_roundtrip_rejection_and_readonly_status(self):
         receipt = self.receipt()
+        (self.root / "PIPELINE.md").write_text("fixture contract")
+        policy = self.cli("policy")
+        self.assertEqual(policy.returncode, 0, policy.stderr)
+        acknowledged = self.cli("policy-ack", "--receipt", receipt, "--revision", json.loads(policy.stdout)["revision"])
+        self.assertEqual(acknowledged.returncode, 0, acknowledged.stderr)
         args = ("task-start", "--receipt", receipt, "--task-id", "first", "--goal", "Fix issue", "--accept", "Observed")
         first = self.cli(*args)
         self.assertEqual(first.returncode, 0, first.stderr)

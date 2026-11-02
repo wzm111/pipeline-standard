@@ -260,7 +260,17 @@ def _inherited(root, run_id, owner, state, snapshot):
 def inspect_plan(root, run_id, owner, plan_ref, summary=""):
     """Read-only current evidence evaluation; never invent a business judgment."""
     state = _owned(root, run_id, owner)
-    snapshot = _snapshot(root, run_id, state)
+    result = inspect_state(root, run_id, owner, plan_ref, state, summary)
+    current = _owned(root, run_id, owner)
+    if current["artifacts"] != state["artifacts"] or current.get("check_plans") != state.get("check_plans"):
+        result["gate"] = "CONCERNS"
+        result["check_failures"]["snapshot"] = "evidence_changed_during_qa"
+    return result
+
+
+def inspect_state(root, run_id, owner, plan_ref, state, summary="", *, snapshot=None):
+    """Original strict judgment using an already-owned snapshot; no write lock."""
+    snapshot = snapshot if snapshot is not None else _snapshot(root, run_id, state)
     plan = _read_plan(root, run_id, owner, plan_ref, state, snapshot)
     checks, failures, diagnostics = [], {}, {}
     for check_id, check in plan["checks"].items():
@@ -286,12 +296,13 @@ def inspect_plan(root, run_id, owner, plan_ref, summary=""):
     inherited, inherited_refs = _inherited(root, run_id, owner, state, snapshot)
     covered.update(inherited & set(E.coverage_labels(state.get("inherited_required_checks"))))
     checks.extend(ref for ref in inherited_refs if ref not in checks)
-    required = sorted(set(plan["required_checks"])
-                      | set(E.coverage_labels(state.get("planned_required_checks"))))
+    if "run_policy" in state:
+        import managed_qa
+        requirements = managed_qa.required_for_state(root, state, snapshot)
+    else:
+        requirements = E.coverage_labels(state.get("planned_required_checks"))
+    required = sorted(set(plan["required_checks"]) | set(requirements))
     missing = sorted(set(required) - covered)
-    current = _owned(root, run_id, owner)
-    if current["artifacts"] != state["artifacts"] or current.get("check_plans") != state.get("check_plans"):
-        failures["snapshot"] = "evidence_changed_during_qa"
     return {"gate": "CONCERNS" if failures or missing else "PASS", "plan_ref": plan_ref,
             "required_checks": required, "missing_checks": missing,
             "checks": checks, "check_failures": failures,
@@ -299,8 +310,11 @@ def inspect_plan(root, run_id, owner, plan_ref, summary=""):
 
 
 def qa_from_plan(root, run_id, owner, plan_ref, name, summary=""):
+    state = _owned(root, run_id, owner)
+    payload = ({"plan_ref": plan_ref, "summary": summary} if "run_policy" in state else
+               inspect_plan(root, run_id, owner, plan_ref, summary))
     return E.write_report(root, run_id, owner, "qa", name,
-                          inspect_plan(root, run_id, owner, plan_ref, summary))
+                          payload)
 
 
 def verify_plan(root, run_id, owner, plan_ref, name, summary=""):

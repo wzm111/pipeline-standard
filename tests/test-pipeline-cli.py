@@ -176,12 +176,12 @@ class PipelineCliTests(unittest.TestCase):
         ref = self.cli("plan", "--receipt", self.receipt, "--name", "acceptance", "--json", json.dumps(plan))["plan"]
         self.cli("run", "--receipt", self.receipt, "--plan", ref, "--id", "unit", "--name", "unit-r1")
         args = ("finish", "--receipt", self.receipt, "--direct", "--stopped", "--stop-evidence", "fixture commands ended")
-        blocked = self.cli(*args, expected=1)
-        self.assertEqual(blocked["error"], "qa_required_before_finish")
-        self.assertTrue(blocked["active_preserved"])
+        blocked = self.cli(*args, expected=2)
+        self.assertEqual(blocked["error"], "ValueError")
+        self.assertIsNotNone(R.status(self.root)["active"])
         self.assertEqual(R.status(self.root)["state"]["status"], "running")
         self.cli("report", "--receipt", self.receipt, "--kind", "qa", "--name", "concerns", "--json", '{"gate":"CONCERNS"}')
-        self.assertEqual(self.cli(*args, expected=1)["error"], "qa_required_before_finish")
+        self.assertEqual(self.cli(*args, expected=2)["error"], "ValueError")
         self.cli("qa", "--receipt", self.receipt, "--plan", ref, "--name", "final")
         final = self.cli(*args)
         self.assertTrue(final["delivery_sealed"])
@@ -267,8 +267,8 @@ class PipelineCliTests(unittest.TestCase):
                         plan["checks"]["added"] = {**check, "coverage": ["metadata"]}
                         self.cli("plan", "--receipt", self.receipt, "--name", "new-plan", "--json", json.dumps(plan))
                     blocked = self.cli("finish", "--receipt", self.receipt, "--direct", "--stopped",
-                                       "--stop-evidence", "fixture ended", expected=1)
-                    self.assertTrue(blocked["active_preserved"])
+                                       "--stop-evidence", "fixture ended", expected=2)
+                    self.assertEqual(blocked["error"], "ValueError")
                     self.assertEqual(R.status(self.root)["state"]["status"], "running")
                     self.assertIsNotNone(R.status(self.root)["active"])
                 finally:
@@ -292,10 +292,10 @@ class PipelineCliTests(unittest.TestCase):
 
     def test_report_then_stopped_direct_finish_preserves_delivery_evidence(self):
         self.start()
-        self.check("unit")
+        checked = self.check("unit")
         self.cli("update", "--receipt", self.receipt, "--stage", "acceptance", "--activity", "testing")
         self.cli("report", "--receipt", self.receipt, "--kind", "qa", "--name", "final", "--json",
-                 json.dumps({"gate":"PASS", "required_checks":["unit-fixture"]}))
+                 json.dumps({"gate":"PASS", "checks": [checked["report"]], "required_checks":["unit-fixture"]}))
         blocked = self.cli("finish", "--receipt", self.receipt, "--direct", "--stop-evidence", "fixture commands ended", expected=2)
         self.assertEqual(blocked["error"], "ValueError")
         self.assertIsNotNone(R.status(self.root)["active"])
@@ -304,8 +304,13 @@ class PipelineCliTests(unittest.TestCase):
         self.assertTrue(final["coverage_complete"])
         self.assertIsNone(R.status(self.root)["active"])
 
-    def test_finish_explains_missing_reusable_categories_without_promoting_qa(self):
-        self.start()
+    def test_legacy_finish_explains_missing_reusable_categories_without_promoting_qa(self):
+        # Preserve the old incomplete-delivery diagnostic only for explicit
+        # legacy runs; managed QA rejects this hand-authored PASS path.
+        state = R.start(self.root, managed=False)
+        self.receipt = str(self.root / "legacy-receipt.json")
+        R._atomic(Path(self.receipt), {"project_root": str(self.root),
+                  **{key: state[key] for key in ("schema_version", "run_id", "owner_token")}})
         self.check("original", coverage="unit")
         (self.root / "source.py").write_text("changed release input")
         (self.root / "metadata.py").write_text("release fixture")

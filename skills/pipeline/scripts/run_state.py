@@ -223,6 +223,9 @@ def finish(project_root, run_id, owner_token, outcome, *, executors_stopped=Fals
         if outcome == "completed":
             import run_policy
             run_policy.require(project_root, state)
+            if "run_policy" in state:
+                import managed_qa
+                managed_qa.validate_finish(project_root, state)
         if any(t.get("status") == "running" for t in state.get("observed_checks", {}).values()):
             raise ValueError("close observed host checks after confirmed stop before finishing")
         if "tasks" in state:

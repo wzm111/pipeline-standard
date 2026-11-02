@@ -37,7 +37,7 @@ description: 对话式研发流水线：描述需求即可按风险开发、测�
 ## 启动与路由
 
 1. 读取项目根 `PIPELINE.md`。不存在或关键字段仍是占位符时，按 interaction.md 自动接入并继续原需求；不把填写模板交给用户。已有契约只补必要缺项，保留用户规则。
-2. 若 `tmp/pipeline/.active` 存在或 state 显示未完成，先处理续跑/新开，禁止同项目并行两条流水线。有Python时标准直通优先使用scripts/pipeline_cli.py的paths/start/check/report/finish（例见standard.md），不为调用接口读取内部源码。读契约并确认锁归属后尽早start，再做业务扫描，使准备阶段进入真实计时。保存start返回的私有receipt路径，不打印其内容或自动认领别人的active；新CLI start默认启用规则版本门禁：先读取本轮适用规则，再按返回revision执行policy-ack，确认后才启动检查或派发；规则变化先刷新确认，不重启run或重做有效检查。旧run的采用状态保持unknown，详见standard.md。复杂状态/恢复才读[本地状态接口](references/operations.md)。真实状态位于runs/<run_id>.json，不并行维护state.md。无Python保留旧格式；收口确认执行者停止后只清自己的标记。
+2. 若 `tmp/pipeline/.active` 存在或 state 显示未完成，先处理续跑/新开，禁止同项目并行两条流水线。有Python时标准直通优先使用scripts/pipeline_cli.py的paths/start/check/report/finish（例见standard.md），不为调用接口读取内部源码。读契约并确认锁归属后尽早start，再做业务扫描，使准备阶段进入真实计时。保存start返回的私有receipt路径，不打印其内容或自动认领别人的active；新CLI start默认启用规则版本门禁：先读取本轮适用规则，再按返回revision执行policy-ack，确认后才启动检查或派发；规则变化先刷新确认，不重启run或重做有效检查。旧run的历史采用状态保持unknown，CLI开启新task前也须显式确认升级，详见standard.md。复杂状态/恢复才读[本地状态接口](references/operations.md)。真实状态位于runs/<run_id>.json，不并行维护state.md。无Python保留旧格式；收口确认执行者停止后只清自己的标记。
    阶段或执行/测试/人工等待/角色等待/交接实际改变时更新stage/activity，脚本自动记事件；查询和监控不制造事件，不反推旧记录缺失的耗时。
    本地状态接口会在生命周期节点留下[安全运行摘要](references/audit.md)，供以后扫描项目分析；不逐条记对话、不复制业务输出。需要分析时先scan/audit，未知字段保留未知，不因日志新增角色或重跑检查。
    本批要用原生浏览器做验收、导出或耗时外部检查时，首次相关调用前读[浏览器交接](references/browser-handoff.md)，在实际调用点使用已有observed_checks入口；不等到QA或报告整理时才补记。只记录有分析价值的真实调用，不给每次轻量快照机械建ticket，不重复记录已有证据。
@@ -60,7 +60,7 @@ fast/standard 在当前会话执行时，直接复用已读上下文；只记录
 - 角色只有在 base 缺字段、指纹失配或发现冲突时才打开原文；developer 每次写入前仍须复核 `PIPELINE.md` ⑤ 节，releaser 执行 git 前仍须复核 ④ 节。
 - 新产生的模型、QA和验收报告必须绑定本run及记录时间；实际路径放交接包，不能信任共享目录里遗留的同名文件。生成报告、QA启动或复用检查时读[证据与复用](references/evidence.md)，优先用run_evidence.py保存与核验，不为fast新增原本不需要的报告。
 - 普通前台检查经run_checks.execute_check统一执行；范围明确时impact_covered=True，自动先查可复用证据再决定是否执行，不能只在prompt里说“复用”后仍直接重跑命令。浏览器等专用工具按evidence.md记录。实际委派须在[角色派发边界](references/role-dispatch.md)调用begin→宿主工具→accepted，工作结束再complete；已注册未闭合派发不能finish。不为统计增加角色或必填配置；当前会话全程直做时收口confirm_direct，历史缺失不倒填。
-- 多项验收或开发/QA交接时，按[检查计划](references/check-plan.md)让执行与required_checks使用同一声明，优先用verify在同一环境执行并核验证据；本次关键边界标layer=quick先于重型终验，避免轮次标签漂移。简单单项检查沿用原入口，不增加用户配置。
+- managed运行的QA PASS须由当前证据核验，不能只写gate或旧执行名；单项按standard.md传真实引用，多项验收或开发/QA交接时，按[检查计划](references/check-plan.md)让执行与required_checks使用同一声明，优先用verify在同一环境执行并核验证据；本次关键边界标layer=quick先于重型终验，避免轮次标签漂移。简单单项检查沿用原入口，不增加用户配置。
 - 读取不确定的内部路径前先窄范围定位（如rg --files或运行时等价工具）；角色目录按skill真实路径解析，不反复猜目录/通配符。当前上下文已读且未变的文件/行区间直接沿用，补丁核对优先读git diff；确需的新切片合批读取，多语言核对提取相关键而非整包反复输出，不为此新建读取索引。上下文丢失或来源变化时重读所需部分；搜索无匹配与路径错误分别处理。
 
 ## 按需加载

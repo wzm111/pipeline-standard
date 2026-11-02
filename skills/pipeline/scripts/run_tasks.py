@@ -66,7 +66,7 @@ def _clock(state):
     return now
 
 
-def start(root, run_id, owner, task_id, goal, acceptance):
+def start(root, run_id, owner, task_id, goal, acceptance, *, require_managed=False):
     E._label(task_id)
     _text(goal)
     if not isinstance(acceptance, list) or not acceptance:
@@ -78,13 +78,15 @@ def start(root, run_id, owner, task_id, goal, acceptance):
     with R._write_guard(root) as base:
         path, state = _owned(base, run_id, owner)
         import run_policy
-        run_policy.require(root, state)
         tasks = state.get("tasks", [])
         existing = next((item for item in tasks if item["task_id"] == task_id), None)
         if existing is not None:
             if existing["goal"] != goal or existing["acceptance"] != acceptance:
                 raise ValueError("task identity already records a different goal or acceptance")
             return deepcopy(existing)
+        if require_managed and "run_policy" not in state:
+            raise ValueError("new CLI tasks require managed adoption; inspect policy then policy-ack --receipt <current receipt> --revision <current revision>")
+        run_policy.require(root, state)
         if any(item["status"] == "running" for item in tasks):
             raise ValueError("end the current task explicitly before starting another")
         now = _clock(state)
