@@ -21,10 +21,13 @@ class ObserveCliTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name).resolve()
         (self.root / "input").write_text("fixture input")
+        (self.root / "PIPELINE.md").write_text("fixture contract")
         (self.root / "host.log").write_text("fixture host returned")
         self.declaration = {"command": "fixture.host.inspect", "scope": ["input"],
                             "environment": {"host": "fixture-private-context"}, "coverage": ["browser"]}
-        self.receipt = self.cli("start")["receipt"]
+        started = self.cli("start")
+        self.receipt = started["receipt"]
+        self.cli("policy-ack", "--receipt", self.receipt, "--revision", started["policy"]["revision"])
         self.private = json.loads((self.root / self.receipt).read_text())
 
     def command(self, *args):

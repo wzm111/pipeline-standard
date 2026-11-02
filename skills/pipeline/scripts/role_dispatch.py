@@ -81,6 +81,8 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
         raise ValueError("owner cannot appear in native parameters")
     with R._write_guard(project_root) as base:
         path, state = _owned(base, run_id, owner_token)
+        import run_policy
+        run_policy.require(project_root, state)
         if executor_id and any(d["executor_id"] == executor_id and d["status"] in {"dispatching", "working"}
                                for d in state.get("role_dispatches", [])):
             raise ValueError("executor already has an outstanding dispatch")

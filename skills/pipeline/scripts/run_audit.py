@@ -195,6 +195,7 @@ def _checks(root, state):
 
 
 def _build(root, state):
+    import run_policy
     tasks = state.get("tasks")
     coverage = state.get("delivery_status", {}).get("coverage", {})
     missing = coverage.get("missing")
@@ -214,6 +215,7 @@ def _build(root, state):
                       if isinstance(tasks, list) else None},
             "roles": _counts(state, "role_events", "event", {"created", "reused", "stopped"}),
             "checks": _checks(root, state),
+            "adoption": run_policy.audit_summary(root, state),
             "coverage": {"missing_count": len(missing) if isinstance(missing, list) else None,
                          "complete": coverage.get("complete") if type(coverage.get("complete")) is bool else None},
             "actual_model": None, "tokens": None}
@@ -260,8 +262,9 @@ KEYS = {"schema_version", "run_id", "notice", "source_state_hash", "implementati
         "by_raw_result_class", "by_result_class", "missing_count", "complete", "created", "stopped",
         "by_status", "index", "started_at", "ended_at", "execution_ended", "running",
         "check_records", "host_observation_records", "shared_log_source_candidates", "source_identity_unknown",
+        "adoption", "mode", "managed", "current", "caller_acknowledged", "stale",
         *R.ACTIVITIES, *R.FINAL, *RESULTS}
-WORDS = {NOTICE, "partial", "recorded_only", "unknown", "complete", "running", "execution_ended", *R.FINAL}
+WORDS = {NOTICE, "partial", "recorded_only", "unknown", "complete", "running", "execution_ended", "managed", "legacy_untracked", *R.FINAL}
 
 
 def _validate(value, key=None):
@@ -293,12 +296,20 @@ def _validate_document(document):
     required = {"schema_version", "run_id", "notice", "source_state_hash", "implementation_hash",
                 "created_at", "snapshot_at", "status", "completeness", "timing", "tasks", "roles",
                 "checks", "coverage", "actual_model", "tokens"}
-    if (not isinstance(document, dict) or set(document) != required
+    if (not isinstance(document, dict) or not required <= set(document) or set(document) - required - {"adoption"}
             or type(document["schema_version"]) is not int or document["schema_version"] != 1
             or document["notice"] != NOTICE or document["actual_model"] is not None or document["tokens"] is not None
             or document["status"] not in R.FINAL | {"running", "unknown"}
             or document["completeness"] not in {"partial", "recorded_only"}):
         raise AuditError("invalid_audit")
+    if "adoption" in document:
+        adoption = document["adoption"]
+        if (not isinstance(adoption, dict)
+                or set(adoption) != {"mode", "managed", "current", "caller_acknowledged", "stale"}
+                or adoption["mode"] not in {"managed", "legacy_untracked", "unknown"}
+                or any(value is not None and type(value) is not bool
+                       for key, value in adoption.items() if key != "mode")):
+            raise AuditError("invalid_audit")
     for key in ("source_state_hash", "implementation_hash"):
         if document[key] is None and key == "implementation_hash":
             continue

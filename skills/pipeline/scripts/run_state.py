@@ -145,7 +145,7 @@ def status(project_root, run_id=None):
     return {"active": active, "state": state}
 
 
-def start(project_root, initial=None):
+def start(project_root, initial=None, *, managed=False):
     initial = deepcopy({} if initial is None else initial)
     delivery_from = initial.pop("delivery_from", None) if isinstance(initial, dict) else None
     _validate_changes(initial)
@@ -159,6 +159,9 @@ def start(project_root, initial=None):
                  "stage": "start", "activity": "execution", "batches": [], "pending": [], "next": None,
                  "artifacts": [], "created_at": now, "history": [], "updated_at": now}
         state.update(initial)
+        if managed:
+            import run_policy
+            state["run_policy"] = run_policy.initialize(project_root)
         state["history"].append(_event(state, "start", now))
         if delivery_from is not None:
             import delivery
@@ -217,6 +220,9 @@ def finish(project_root, run_id, owner_token, outcome, *, executors_stopped=Fals
     _stopped(executors_stopped, stop_evidence)
     with _write_guard(project_root) as base:
         path, state = _load_owned(base, run_id, owner_token)
+        if outcome == "completed":
+            import run_policy
+            run_policy.require(project_root, state)
         if any(t.get("status") == "running" for t in state.get("observed_checks", {}).values()):
             raise ValueError("close observed host checks after confirmed stop before finishing")
         if "tasks" in state:

@@ -127,6 +127,8 @@ def _claim_state(root, run_id, state, name, write_paths, *, testing=True):
     """Shared claim mutation; caller holds the owned run's write guard."""
     if state["status"] != "running":
         raise ValueError("check requires an active owned run")
+    import run_policy
+    run_policy.require(root, state)
     E.write_paths_conflict(root, write_paths, [])
     claims = state.setdefault("running_checks", [])
     if any(c["name"] == name or E.write_paths_conflict(root, write_paths, c["write_paths"]) for c in claims):
@@ -176,6 +178,8 @@ def execute_check(project_root, run_id, owner_token, name, *, argv, scope, inten
                   environment=None, write_paths=None, timeout=None, reuse_from=None, impact_covered=False,
                   coverage=None, cwd=None, protected_paths=None):
     """Automatically time one whole check call, including cache decisions."""
+    import run_policy
+    run_policy.require_owned(project_root, run_id, owner_token)
     return O.call(project_root, run_id, owner_token, "locate" if intent in {"search", "locate"} else "verify", name,
                   _execute_check, project_root, run_id, owner_token, name, argv=argv, scope=scope, intent=intent,
                   environment=environment, write_paths=write_paths, timeout=timeout, reuse_from=reuse_from,

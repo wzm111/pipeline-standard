@@ -31,10 +31,15 @@ class ResourceGuardTests(unittest.TestCase):
         return C.execute_check(*self.args, name, **values)
 
     def cli(self, *args, expected=0):
+        if args[0] == "start" and not (self.root / "PIPELINE.md").exists():
+            (self.root / "PIPELINE.md").write_text("fixture contract")
         result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "pipeline_cli.py"),
                                  *args], cwd=self.root, capture_output=True, text=True)
         self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
-        return json.loads(result.stdout)
+        value = json.loads(result.stdout)
+        if args[0] == "start" and result.returncode == 0:
+            self.cli("policy-ack", "--receipt", value["receipt"], "--revision", value["policy"]["revision"])
+        return value
 
     def test_preflight_read_only_nested_sibling_unknown_and_default(self):
         before = {p.relative_to(self.root).as_posix(): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}

@@ -69,6 +69,8 @@ def begin(project_root, run_id, owner_token, observation_id, *, command, scope,
         json.dumps(env, sort_keys=True).encode()).hexdigest()}
     with R._write_guard(root) as base:
         path, state = R._load_owned(base, run_id, owner_token)
+        import run_policy
+        run_policy.require(root, state)
         before = E.fingerprint(root, declaration["scope"])
         declaration["fingerprint"] = before
         E.write_paths_conflict(root, write_paths, [])
