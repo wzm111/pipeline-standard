@@ -83,6 +83,8 @@ def parser():
     preflight = sub.add_parser("preflight", help="inspect actual cwd and executable without starting a run or process")
     preflight.add_argument("--project", default=".")
     preflight.add_argument("--cwd")
+    preflight.add_argument("--write-path", action="append")
+    preflight.add_argument("--protected-path", action="append")
     preflight.add_argument("argv", nargs=argparse.REMAINDER)
     owned = {}
     for name in ("update", "check", "report", "finish", "plan", "run", "qa", "verify", "wait", "continue", "task-start", "task-end"):
@@ -109,6 +111,7 @@ def parser():
     check.add_argument("--intent", choices=sorted(C.INTENTS), default="test")
     check.add_argument("--timeout", type=float)
     check.add_argument("--write-path", action="append")
+    check.add_argument("--protected-path", action="append")
     check.add_argument("--impact-covered", action="store_true")
     check.add_argument("--cwd", help="actual package cwd, relative to project; scope remains project-relative")
     check.add_argument("argv", nargs=argparse.REMAINDER)
@@ -151,8 +154,9 @@ def dispatch(args):
         return T.status(root, args.run_id), 0
     if args.action == "preflight":
         argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
-        result = C.inspect_runner(root, argv, cwd=args.cwd)
-        return result, 0 if result["available"] else 1
+        result = C.inspect_runner(root, argv, cwd=args.cwd, write_paths=args.write_path,
+                                  protected_paths=args.protected_path)
+        return result, 0 if result["available"] and result["resources"]["safe_to_execute"] else 1
     if args.action == "status":
         snapshot = R.status(root, args.run_id)
         result = {**_public(snapshot["state"]), "active": snapshot["active"] is not None,
@@ -244,7 +248,7 @@ def dispatch(args):
         argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
         result = C.execute_check(root, run_id, owner, args.name, argv=argv, scope=args.scope,
             coverage=args.coverage, intent=args.intent, timeout=args.timeout, write_paths=args.write_path,
-            impact_covered=args.impact_covered, cwd=args.cwd)
+            impact_covered=args.impact_covered, cwd=args.cwd, protected_paths=args.protected_path)
         return result, 0 if result["exit_code"] == 0 else 1
     if args.action == "report":
         relative = E.write_report(root, run_id, owner, args.kind, args.name, json.loads(args.payload))

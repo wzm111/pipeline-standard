@@ -63,7 +63,7 @@ coverage标明该命令实际覆盖的验收类别（如unit/e2e/build/browser/m
 
 name是执行轮次，coverage是稳定的验收含义；不能把a-e2e-r2、a-browser-final之类每次变化的执行名直接复制为coverage。相同局部检查可用稳定e2e_service_context类别，最后全量e2e门禁使用独立类别；不能把局部PASS改标签冒充全量。直通可用pipeline_cli.py check/report，沿用同一验证引擎，不额外读取本模块源码。
 
-多项验收使用[检查计划](check-plan.md)从同一声明执行并生成QA要求，避免执行名与验收类别漂移。execute_check可传cwd为实际子包目录，scope/write_paths仍从项目根计算；环境身份同时包含真实cwd，不跨不同子包认领同一结果。inspect_runner或CLI preflight仅核对目录和可执行文件，不启动测试、不生成PASS。
+多项验收使用[检查计划](check-plan.md)从同一声明执行并生成QA要求，避免执行名与验收类别漂移。execute_check可传cwd为实际子包目录，scope/write_paths仍从项目根计算；环境身份同时包含真实cwd，不跨不同子包认领同一结果。inspect_runner或CLI preflight核对目录、可执行文件及可选的声明资源冲突，不启动测试、不生成PASS。检查保护用法见[检查计划](check-plan.md)；execute_check的protected_paths与write_paths均相对项目根，缺声明不证明已隔离。
 
 ## 失败分类与角色开销
 

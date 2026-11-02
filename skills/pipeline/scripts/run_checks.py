@@ -71,7 +71,20 @@ def _workdir(root, cwd=None):
     return path
 
 
-def inspect_runner(project_root, argv, *, cwd=None):
+def inspect_resources(project_root, write_paths=None, protected_paths=None):
+    """Compare declarations only; no service/process health or copy validation."""
+    for paths in (write_paths, protected_paths):
+        if paths is not None:
+            E.write_paths_conflict(project_root, paths, [])
+    status = "not_declared"
+    if protected_paths:
+        status = "unknown_writes" if write_paths is None else "conflict" if E.write_paths_conflict(
+            project_root, write_paths, protected_paths) else "disjoint"
+    return {"basis": "declared resources only", "status": status,
+            "safe_to_execute": status not in {"unknown_writes", "conflict"}}
+
+
+def inspect_runner(project_root, argv, *, cwd=None, write_paths=None, protected_paths=None):
     """Read-only executable/cwd preflight, no process and no environment dump."""
     root = Path(project_root).resolve(strict=True)
     directory = _workdir(root, cwd)
@@ -79,7 +92,8 @@ def inspect_runner(project_root, argv, *, cwd=None):
         raise ValueError("argv must be a nonempty list of arguments")
     env = _environment(directory, argv, dict(os.environ), None, project_root=root)
     return {"cwd": directory.relative_to(root).as_posix(), "executable": env["executable"],
-            "available": env["executable_sha256"] != "unavailable"}
+            "available": env["executable_sha256"] != "unavailable",
+            "resources": inspect_resources(root, write_paths, protected_paths)}
 
 
 def _environment(root, argv, child_env, context, *, project_root=None):
@@ -160,19 +174,19 @@ def _stop(process):
 
 def execute_check(project_root, run_id, owner_token, name, *, argv, scope, intent="test",
                   environment=None, write_paths=None, timeout=None, reuse_from=None, impact_covered=False,
-                  coverage=None, cwd=None):
+                  coverage=None, cwd=None, protected_paths=None):
     """Automatically time one whole check call, including cache decisions."""
     return O.call(project_root, run_id, owner_token, "locate" if intent in {"search", "locate"} else "verify", name,
                   _execute_check, project_root, run_id, owner_token, name, argv=argv, scope=scope, intent=intent,
                   environment=environment, write_paths=write_paths, timeout=timeout, reuse_from=reuse_from,
-                  impact_covered=impact_covered, coverage=coverage, cwd=cwd,
+                  impact_covered=impact_covered, coverage=coverage, cwd=cwd, protected_paths=protected_paths,
                   result_status=lambda result: "reused" if result["reused"] else "executed"
                   if result["result_class"] in {"success", "search_no_match", "reproduction_nonzero"} else "failed")
 
 
 def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, intent="test",
                    environment=None, write_paths=None, timeout=None, reuse_from=None, impact_covered=False,
-                   coverage=None, cwd=None):
+                   coverage=None, cwd=None, protected_paths=None):
     """One call handles a check; callers still authorize command and impact scope.
 
     Unknown writes serialize cooperating checks. Timeout ends our POSIX process
@@ -188,7 +202,7 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
     if timeout is not None and (type(timeout) not in (int, float) or not 0 < timeout < float("inf")):
         raise ValueError("timeout must be a finite positive duration")
     # Check declared paths before any process starts, even without competing checks.
-    E.write_paths_conflict(root, write_paths, [])
+    inspect_resources(root, write_paths, protected_paths)
     before = E.fingerprint(root, scope)
     child_env = {k: v for k, v in os.environ.items() if k != "PIPELINE_OWNER_TOKEN" and owner_token not in v}
     env = _environment(directory, argv, child_env, environment, project_root=root)
@@ -254,6 +268,8 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
                                   {"source": reuse_from, "coverage": coverage, "reuse_decision": decision})
             return {"report": reuse_from, "reuse_report": path, "reused": True,
                     "exit_code": 0, "result_class": "success", "seconds": 0.0, "reuse_decision": decision}
+    if not inspect_resources(root, write_paths, protected_paths)["safe_to_execute"]:
+        raise ValueError("declared resources only: protected paths conflict or check write paths are unknown")
     _claim(root, run_id, owner_token, name, write_paths, testing=intent not in {"search", "locate"})
     process, interrupted = None, None
     try:
