@@ -2,7 +2,7 @@
 
 下文 state.md 是旧格式名称；使用 run_state.py 时统一写对应 runs/<run_id>.json，不维护双份状态。结束步骤必须先确认执行者停止和本run归属，再调用finish；不能为满足“清理”而删除未知活动锁。
 
-同一需求的提交/发布不重启本流程：按delivery.md承接已通过的验收、检查和浏览器脚本，仅验证本次变化与上线产物。纯发布门禁失败不进入下方开发/QA修复循环，按发布范围报告阻塞。开发过程只修本需求和必要配套；无关问题仅记录，新增目标另获授权。检查调用execute_check时，确认影响范围后启用自动复用；QA结果用write_report落盘，使finish能自动封存交付凭证。
+同一需求的提交/发布不重启本流程：按delivery.md承接已通过的验收、检查和浏览器脚本，仅验证本次变化与上线产物。纯发布门禁失败不进入下方开发/QA修复循环，按发布范围报告阻塞。开发过程只修本需求和必要配套；无关问题仅记录，新增目标另获授权。检查调用execute_check时，确认影响范围后启用自动复用；QA结果按下方受控验收入口落盘，收口核对当前证据后再封存交付凭证。
 
 ## 先选择执行方式
 
@@ -42,17 +42,19 @@ python3 <runner> start --project <root> --stage review
 # 读取本轮适用规则后，使用start返回的policy.revision确认；不是让用户填写。
 python3 <runner> policy-ack --project <root> --receipt <receipt> --revision <policy.revision>
 python3 <runner> check --project <root> --receipt <receipt> --name feature-r1 --scope src e2e package.json package-lock.json --coverage e2e_feature --impact-covered --timeout 120 -- <实际检查命令及参数>
-python3 <runner> report --project <root> --receipt <receipt> --kind qa --name final --json '{"gate":"PASS","required_checks":["e2e_feature"]}'
+python3 <runner> report --project <root> --receipt <receipt> --kind qa --name final --json '{"gate":"PASS","required_checks":["e2e_feature"],"checks":["<check返回的完整report引用>"]}'
 python3 <runner> finish --project <root> --receipt <receipt> --direct --stopped --stop-evidence '<宿主确认本run执行者均停止的实际证据>'
 ```
 
 scope包含命令真实依赖的源码、用例、工具/配置与依赖身份；例中路径不是所有项目的固定范围。name区分批次/轮次，coverage使用不随重试变化的语义类别；局部用例不能冒充全量门禁。impact-covered仅在影响面确已覆盖时传入。report的PASS由实际验收决定，CLI不会自动将命令成功转为业务通过。finish不代替终止执行者；实际委派时省略direct并先关闭角色派发。update可调整stage/activity，--help按需查参数；高级恢复、浏览器等继续用既有接口。
 
+managed运行的QA PASS必须由入口核验，不接受只有gate、执行名列表或无required_checks的手写PASS。简单单项使用上例：checks是同run已登记的完整check.report引用，required_checks是稳定覆盖类别；入口核对当前输入、实际环境、日志及最新失败。多项检查或覆盖类别走plan/qa/verify；不能少列某个检查或换task名称来绕过。task-end仍只表示执行结束，不代替验收。
+
 多个验收项或开发/QA交接改用[检查计划](check-plan.md)的plan/run/qa，共享稳定类别，不手工抄写两份列表；采用计划后，CLI缺少QA PASS会保留活动run并提示先验收，不能跑完命令就直接finish。子包检查可传`check --cwd <真实子目录>`；目录或运行器不确定时先用只读preflight，scope仍从项目根计算。成功finish自动置done，并返回未封存交付的具体原因；开发、测试和等待的实际切换仍及时update，不在收尾推算旧阶段耗时。
 
 新CLI start默认管理规则版本，内容摘要只覆盖固定关键规则和项目PIPELINE.md、AGENTS.md、CLAUDE.md的存在/缺失，不扫描业务文件。首次确认后可继续使用；关键规则变化时，检查/计划/新宿主观察/派发/任务启动及完成入口会拒绝。用`policy --project <root> --run-id <run-id>`只读查看当前revision，补读变化规则后`policy-ack`即可沿用原run，不重跑仍有效的检查。查询、记录已开始宿主的真实返回、人工等待和暂停/中止不因规则过期被封死。
 
-`caller_acknowledged`仅记录调用方声明已采用该版本，不能证明模型阅读理解或每次进度格式合规。旧run及旧Python默认start保持`legacy_untracked`，不得称已采用；己方活动run可显式policy-ack升级，不回填历史。新Python调用必须使用`run_state.start(..., managed=True)`接同一门禁，不得为绕过规则选择legacy默认路径；legacy仅保留旧调用兼容，不能作为本轮采用合规证明。只约束这些已接入入口，不能拦截任意shell或替代原生聊天输出。
+`caller_acknowledged`仅记录调用方声明已采用该版本，不能证明模型阅读理解或每次进度格式合规。旧run及旧Python默认start保持`legacy_untracked`，不得称已采用；旧run经CLI开启此前不存在的新task时必须先policy-ack，同值旧task重试和既有工作收尾不追溯改写。己方活动run可显式确认升级并沿用同run，不回填历史。新Python调用必须使用`run_state.start(..., managed=True)`接同一门禁，不得为绕过规则选择legacy默认路径；legacy仅保留旧调用兼容，不能作为本轮采用合规证明。只约束这些已接入入口，不能拦截任意shell或替代原生聊天输出。
 
 CLI不生成Python字节码缓存，避免自身导入改动被计入源码输入。直接通过Python API操作且脚本目录也在检查scope内时，使用`python3 -B`或`PYTHONDONTWRITEBYTECODE=1`运行，避免无关缓存更新使证据失效；这不允许忽略真实生成产物或源码变化。
 

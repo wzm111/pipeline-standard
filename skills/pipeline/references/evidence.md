@@ -77,6 +77,8 @@ name是执行轮次，coverage是稳定的验收含义；不能把a-e2e-r2、a-b
 
 多项验收使用[检查计划](check-plan.md)从同一声明执行并生成QA要求，避免执行名与验收类别漂移。execute_check可传cwd为实际子包目录，scope/write_paths仍从项目根计算；环境身份同时包含真实cwd，不跨不同子包认领同一结果。inspect_runner或CLI preflight核对目录、可执行文件及可选的声明资源冲突，不启动测试、不生成PASS。检查保护用法见[检查计划](check-plan.md)；execute_check的protected_paths与write_paths均相对项目根，缺声明不证明已隔离。
 
+managed运行的QA报告由同一证据判断产生，不能用通用report直接认领PASS。简单单检查传完整checks引用和非空稳定required_checks；多检查使用注册plan，由qa/verify核验。报告中的文字结论不覆盖原实际退出码，也不能省略类别、忽略最新失败或引用旧任务QA冒充本轮验收。共享完成入口再次核对当前证据，检查成功与独立业务判断仍分开；暂停、中止及记录真实失败照常可用。
+
 ## 失败分类与角色开销
 
 intent按实际用途选择test/search/locate/reproduce/check。入口记录原始退出码和result_class，区分成功、搜索无匹配、定位失败、故障复现非零、测试失败、一般命令失败、工具不可用、超时和中断。test_failure表示测试命令非零，不自动判定业务回归或QA FAIL。

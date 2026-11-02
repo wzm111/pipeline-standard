@@ -72,6 +72,9 @@ def write_report(project_root, run_id, owner_token, kind, name, payload):
         if state["status"] != "running":
             raise ValueError("only active runs can record reports")
         root = Path(project_root).resolve(strict=True)
+        if kind == "qa" and "run_policy" in state:
+            import managed_qa
+            payload = managed_qa.canonical(root, state, payload)
         relative = f"tmp/pipeline/runs/{run_id}/artifacts/{kind}/{name}.json"
         path = _local(root, relative)
         if path.exists():

@@ -220,7 +220,7 @@ def dispatch(args):
     if args.action in {"task-start", "task-end"}:
         import run_tasks as T
         if args.action == "task-start":
-            item = T.start(root, run_id, owner, args.task_id, args.goal, args.acceptance)
+            item = T.start(root, run_id, owner, args.task_id, args.goal, args.acceptance, require_managed=True)
         else:
             item = T.end(root, run_id, owner, args.task_id, outcome=args.outcome, report_refs=args.report_refs)
         return {"run_id": run_id, "task": item, "notice": T.NOTICE}, 0
@@ -294,7 +294,15 @@ def dispatch(args):
             impact_covered=args.impact_covered, cwd=args.cwd, protected_paths=args.protected_path)
         return result, 0 if result["exit_code"] == 0 else 1
     if args.action == "report":
-        relative = E.write_report(root, run_id, owner, args.kind, args.name, json.loads(args.payload))
+        submitted = json.loads(args.payload)
+        relative = E.write_report(root, run_id, owner, args.kind, args.name, submitted)
+        if args.kind == "qa" and "run_policy" in R.status(root, run_id)["state"]:
+            judgment = E.read_report(root, run_id, relative, kind="qa")["payload"]
+            result = {"run_id": run_id, "report": relative,
+                      **{key: judgment[key] for key in ("gate", "required_checks", "missing_checks", "check_failures") if key in judgment}}
+            requested_acceptance = submitted.get("gate") == "PASS" or (
+                submitted.get("gate") not in {"CONCERNS", "FAIL"} and submitted.get("plan_ref") is not None)
+            return result, int(requested_acceptance and judgment.get("gate") != "PASS")
         return {"run_id": run_id, "report": relative}, 0
     return _finish(root, run_id, owner, outcome=args.outcome, stopped=args.stopped,
                    stop_evidence=args.stop_evidence, direct=args.direct)
@@ -304,7 +312,7 @@ def _finish(root, run_id, owner, *, outcome="completed", stopped=False, stop_evi
     """Shared original closeout path, including same-process verify completion."""
     R._stopped(stopped, stop_evidence)
     current = R.status(root, run_id)["state"]
-    if outcome == "completed" and current.get("check_plans"):
+    if outcome == "completed" and current.get("check_plans") and "run_policy" not in current:
         latest_qa = next((ref for ref in reversed(current.get("artifacts", []))
                           if "/artifacts/qa/" in ref), None)
         payload = E.read_report(root, run_id, latest_qa, kind="qa")["payload"] if latest_qa else None
