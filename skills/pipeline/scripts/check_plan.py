@@ -26,7 +26,7 @@ def _validate(root, checks, required, owner, inherited, *, scan_inputs=True):
     inherited = E.coverage_labels(inherited)
     if not isinstance(checks, dict) or not checks:
         raise ValueError("nonempty checks required")
-    allowed = {"argv", "scope", "coverage", "cwd", "timeout", "write_paths", "environment", "intent", "layer"}
+    allowed = {"argv", "scope", "coverage", "cwd", "timeout", "write_paths", "protected_paths", "environment", "intent", "layer"}
     normalized = {}
     for key, value in checks.items():
         E._label(key)
@@ -49,7 +49,7 @@ def _validate(root, checks, required, owner, inherited, *, scan_inputs=True):
                 raise ValueError("declare narrow input directories, not the project root")
         if scan_inputs:
             E.fingerprint(root, scope)
-        E.write_paths_conflict(root, value.get("write_paths"), [])
+        C.inspect_resources(root, value.get("write_paths"), value.get("protected_paths"))
         project = Path(root).resolve(strict=True)
         cwd = C._workdir(project, value.get("cwd")).relative_to(project).as_posix()
         C.classify_result(0, value.get("intent", "test"))
