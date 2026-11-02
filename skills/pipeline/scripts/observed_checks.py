@@ -49,12 +49,13 @@ def _validate_timing(report):
 
 
 def begin(project_root, run_id, owner_token, observation_id, *, command, scope,
-          environment, coverage=None, write_paths=None, intent="test"):
+          environment, coverage=None, write_paths=None, intent="test", event_view=False):
     """Persist start and reserve resources before exactly one host invocation.
 
     The explicit ID identifies the invocation, not its log content. Repeating
     begin only retrieves the existing ticket; it never authorizes another call.
     Host environment values are hashed as a whole and never saved in plaintext.
+    event_view returns only public timing/status plus the same-lock created flag.
     """
     root = Path(project_root).resolve(strict=True)
     E._label(observation_id)
@@ -76,14 +77,20 @@ def begin(project_root, run_id, owner_token, observation_id, *, command, scope,
             ticket = tickets[observation_id]
             if ticket["declaration"] != declaration:
                 raise ValueError("observation ID already has a different declaration or inputs")
-            return deepcopy(ticket)
+            return _begin_result(ticket, False, event_view)
         C._claim_state(root, run_id, state, observation_id, write_paths)
         ticket = {"observation_id": observation_id, "status": "running",
                   "started_at": R._now(), "declaration": declaration}
         tickets[observation_id] = ticket
         state["updated_at"] = R._now()
         R._atomic(path, state)
-        return deepcopy(ticket)
+        return _begin_result(ticket, True, event_view)
+
+
+def _begin_result(ticket, created, event_view):
+    if event_view:
+        return {key: ticket[key] for key in ("observation_id", "status", "started_at")} | {"created": created}
+    return deepcopy(ticket)
 
 
 def finish(project_root, run_id, owner_token, observation_id, *, exit_code, log_path,

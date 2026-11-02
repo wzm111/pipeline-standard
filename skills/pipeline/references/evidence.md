@@ -51,6 +51,16 @@ ref = O.finish(root, run_id, owner_token, "browser-r1", exit_code=observed_exit,
 
 同一observation_id表示同一次调用，重复begin只取原ticket，不授权再次调用宿主；恢复时先查真实宿主状态。相同返回重复finish只引用原report，结果/日志/输入冲突会拒绝。真实新调用用新ID，即使命令和日志内容相同也不能合并；开始后输入变化会保留不可复用的结果，不能贴回PASS。工具中断可在真实停止后用非零exit_code及error="interrupted"登记；没有可保存结果时按operations.md的显式恢复确认停止，不能仅因超时或无消息清理。耗时是begin至实际返回登记的观察区间，包含宿主交接，不声称是纯浏览器引擎耗时。
 
+也可用CLI的私有receipt入口，避免在自编Python里搬运owner_token；声明与结果仍走同一observed_checks实现：
+
+```sh
+python3 <runner> observe-begin --project <root> --receipt <receipt> --id browser-r1 --json '{"command":"native-browser acceptance","scope":["src","tests/browser"],"environment":{"browser":"实际观察的版本"},"coverage":["browser"],"write_paths":["tmp/browser-profile"]}'
+# 仅返回created=true时，按原有授权调用一次宿主；返回后保存已有脱敏日志。
+python3 <runner> observe-finish --project <root> --receipt <receipt> --id browser-r1 --exit-code 0 --log-path tmp/pipeline/browser-r1.log --host-stopped --stop-evidence '实际宿主返回证据'
+```
+
+`created`在登记的同一锁内决定；重复或并发同ID只有首次为true，其余成功请求仅取原ticket；并发锁冲突沿用原有拒绝，不自动重试，也不授权再次调用。未知中断先核对原宿主，真实新调用用新ID。失败传实际非零exit-code，可按真实情况加`--error timeout`（另支持`interrupted`、`command_unavailable`）；不能复制示例中的0当验收结果。finish不启动宿主，缺停止证明或有效日志就拒绝；CLI退出0仅表示登记成功，验收仍看report中的实际exit_code、分类和业务断言。CLI只回短状态/引用，不回环境原值和命令正文；凭据不放进声明、参数或日志。stdout是登记结果，不是聊天推送：执行者仍按[可见进度](progress.md)在commentary转述真实里程碑，不能宣称CLI已自动强制聊天输出。
+
 已有`record_check/reusable_check`记录继续兼容，未知旧时间不回填；原日志、来源链和实际业务断言仍须有效。没有Python时按报告头部规则手动核验，不伪称专用工具经由本地进程执行。
 
 复用要求原exit_code=0且命令/环境/输入/日志指纹相同、影响面明确；默认只查本run登记的证据。impact_covered=True时入口自动查找最新匹配结果，无需手动传reuse_from；命中记check_reuse并跳过执行。跨run仅允许按[交付承接](delivery.md)显式继承并验证来源链，不能直接读取别的run报告作为本轮PASS。底层reusable_check仍只读，统计区分继承与实际执行。必要全量门禁在冻结后集中收口；最终业务产物验收保留。
