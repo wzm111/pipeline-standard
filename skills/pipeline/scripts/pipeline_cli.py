@@ -87,10 +87,19 @@ def parser():
     preflight.add_argument("--protected-path", action="append")
     preflight.add_argument("argv", nargs=argparse.REMAINDER)
     owned = {}
-    for name in ("update", "check", "report", "finish", "plan", "run", "qa", "verify", "wait", "continue", "task-start", "task-end"):
+    for name in ("update", "check", "report", "finish", "plan", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "observe-begin", "observe-finish"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
+    for action in ("observe-begin", "observe-finish"):
+        owned[action].add_argument("--id", required=True, dest="observation_id")
+    owned["observe-begin"].add_argument("--json", required=True, dest="declaration")
+    observe_finish = owned["observe-finish"]
+    observe_finish.add_argument("--exit-code", required=True)
+    observe_finish.add_argument("--log-path", required=True)
+    observe_finish.add_argument("--host-stopped", action="store_true")
+    observe_finish.add_argument("--stop-evidence", required=True)
+    observe_finish.add_argument("--error")
     update = owned["update"]
     update.add_argument("--stage")
     update.add_argument("--activity", choices=sorted(R.ACTIVITIES))
@@ -244,6 +253,25 @@ def dispatch(args):
         if not changes:
             raise ValueError("update needs a changed stage, activity or next action")
         return _public(R.update(root, run_id, owner, changes)), 0
+    if args.action in {"observe-begin", "observe-finish"}:
+        import observed_checks as H
+        if args.action == "observe-begin":
+            declaration = json.loads(args.declaration)
+            allowed = {"command", "scope", "environment", "coverage", "write_paths", "intent"}
+            if (not isinstance(declaration, dict) or set(declaration) - allowed
+                    or not {"command", "scope", "environment"} <= declaration.keys()):
+                raise ValueError("observe-begin requires command/scope/environment and supported declaration fields only")
+            return H.begin(root, run_id, owner, args.observation_id, **declaration, event_view=True), 0
+        try:
+            exit_code = int(args.exit_code)
+        except ValueError:
+            raise ValueError("observe-finish requires an integer exit code") from None
+        if args.error not in {None, "command_unavailable", "timeout", "interrupted"}:
+            raise ValueError("observe-finish requires a supported execution error")
+        report = H.finish(root, run_id, owner, args.observation_id, exit_code=exit_code,
+                          log_path=args.log_path, host_stopped=args.host_stopped,
+                          stop_evidence=args.stop_evidence, error=args.error)
+        return {"observation_id": args.observation_id, "status": "completed", "report": report}, 0
     if args.action == "check":
         argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
         result = C.execute_check(root, run_id, owner, args.name, argv=argv, scope=args.scope,
