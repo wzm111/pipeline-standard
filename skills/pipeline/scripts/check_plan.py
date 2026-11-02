@@ -15,6 +15,8 @@ def _owned(root, run_id, owner):
         _, state = R._load_owned(base, run_id, owner)
         if state["status"] != "running":
             raise ValueError("plan requires an active owned run")
+        import run_policy
+        run_policy.require(root, state)
         return state
 
 

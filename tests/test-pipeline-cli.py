@@ -32,6 +32,7 @@ class PipelineCliTests(unittest.TestCase):
     def start(self):
         s = self.cli("start")
         self.receipt = s["receipt"]
+        self.cli("policy-ack", "--receipt", self.receipt, "--revision", s["policy"]["revision"])
         return s
 
     def check(self, name, command=None, expected=0, coverage="unit-fixture"):
@@ -99,6 +100,8 @@ class PipelineCliTests(unittest.TestCase):
     def test_missing_optional_audit_preserves_start_and_finish_success(self):
         scripts = self.root / "isolated-skill/scripts"
         shutil.copytree(SCRIPTS, scripts, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "run_audit.py"))
+        shutil.copy2(SCRIPTS.parent / "SKILL.md", scripts.parent / "SKILL.md")
+        shutil.copytree(SCRIPTS.parent / "references", scripts.parent / "references")
         command = [sys.executable, "-B", str(scripts / "pipeline_cli.py")]
         started = subprocess.run([*command, "start", "--project", str(self.root)], capture_output=True, text=True)
         state = R.status(self.root)["state"]

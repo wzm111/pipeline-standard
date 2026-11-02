@@ -80,6 +80,9 @@ def parser():
     start.add_argument("--project", default=".")
     start.add_argument("--stage", default="execution")
     start.add_argument("--delivery-from", choices=["latest"])
+    policy = sub.add_parser("policy", help="inspect current rule revision and caller acknowledgement without writes")
+    policy.add_argument("--project", default=".")
+    policy.add_argument("--run-id")
     preflight = sub.add_parser("preflight", help="inspect actual cwd and executable without starting a run or process")
     preflight.add_argument("--project", default=".")
     preflight.add_argument("--cwd")
@@ -87,10 +90,11 @@ def parser():
     preflight.add_argument("--protected-path", action="append")
     preflight.add_argument("argv", nargs=argparse.REMAINDER)
     owned = {}
-    for name in ("update", "check", "report", "finish", "plan", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "observe-begin", "observe-finish"):
+    for name in ("update", "check", "report", "finish", "plan", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "observe-begin", "observe-finish", "policy-ack"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
+    owned["policy-ack"].add_argument("--revision", required=True)
     for action in ("observe-begin", "observe-finish"):
         owned[action].add_argument("--id", required=True, dest="observation_id")
     owned["observe-begin"].add_argument("--json", required=True, dest="declaration")
@@ -158,6 +162,9 @@ def dispatch(args):
         result = A.audit(args.project, args.run_id, live=args.live) if args.action == "audit" else A.scan(args.project, args.limit)
         return result, int(result["status"] == "error")
     root = Path(args.project).resolve(strict=True)
+    if args.action == "policy":
+        import run_policy
+        return run_policy.inspect(root, R.status(root, args.run_id)["state"]), 0
     if args.action == "task-status":
         import run_tasks as T
         return T.status(root, args.run_id), 0
@@ -167,8 +174,10 @@ def dispatch(args):
                                   protected_paths=args.protected_path)
         return result, 0 if result["available"] and result["resources"]["safe_to_execute"] else 1
     if args.action == "status":
+        import run_policy
         snapshot = R.status(root, args.run_id)
         result = {**_public(snapshot["state"]), "active": snapshot["active"] is not None,
+                  "policy": run_policy.inspect(root, snapshot["state"]),
                   "unrecognized_active": snapshot["active"] == "unrecognized"}
         if args.recovery:
             import run_continuity as T
@@ -193,15 +202,21 @@ def dispatch(args):
         initial = {"stage": args.stage}
         if args.delivery_from:
             initial["delivery_from"] = args.delivery_from
-        state = R.start(root, initial)
+        state = R.start(root, initial, managed=True)
         # NamedTemporaryFile in _atomic gives 0600. No token is printed, passed
         # as argv, or inferred from a different task's active marker.
         receipt = E._local(root, f"tmp/pipeline/runs/{state['run_id']}/receipt.json")
         receipt.parent.mkdir(parents=True, exist_ok=True)
         R._atomic(receipt, {**{k: state[k] for k in ("schema_version", "run_id", "owner_token")}, "project_root": str(root)})
-        return {**_public(state), "receipt": str(receipt), "audit": _optional_audit(root, state["run_id"]), **paths()}, 0
+        import run_policy
+        return {**_public(state), "receipt": str(receipt), "policy": run_policy.inspect(root, state),
+                "next_action": "policy-ack --receipt <receipt> --revision <policy.revision>; caller acknowledgement only",
+                "audit": _optional_audit(root, state["run_id"]), **paths()}, 0
     receipt = _receipt(root, args.receipt)
     run_id, owner = receipt["run_id"], receipt["owner_token"]
+    if args.action == "policy-ack":
+        import run_policy
+        return run_policy.acknowledge(root, run_id, owner, args.revision), 0
     if args.action in {"task-start", "task-end"}:
         import run_tasks as T
         if args.action == "task-start":

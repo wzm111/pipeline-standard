@@ -37,7 +37,7 @@ description: 对话式研发流水线：描述需求即可按风险开发、测�
 ## 启动与路由
 
 1. 读取项目根 `PIPELINE.md`。不存在或关键字段仍是占位符时，按 interaction.md 自动接入并继续原需求；不把填写模板交给用户。已有契约只补必要缺项，保留用户规则。
-2. 若 `tmp/pipeline/.active` 存在或 state 显示未完成，先处理续跑/新开，禁止同项目并行两条流水线。有Python时标准直通优先使用scripts/pipeline_cli.py的paths/start/check/report/finish（例见standard.md），不为调用接口读取内部源码。读契约并确认锁归属后尽早start，再做业务扫描，使准备阶段进入真实计时。保存start返回的私有receipt路径，不打印其内容或自动认领别人的active；复杂状态/恢复才读[本地状态接口](references/operations.md)。真实状态位于runs/<run_id>.json，不并行维护state.md。无Python保留旧格式；收口确认执行者停止后只清自己的标记。
+2. 若 `tmp/pipeline/.active` 存在或 state 显示未完成，先处理续跑/新开，禁止同项目并行两条流水线。有Python时标准直通优先使用scripts/pipeline_cli.py的paths/start/check/report/finish（例见standard.md），不为调用接口读取内部源码。读契约并确认锁归属后尽早start，再做业务扫描，使准备阶段进入真实计时。保存start返回的私有receipt路径，不打印其内容或自动认领别人的active；新CLI start默认启用规则版本门禁：先读取本轮适用规则，再按返回revision执行policy-ack，确认后才启动检查或派发；规则变化先刷新确认，不重启run或重做有效检查。旧run的采用状态保持unknown，详见standard.md。复杂状态/恢复才读[本地状态接口](references/operations.md)。真实状态位于runs/<run_id>.json，不并行维护state.md。无Python保留旧格式；收口确认执行者停止后只清自己的标记。
    阶段或执行/测试/人工等待/角色等待/交接实际改变时更新stage/activity，脚本自动记事件；查询和监控不制造事件，不反推旧记录缺失的耗时。
    本地状态接口会在生命周期节点留下[安全运行摘要](references/audit.md)，供以后扫描项目分析；不逐条记对话、不复制业务输出。需要分析时先scan/audit，未知字段保留未知，不因日志新增角色或重跑检查。
    本批要用原生浏览器做验收、导出或耗时外部检查时，首次相关调用前读[浏览器交接](references/browser-handoff.md)，在实际调用点使用已有observed_checks入口；不等到QA或报告整理时才补记。只记录有分析价值的真实调用，不给每次轻量快照机械建ticket，不重复记录已有证据。

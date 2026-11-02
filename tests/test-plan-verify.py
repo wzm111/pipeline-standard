@@ -25,6 +25,7 @@ class VerifyCliTests(unittest.TestCase):
         self.env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
         self.started = self.cli("start")
         self.receipt = self.started["receipt"]
+        self.cli("policy-ack", "--receipt", self.receipt, "--revision", self.started["policy"]["revision"])
         state = R.status(self.root)["state"]
         self.run, self.owner = state["run_id"], state["owner_token"]
         self.check = {"argv": [sys.executable, "-B", "-c",

@@ -77,6 +77,8 @@ def start(root, run_id, owner, task_id, goal, acceptance):
         raise ValueError("owner token must not appear in task records")
     with R._write_guard(root) as base:
         path, state = _owned(base, run_id, owner)
+        import run_policy
+        run_policy.require(root, state)
         tasks = state.get("tasks", [])
         existing = next((item for item in tasks if item["task_id"] == task_id), None)
         if existing is not None:
