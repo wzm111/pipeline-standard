@@ -48,6 +48,21 @@ class PipelineCliTests(unittest.TestCase):
         self.assertEqual(self.cli("status")["active"], False)
         self.assertEqual(before, sorted(self.root.iterdir()))
 
+    def test_reuse_preflight_diagnoses_without_execution_or_writes(self):
+        state = self.start()
+        command = "print('reuse-fixture')"
+        self.check("reuse-original", command)
+        before = {str(p): (p.read_bytes(), p.stat().st_mtime_ns)
+                  for p in self.root.rglob("*") if p.is_file()}
+        result = self.cli("reuse-preflight", "--run-id", state["run_id"], "--scope", "source.py",
+                          "--coverage", "unit-fixture", "--impact-covered", "--", sys.executable, "-c", command)
+        self.assertTrue(result["reusable"])
+        self.assertEqual(before, {str(p): (p.read_bytes(), p.stat().st_mtime_ns)
+                                 for p in self.root.rglob("*") if p.is_file()})
+        result = self.cli("reuse-preflight", "--run-id", state["run_id"], "--scope", "source.py",
+                          "--coverage", "unit-fixture", "--", sys.executable, "-c", command, expected=1)
+        self.assertEqual(result["reason"], "impact_not_confirmed")
+
     def test_recovery_without_active_and_explicit_old_run_remains_read_only(self):
         before = sorted(self.root.iterdir())
         empty = self.cli("status", "--recovery")["recovery"]
