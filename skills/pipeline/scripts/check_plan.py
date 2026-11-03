@@ -29,7 +29,7 @@ def _validate(root, checks, required, owner, inherited, *, scan_inputs=True):
     inherited = E.coverage_labels(inherited)
     if not isinstance(checks, dict) or not checks:
         raise ValueError("nonempty checks required")
-    allowed = {"argv", "scope", "coverage", "cwd", "timeout", "write_paths", "protected_paths", "environment", "intent", "layer", "depends_on"}
+    allowed = {"observed_ref", "argv", "scope", "coverage", "cwd", "timeout", "write_paths", "protected_paths", "environment", "intent", "layer", "depends_on"}
     normalized = {}
     for key, value in checks.items():
         E._label(key)
@@ -37,6 +37,24 @@ def _validate(root, checks, required, owner, inherited, *, scan_inputs=True):
             raise ValueError("unknown check fields")
         if "layer" in value and value["layer"] not in ("quick", "final"):
             raise ValueError("check layer must be quick or final")
+        if "observed_ref" in value:
+            if set(value) - {"observed_ref", "scope", "coverage", "environment", "intent", "layer", "depends_on"}:
+                raise ValueError("observed checks cannot declare execution fields")
+            E._local(Path(root).resolve(strict=True), value["observed_ref"])
+            scope, labels = value.get("scope"), E.coverage_labels(value.get("coverage"))
+            if not isinstance(scope, list) or not scope or not labels:
+                raise ValueError("observed checks require scope and coverage")
+            for relative in scope:
+                if E._local(Path(root).resolve(strict=True), relative) == Path(root).resolve():
+                    raise ValueError("declare narrow input directories, not the project root")
+            env = E._environment(value.get("environment"))
+            digest = env.get("host_identity_sha256")
+            if set(env) != {"host_identity_sha256"} or not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                raise ValueError("observed checks require the explicit host identity hash")
+            if value.get("intent", "test") not in {"test", "check"}:
+                raise ValueError("only test/check host observations can be planned")
+            normalized[key] = {**value, "coverage": labels, "environment": env}
+            continue
         argv = value.get("argv")
         if not isinstance(argv, list) or not argv or any(not isinstance(a, str) or not a or "\0" in a for a in argv):
             raise ValueError("nonempty argv required")
@@ -83,6 +101,9 @@ def _validate(root, checks, required, owner, inherited, *, scan_inputs=True):
 def save_plan(root, run_id, owner, name, checks, required_checks=None):
     state = _owned(root, run_id, owner)
     payload = _validate(root, checks, required_checks, owner, state.get("inherited_required_checks", []))
+    for check in payload["checks"].values():
+        if "observed_ref" in check:
+            _observed_proof(root, run_id, state, check, allow_old=True)
     ref = E.write_report(root, run_id, owner, "check_plan", name, payload)
     with R._write_guard(root) as base:
         path, state = R._load_owned(base, run_id, owner)
@@ -131,6 +152,87 @@ def _identity(proof):
 def _execution_spec(check):
     # Scheduling metadata cannot change the identity of the executed command.
     return {key: value for key, value in check.items() if key not in {"layer", "depends_on"}}
+
+
+def _observed_proof(root, run_id, state, check, *, allow_old=False):
+    """Only a completed original host ticket can supply a native plan check."""
+    import observed_checks as O
+    import managed_qa as M
+    ref = check["observed_ref"]
+    if ref not in state["artifacts"]:
+        raise ValueError("observed source must be registered in this run")
+    report = E.read_report(root, run_id, ref, kind="check")
+    proof = report["payload"]
+    ticket = state.get("observed_checks", {}).get(proof.get("observation_id"), {})
+    if (proof.get("observation_kind") != "host_tool" or ticket.get("status") != "completed"
+            or ticket.get("report") != ref or proof.get("intent") not in {"test", "check"}
+            or proof.get("started_at") != ticket.get("started_at")
+            or any(proof.get(k) != v for k, v in ticket.get("declaration", {}).items())
+            or not ticket.get("declaration")):
+        raise ValueError("completed test/check host observation required")
+    O._validate_timing(report)
+    if (proof.get("scope") != check["scope"] or proof.get("coverage") != check["coverage"]
+            or proof.get("environment") != check["environment"]
+            or proof.get("intent") != check.get("intent", "test")):
+        raise ValueError("observed declaration does not match source identity")
+    current = M._current(report, state)
+    if not current:
+        current = any(M._current(E.read_report(root, run_id, item, kind="check_reuse"), state)
+                      and E.read_report(root, run_id, item, kind="check_reuse")["payload"].get("source") == ref
+                      for item in state["artifacts"] if "/artifacts/check_reuse/" in item)
+    if not current and not allow_old:
+        raise ValueError("observed source requires current task observation or explicit reuse")
+    return proof
+
+
+def planned_identity(root, run_id, state, check):
+    proof = (_observed_proof(root, run_id, state, check) if "observed_ref" in check else
+             {"command": shlex.join(check["argv"]), "scope": check["scope"],
+              "intent": check.get("intent", "test"), "cwd": check.get("cwd", ".")})
+    return _identity(proof)
+
+
+def equivalent_observed_recovery(root, run_id, state, old, new):
+    """A later complete plan may replace host references, never its obligations."""
+    if old["required_checks"] != new["required_checks"] or old["checks"].keys() != new["checks"].keys():
+        return False
+    changed = False
+    for key, previous in old["checks"].items():
+        replacement = new["checks"][key]
+        if previous == replacement:
+            continue
+        if ("observed_ref" not in previous or "observed_ref" not in replacement
+                or {k: v for k, v in previous.items() if k != "observed_ref"}
+                != {k: v for k, v in replacement.items() if k != "observed_ref"}):
+            return False
+        try:
+            before = _observed_proof(root, run_id, state, previous, allow_old=True)
+            after = _observed_proof(root, run_id, state, replacement)
+            if (_identity(before) != _identity(after)
+                    or R._timestamp(after["started_at"]) <= R._timestamp(before["finished_at"])):
+                return False
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+        changed = True
+    return changed
+
+
+def _valid_observed(root, run_id, state, check, snapshot, *, allow_old=False):
+    try:
+        proof = _observed_proof(root, run_id, state, check, allow_old=allow_old)
+        ref = check["observed_ref"]
+        newer = snapshot["observations"].get(_identity(proof))
+        if newer and snapshot["positions"][newer] > snapshot["positions"][ref]:
+            latest = _report(root, run_id, newer, "check", snapshot)
+            verdict = E.reusable_check(root, run_id, newer, command=proof["command"],
+                        environment=check["environment"], impact_covered=True, coverage=latest.get("coverage"))
+            if not verdict["reusable"]:
+                return None, "superseded_observation"
+        verdict = E.reusable_check(root, run_id, ref, command=proof["command"],
+                    environment=check["environment"], impact_covered=True, coverage=check["coverage"])
+        return (ref, None) if verdict["reusable"] else (None, verdict["reason"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, "observed_source_unavailable_or_changed"
 
 
 def _dependencies(checks):
@@ -224,6 +326,20 @@ def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=Fa
             message = "final check requires current valid quick evidence: "
         raise ValueError(message + ", ".join(blocked[:8])
                          + (f" (+{len(blocked) - 8} more)" if len(blocked) > 8 else ""))
+    if "observed_ref" in check:
+        ref, reason = _valid_observed(root, run_id, state, check, snapshot, allow_old=impact_covered is True)
+        if ref is None:
+            raise ValueError("host evidence requires actual re-observation: " + reason)
+        result = {"report": ref, "exit_code": 0, "reused": True, "observation_kind": "host_tool"}
+        if impact_covered is True:
+            reuse = E.write_report(root, run_id, owner, "check_reuse", name,
+                        {"source": ref, "coverage": check["coverage"],
+                         "reuse_decision": {"reusable": True, "reason": "explicit_observed_identity_inputs_and_log"}})
+            result["reuse_report"] = reuse
+        binding = E.write_report(root, run_id, owner, "planned_check", name,
+                    {"plan_ref": plan_ref, "plan_sha256": _cached_digest(root, plan_ref, snapshot),
+                     "check_id": check_id, "result": result})
+        return {**result, "plan_ref": plan_ref, "check_id": check_id, "planned_report": binding}
     candidate_plan, previous = _reuse_candidate(root, run_id, owner, state, plan_ref, check_id,
                                                check, snapshot, impact_covered)
     args = _execution_spec(check)
@@ -244,6 +360,8 @@ def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=Fa
 
 def _valid(root, run_id, owner, state, plan_ref, check_id, check, snapshot=None):
     snapshot = snapshot if snapshot is not None else _snapshot(root, run_id, state)
+    if "observed_ref" in check:
+        return _valid_observed(root, run_id, state, check, snapshot)
     latest = snapshot["bindings"].get((plan_ref, check_id), (None, None))[1]
     if latest is None:
         return None, "not_executed"
@@ -419,6 +537,11 @@ def preflight_plan(root, run_id, owner, plan_ref, name):
                 fail(key, "attempt", "attempt_name_already_used")
         except (OSError, ValueError, TypeError):
             fail(key, "attempt", "invalid_attempt_name")
+        if "observed_ref" in check:
+            ref, reason = _valid_observed(root, run_id, state, check, snapshot)
+            if ref is None:
+                fail(key, "observation", reason)
+            continue
         try:
             C._workdir(Path(root).resolve(), check.get("cwd"))
         except (OSError, ValueError, TypeError):

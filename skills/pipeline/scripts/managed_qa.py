@@ -99,10 +99,12 @@ def canonical(root, state, payload):
                             snapshot)
         result = P.inspect_state(root, state["run_id"], state["owner_token"], ref, state,
                                  payload.get("summary", ""), snapshot=snapshot)
-        import shlex
-        planned = {P._identity({"command": shlex.join(check["argv"]), "scope": check["scope"],
-                               "intent": check.get("intent", "test"), "cwd": check.get("cwd", ".")})
-                   for check in plan["checks"].values()}
+        planned = set()
+        for check in plan["checks"].values():
+            try:
+                planned.add(P.planned_identity(root, state["run_id"], state, check))
+            except (OSError, ValueError, KeyError, TypeError):
+                pass  # inspect_state retains the source failure and missing category.
         applicable, _ = _checks(root, state)
         if any(P._identity(_read(root, state, source, "check")["payload"]) not in planned
                for source in applicable if not _read(root, state, source, "check")["payload"].get("inherited_from")):
@@ -176,9 +178,17 @@ def release_requirements(root, state):
             source_qa[payload.get("plan_ref", "single")] = payload
     if any(payload.get("gate") != "PASS" for payload in source_qa.values()):
         raise ValueError("current source QA has unresolved concerns or failure")
-    for ref in _plans(root, state):
-        result = P.inspect_state(root, state["run_id"], state["owner_token"], ref, state)
-        if result["gate"] != "PASS":
+    plans = _plans(root, state)
+    snapshot = P._snapshot(root, state["run_id"], state)
+    definitions = {ref: P._read_plan(root, state["run_id"], state["owner_token"], ref, state, snapshot) for ref in plans}
+    results = {ref: P.inspect_state(root, state["run_id"], state["owner_token"], ref, state, snapshot=snapshot) for ref in plans}
+    for index, ref in enumerate(plans):
+        if results[ref]["gate"] == "PASS":
+            continue
+        recovered = any(results[later]["gate"] == "PASS" and P.equivalent_observed_recovery(
+                        root, state["run_id"], state, definitions[ref], definitions[later])
+                        for later in plans[index + 1:])
+        if not recovered:
             raise ValueError("current source plan acceptance is incomplete")
     current, _ = _checks(root, state)
     for ref in current:

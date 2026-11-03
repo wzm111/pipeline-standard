@@ -67,6 +67,28 @@ For Claude Code, replace `$pipeline` with `/pipeline`. Verify the input/output e
 
 Ask for a progress summary during execution and a local run-report preview afterward. Missing records must remain missing, and unknown fields must remain unknown. Previewing through chat may send the preview text to your agent's host under its data policy.
 
+## 页面任务试用 / Try a UI task
+
+此示例用于检查智能体是否会主动观察实际界面。它使用合成文本和静态 HTML，无账号、业务数据或外部依赖。先定位完整安装仓库中的 `tests/fixtures/visual-adoption/index.html`，将它复制到一个新建的临时目录作为 `index.html`，再在全新聊天打开该目录。不要在源码仓库或业务项目里执行试用。
+
+```text
+$pipeline 调整这个更新提示卡，延续现有绿色配色，让标题、说明和主要操作有清楚的层级；“立即更新”是主要操作，“稍后提醒”是次要操作，详情可以展开和收起。长中文说明在桌面和手机上都要可读，按钮不能挤出屏幕。稍后提醒应隐藏通知，立即更新仅显示本地演示成功提示。只修改本地 index.html 和直接相关验证，不新增依赖、不访问外部服务、不修改浏览器或全局设置。允许建立本示例的项目契约及本地运行记录。不要提交、推送、发布或调用真实更新服务。
+```
+
+Claude Code 将 `$pipeline` 换成 `/pipeline`。实际运行记录应区分：是否加载了适用设计指导、是否沿用原配色、是否看过当前桌面/手机及展开状态、交互是否真实验证、缺口是否阻止了视觉通过。页面源码、单测通过或“我已经看过”的文字本身不能证明截图来自宿主或界面美观；应结合实际工具返回、图片和当前任务证据判断。若浏览器不可用，应如实保留待验，不能让用户提供截图来冒充主动验收。
+
+试用不应强制多角色、重复截图或固定修改轮数。只记录本次真实发现；无问题可以一次结束，修改了相关源码或状态则重新核对受影响表面。界面试用与上面的纯逻辑试用分开计时，不把启动新聊天、人工等待或旧任务的时间混入。不要把可复现示例写成已经通过的采用结果，也不要根据一次试用承诺提速比例。
+
+同时按[进度规范](../skills/pipeline/references/progress.md)检查实际开场、后续里程碑和最终交付，核对固定标识、加粗和具体步骤；最终回复应展示已查看的实际图片及未验证限制。policy current/ack 不能证明这些消息合规。消息时间不可见时，反馈间隔记为未知。只读监听与发送前校验是不同能力；首次读取 skill 前的遗漏或未展示图片都应保留为采用缺口，不能声称观察者已自动纠正。
+
+For an English trial, copy the same synthetic fixture to a fresh temporary directory and ask:
+
+```text
+$pipeline Improve this update notice while keeping its green palette. Make the heading, explanation and primary action clear. Update now is primary; remind me later is secondary; details should expand and collapse. Long Chinese copy must remain readable on desktop and phone. Remind me later hides the notice; update now only shows a local demo success message. Change only index.html and directly related validation; no new dependencies, external services, real update calls, global settings, commits, pushes or releases. You may create this fixture's project contract and local run records.
+```
+
+Inspect the actual tool returns and images, not just the final claim. Missing browser or state evidence must remain pending. This fixture is a reproducible evaluation input, not proof of adoption, aesthetic quality or a speed benchmark.
+
 ## 反馈与清理 / Feedback and cleanup
 
 试用结果可自愿提交到 [GitHub Issues](https://github.com/wzm111/pipeline-standard/issues)：注明运行时、系统、版本、预期、实际结果和合成复现。不要上传整个运行目录、私有归属文件或原始业务日志。

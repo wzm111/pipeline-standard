@@ -16,6 +16,30 @@ python3 <runner> qa --receipt <receipt> --plan <同一plan引用> --name final -
 
 managed运行不允许用手写QA PASS跳过上述判断。qa/verify产生当前计划的检查/覆盖/缺项结论；普通report即使写PASS也必须接受同一验证，不能认领未执行、失效或其他任务的证据。完成门禁同时适用于共享Python入口；无计划的简单单检查保留standard.md的轻量引用路径。已有legacy记录不因此自动获得已采用证明。
 
+## 原生宿主的多项正式检查
+
+原生浏览器/API工具按[evidence.md](evidence.md)先observe-begin、实际调用一次宿主、返回后保存脱敏日志并observe-finish。多项正式检查仍使用同一计划；每项用`observed_ref`精确引用本run已完成的test/check宿主记录，不填假argv，也不把visual/baseline或普通metadata报告当正式检查。声明scope、coverage、intent须与原记录完全相同，environment为该记录payload.environment中的host_identity_sha256对象；它只保存宿主身份hash，不含原环境值。先确认当前真实宿主/页面/版本身份仍匹配，无法确认或已经变化则实际补验，不能复制旧hash冒充当前身份。源码、夹具、运行配置和依赖仍须完整纳入原观察scope。
+
+以下为纯原生的两项示例；执行者用实际目标替换入口和scope，在每个begin与finish之间真实调用相应宿主。exit-code取实际断言结果，日志须已保存；不照抄0冒充通过：
+
+```sh
+python3 <runner> observe-begin --project <root> --receipt <receipt> --id ready-r1 --json '{"command":"browser.ready","scope":["web/src","web/tests","web/package.json","pnpm-lock.yaml"],"environment":{"browser":"<实际宿主与版本身份>"},"coverage":["browser_ready"],"write_paths":[]}'
+# created=true时真实检查页面就绪，返回后保存tmp/pipeline/ready-r1.log。
+python3 <runner> observe-finish --project <root> --receipt <receipt> --id ready-r1 --exit-code <实际退出码> --log-path tmp/pipeline/ready-r1.log --host-stopped --stop-evidence '<实际宿主返回>'
+python3 <runner> observe-begin --project <root> --receipt <receipt> --id confirm-r1 --json '{"command":"browser.confirmation","scope":["web/src","web/tests","web/package.json","pnpm-lock.yaml"],"environment":{"browser":"<实际宿主与版本身份>"},"coverage":["browser_confirmation"],"write_paths":[]}'
+# created=true时真实验证确认交互，返回后保存tmp/pipeline/confirm-r1.log。
+python3 <runner> observe-finish --project <root> --receipt <receipt> --id confirm-r1 --exit-code <实际退出码> --log-path tmp/pipeline/confirm-r1.log --host-stopped --stop-evidence '<实际宿主返回>'
+python3 <runner> plan --project <root> --receipt <receipt> --name native-acceptance --json '{"checks":{"ready":{"observed_ref":"<ready finish返回的report>","scope":["web/src","web/tests","web/package.json","pnpm-lock.yaml"],"coverage":["browser_ready"],"environment":{"host_identity_sha256":"<ready report中的实际64位hash>"},"layer":"quick"},"confirm":{"observed_ref":"<confirm finish返回的report>","scope":["web/src","web/tests","web/package.json","pnpm-lock.yaml"],"coverage":["browser_confirmation"],"environment":{"host_identity_sha256":"<confirm report中的实际64位hash>"},"depends_on":["ready"]}}}'
+python3 <runner> plan-preflight --project <root> --receipt <receipt> --plan <plan返回的实际引用> --name native-final
+python3 <runner> verify --project <root> --receipt <receipt> --plan <同一plan引用> --name native-final --summary '<实际业务判断与缺口>'
+```
+
+已完成的原生项可直接`qa --project <root> --receipt <receipt> --plan <同一plan引用> --name native-qa --summary '<实际业务判断>'`，与verify使用相同_valid判断；不必再调用宿主或先造一条OS检查。verify/run只绑定并复核原report，不生成新check或宿主耗时；preflight无写入且不会调用宿主，无效时保留缺项并阻断后续重检查。失败或身份/输入/日志变化须实际补验，保存新source引用与新版本计划，原失败不删除；稳定逻辑command、cwd（原生默认项目根）、scope与environment身份不能靠换描述绕开后续失败。修正locator后的真实重测使用新observation ID，沿用同一逻辑command。
+
+旧task原生记录默认无效；确已确认相同宿主身份、输入和影响面时，可先用`run --project <root> --receipt <receipt> --plan <实际plan引用> --id <原生检查ID> --name native-reuse-r1 --impact-covered`显式核验并登记复用，再verify。普通planned绑定不能把旧记录变成当前观察。`observed_ref`项仅接受引用、scope、coverage、environment、intent、layer、depends_on，不能混入argv/cwd/timeout/写集；与argv项可混排，原quick/依赖、当前task、全部必要覆盖和其他QA门禁保持不变。接口只核验已登记的宿主证据，不能自动观察浏览器当前状态或把视觉记录提升为业务通过。
+
+发布承接时，旧失败计划不会永久阻断已经真实恢复的同一验收：仅允许同当前task后登记且当前有效PASS的完整等价计划代表原义务，差异只能是更新的observed_ref。全部检查ID、required_checks、依赖/层级、scope、environment、intent、coverage和argv项须原样保留；更新来源须为同逻辑command、晚于旧观察结束的真实宿主记录。旧计划及其失败引用仍保持失败，不删除要求或取任意最后计划。变窄、换环境、漏项、未知来源或后续失败均继续阻断；旧source QA尚有未解决CONCERNS/FAIL时也不自动推断为已解决，尤其不能以新计划机器PASS覆盖业务判断。
+
 所有命令均接受`--project <root>`。cwd相对项目根，scope和write_paths仍相对项目根；省略cwd沿用项目根。不确定子包/运行器时先用`preflight --project <root> --cwd web -- pnpm test:unit`只读核对cwd与可执行文件；它不运行测试，也不证明脚本/依赖/业务通过。
 
 有正在使用构建产物的预览服务时，在首个可能写产物的检查前声明其受保护目录：`preflight --project <root> --cwd web --write-path web/.isolated-output --protected-path web/.nuxt -- pnpm build`。计划对应字段为`write_paths`和`protected_paths`，均相对项目根；真实`check`也接受重复的`--protected-path`。声明相同或父子目录重叠、或有保护目录但写集未知时，预检返回失败，真实检查在启动进程前拒绝。优先使用项目工具已支持的独立输出目录；不能确认隔离时先停止安排冲突检查，不擅自停服务或改端口。
