@@ -108,7 +108,7 @@ def parser():
     reuse.add_argument("--impact-covered", action="store_true")
     reuse.add_argument("argv", nargs=argparse.REMAINDER)
     owned = {}
-    for name in ("update", "check", "report", "finish", "plan", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "observe-begin", "observe-finish", "policy-ack"):
+    for name in ("update", "check", "report", "finish", "plan", "plan-preflight", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "observe-begin", "observe-finish", "policy-ack"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
@@ -152,7 +152,7 @@ def parser():
     report.add_argument("--json", required=True, dest="payload")
     owned["plan"].add_argument("--name", required=True)
     owned["plan"].add_argument("--json", required=True, dest="payload", help="agent-maintained checks and required_checks")
-    for action in ("run", "qa", "verify"):
+    for action in ("run", "qa", "verify", "plan-preflight"):
         owned[action].add_argument("--plan", required=True)
         owned[action].add_argument("--name", required=True)
     owned["run"].add_argument("--id", required=True, dest="check_id")
@@ -265,8 +265,11 @@ def dispatch(args):
             state = T.resume_work(root, run_id, owner, evidence=args.evidence)
         return {**_public(state), "handoff": {key: state["continuity_wait"].get(key)
                 for key in ("status", "reason", "action", "verify")}}, 0
-    if args.action in {"plan", "run", "qa", "verify"}:
+    if args.action in {"plan", "plan-preflight", "run", "qa", "verify"}:
         import check_plan as P
+        if args.action == "plan-preflight":
+            result = P.preflight_plan(root, run_id, owner, args.plan, args.name)
+            return result, 0 if result["ready"] else 1
         if args.action == "verify":
             if args.finish:
                 current = R.preflight_finish(root, run_id, owner, executors_stopped=args.stopped,

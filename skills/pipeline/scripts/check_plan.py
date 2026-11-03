@@ -4,14 +4,15 @@ import json
 import os
 from pathlib import Path
 import shlex
+from contextlib import nullcontext
 
 import run_checks as C
 import run_evidence as E
 import run_state as R
 
 
-def _owned(root, run_id, owner):
-    with R._write_guard(root) as base:
+def _owned(root, run_id, owner, *, read_only=False):
+    with (nullcontext(R._paths(root)[1]) if read_only else R._write_guard(root)) as base:
         _, state = R._load_owned(base, run_id, owner)
         if state["status"] != "running":
             raise ValueError("plan requires an active owned run")
@@ -53,7 +54,8 @@ def _validate(root, checks, required, owner, inherited, *, scan_inputs=True):
             E.fingerprint(root, scope)
         C.inspect_resources(root, value.get("write_paths"), value.get("protected_paths"))
         project = Path(root).resolve(strict=True)
-        cwd = C._workdir(project, value.get("cwd")).relative_to(project).as_posix()
+        directory = C._workdir(project, value.get("cwd")) if scan_inputs else E._local(project, value.get("cwd", "."))
+        cwd = directory.relative_to(project).as_posix()
         C.classify_result(0, value.get("intent", "test"))
         timeout = value.get("timeout")
         if timeout is not None and (type(timeout) not in (int, float) or not 0 < timeout < float("inf")):
@@ -170,6 +172,26 @@ def _snapshot(root, run_id, state):
     return snapshot
 
 
+def _reuse_candidate(root, run_id, owner, state, plan_ref, check_id, check, snapshot, impact_covered):
+    candidate_plan = plan_ref
+    previous = snapshot["bindings"].get((plan_ref, check_id), (None, None))[1]
+    if previous is None and impact_covered is True:
+        candidates = sorted(snapshot["bindings"].items(),
+                            key=lambda item: snapshot["positions"][item[1][0]], reverse=True)
+        for (old_plan, old_id), (_, binding) in candidates:
+            if old_id != check_id or old_plan == plan_ref:
+                continue
+            try:
+                source = _read_plan(root, run_id, owner, old_plan, state, snapshot)
+                if (check_id in source["checks"]
+                        and _execution_spec(source["checks"][check_id]) == _execution_spec(check)):
+                    candidate_plan, previous = old_plan, binding
+                    break
+            except (OSError, ValueError, KeyError, TypeError):
+                continue  # Unconfirmed history cannot authorize reuse.
+    return candidate_plan, previous
+
+
 def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=False):
     state = _owned(root, run_id, owner)
     snapshot = _snapshot(root, run_id, state)
@@ -200,23 +222,8 @@ def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=Fa
             message = "final check requires current valid quick evidence: "
         raise ValueError(message + ", ".join(blocked[:8])
                          + (f" (+{len(blocked) - 8} more)" if len(blocked) > 8 else ""))
-    candidate_plan = plan_ref
-    previous = snapshot["bindings"].get((plan_ref, check_id), (None, None))[1]
-    if previous is None and impact_covered is True:
-        candidates = sorted(snapshot["bindings"].items(),
-                            key=lambda item: snapshot["positions"][item[1][0]], reverse=True)
-        for (old_plan, old_id), (_, binding) in candidates:
-            if old_id != check_id or old_plan == plan_ref:
-                continue
-            try:
-                source = _read_plan(root, run_id, owner, old_plan, state, snapshot)
-                if (check_id in source["checks"]
-                        and _execution_spec(source["checks"][check_id]) == _execution_spec(check)):
-                    candidate_plan, previous = old_plan, binding
-                    break
-            except (OSError, ValueError, KeyError, TypeError):
-                # Unconfirmed history cannot authorize reuse.
-                continue
+    candidate_plan, previous = _reuse_candidate(root, run_id, owner, state, plan_ref, check_id,
+                                               check, snapshot, impact_covered)
     args = _execution_spec(check)
     reusable = previous is not None and _valid(root, run_id, owner, state,
                                                candidate_plan, check_id, check, snapshot)[0] is not None
@@ -370,6 +377,78 @@ def qa_from_plan(root, run_id, owner, plan_ref, name, summary=""):
                           payload)
 
 
+def preflight_plan(root, run_id, owner, plan_ref, name):
+    """Read-only static execution readiness, never a test or business PASS."""
+    state = _owned(root, run_id, owner, read_only=True)
+    snapshot = _snapshot(root, run_id, state)
+    plan = _read_plan(root, run_id, owner, plan_ref, state, snapshot)
+    ordered = _ordered(plan["checks"])
+    failures = []
+
+    def fail(check_id, category, reason):
+        failures.append({"check_id": check_id, "category": category, "reason": reason})
+
+    if "run_policy" in state:
+        import managed_qa
+        requirements = managed_qa.required_for_state(root, state, snapshot)
+    else:
+        requirements = E.coverage_labels(state.get("planned_required_checks"))
+    required = sorted(set(plan["required_checks"]) | set(requirements))
+    inherited, _ = _inherited(root, run_id, owner, state, snapshot)
+    available = {label for check in plan["checks"].values() for label in check["coverage"]}
+    available.update(inherited & set(E.coverage_labels(state.get("inherited_required_checks"))))
+    missing = sorted(set(required) - available)
+    if missing:
+        fail(None, "coverage", "required_coverage_not_planned_or_validly_inherited")
+    try:
+        E._label(name)
+        if E._local(Path(root).resolve(), f"tmp/pipeline/runs/{run_id}/artifacts/qa/{name}.json").exists():
+            fail(None, "attempt", "qa_name_already_used")
+    except (OSError, ValueError, TypeError):
+        fail(None, "attempt", "invalid_qa_name")
+    for index, key in enumerate(ordered, 1):
+        check = plan["checks"][key]
+        attempt = f"{name}-c{index}"
+        try:
+            E._label(attempt)
+            if any(E._local(Path(root).resolve(),
+                           f"tmp/pipeline/runs/{run_id}/artifacts/{kind}/{attempt}.json").exists()
+                   for kind in ("check", "check_reuse", "planned_check")):
+                fail(key, "attempt", "attempt_name_already_used")
+        except (OSError, ValueError, TypeError):
+            fail(key, "attempt", "invalid_attempt_name")
+        try:
+            C._workdir(Path(root).resolve(), check.get("cwd"))
+        except (OSError, ValueError, TypeError):
+            fail(key, "cwd", "working_directory_unavailable")
+            continue
+        try:
+            runner = C.inspect_runner(root, check["argv"], cwd=check.get("cwd"),
+                                      write_paths=check.get("write_paths"), protected_paths=check.get("protected_paths"))
+            if not runner["available"]:
+                fail(key, "runner", "executable_unavailable")
+            conflict = any(claim["name"] == attempt or E.write_paths_conflict(
+                    root, check.get("write_paths"), claim["write_paths"])
+                   for claim in state.get("running_checks", []))
+            if not runner["resources"]["safe_to_execute"] or conflict:
+                source, binding = _reuse_candidate(root, run_id, owner, state, plan_ref, key, check, snapshot, True)
+                reusable = binding is not None and _valid(
+                    root, run_id, owner, state, source, key, check, snapshot)[0] is not None
+                if not reusable:
+                    if not runner["resources"]["safe_to_execute"]:
+                        fail(key, "resources", runner["resources"]["status"])
+                    if conflict:
+                        fail(key, "resources", "active_check_conflict")
+        except (OSError, ValueError, TypeError, KeyError):
+            fail(key, "runner", "runner_or_resource_declaration_unavailable")
+    current = _owned(root, run_id, owner, read_only=True)
+    if current != state:
+        fail(None, "snapshot", "run_changed_during_preflight")
+    return {"run_id": run_id, "plan_ref": plan_ref, "ready": not failures,
+            "required_checks": required, "missing_checks": missing, "failures": failures,
+            "notice": "Static readiness only; no process, API, authentication or business acceptance observed."}
+
+
 def verify_plan(root, run_id, owner, plan_ref, name, summary=""):
     """Execute/revalidate one plan then record QA in this actual environment.
 
@@ -378,12 +457,26 @@ def verify_plan(root, run_id, owner, plan_ref, name, summary=""):
     This records evidence, not independent business acceptance or run completion.
     """
     E._label(name)
+    preflight = preflight_plan(root, run_id, owner, plan_ref, name)
     plan = read_plan(root, run_id, owner, plan_ref)
     ordered = _ordered(plan["checks"])
     attempts = [(check_id, f"{name}-c{index}")
                 for index, check_id in enumerate(ordered, 1)]
     for _, attempt in attempts:
         E._label(attempt)
+    if not preflight["ready"]:
+        state = _owned(root, run_id, owner)
+        explanation = "Plan preflight blocked: " + json.dumps(preflight["failures"], sort_keys=True)
+        payload = inspect_state(root, run_id, owner, plan_ref, state, summary + "\n" + explanation)
+        payload["gate"] = "CONCERNS"
+        ref = None
+        if not any(item["reason"] == "qa_name_already_used" for item in preflight["failures"]):
+            ref = E.write_report(root, run_id, owner, "qa", name, payload)
+            payload = E.read_report(root, run_id, ref, kind="qa")["payload"]
+        return {"run_id": run_id, "plan_ref": plan_ref, "report": ref,
+                "results": [], "skipped_checks": ordered, "preflight": preflight,
+                **{key: payload[key] for key in ("gate", "required_checks", "missing_checks",
+                                                 "check_failures", "environment_diagnostics")}}
     results = []
     for check_id, attempt in attempts:
         result = run_planned(root, run_id, owner, plan_ref, check_id, attempt, impact_covered=True)
