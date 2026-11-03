@@ -113,6 +113,75 @@ class ProgressTests(unittest.TestCase):
         for field in ("当前任务", "当前步骤", "已记录成功", "剩余/待核实", "阻塞", "下一步", "[待核实]"):
             self.assertIn(field, result.stdout)
 
+    def test_task_end_is_not_completion_and_later_results_are_excluded(self):
+        T.start(*self.args, "local-work", "private goal", ["private acceptance"])
+        plan = self.plan()
+        P.run_planned(*self.args, plan, "quick", "before-end")
+        T.end(*self.args, "local-work")
+        value = G.snapshot(self.root)
+        self.assertEqual(value["task_execution"]["status"], "execution_ended")
+        self.assertEqual(value["delivery"]["status"], "execution_ended_acceptance_pending")
+        self.assertEqual(value["delivery"]["acceptance"], "not_revalidated")
+        self.assertEqual(value["badge"], "🔎[待核实]")
+        self.assertEqual(value["next"], "review_task_acceptance")
+        import run_checks as C
+        C.execute_check(*self.args, "after-end", argv=[sys.executable, "-c", "raise SystemExit(1)"], scope=["input"])
+        later = G.snapshot(self.root)
+        self.assertEqual(later["last_result_at"], value["last_result_at"])
+        self.assertEqual(later["counts"], value["counts"])
+        self.assertIn("执行段已结束", G.render(later))
+        self.assertIn("验收/交付待核实", G.render(later))
+
+    def test_external_wait_and_stale_idle_feedback_do_not_claim_health(self):
+        import run_continuity as C
+        C.wait_for_user(*self.args, reason="private deployment", action="private action", verify="private verify")
+        first = G.snapshot(self.root)
+        self.assertEqual(first["delivery"]["status"], "external_action_pending")
+        self.assertEqual(first["host_feedback"]["status"], "unknown")
+        at = R._now()
+        idle = G.snapshot(self.root, host_status="idle", host_ended_at=at)
+        self.assertEqual(idle["host_feedback"]["status"], "idle")
+        self.assertEqual(idle["badge"], "🔴[需你处理]")
+        self.assertNotIn("private", json.dumps(idle))
+        C.resume_work(*self.args, evidence="user responded; verify still needed")
+        stale = G.snapshot(self.root, host_status="idle", host_ended_at=at)
+        self.assertEqual(stale["host_feedback"]["status"], "stale")
+        self.assertEqual(stale["delivery"]["acceptance"], "not_revalidated")
+
+    def test_idle_feedback_conflicting_with_registered_work_is_not_completion(self):
+        path = self.root / "tmp/pipeline/runs" / (self.args[1] + ".json")
+        state = R.status(self.root)["state"]
+        state["running_checks"] = [{"name": "registered-only"}]
+        R._atomic(path, state)
+        before = self.files()
+        value = G.snapshot(self.root, host_status="idle", host_ended_at=R._now())
+        self.assertIn("host_idle_with_registered_work", value["blockers"])
+        self.assertEqual(value["badge"], "🔎[待核实]")
+        self.assertEqual(value["next"], "reconcile_host_and_records")
+        self.assertEqual(before, self.files())
+        with self.assertRaises(ValueError):
+            G.snapshot(self.root, host_status="idle", host_ended_at="9999-01-01T00:00:00Z")
+        with self.assertRaises(ValueError):
+            G.snapshot(self.root, host_status="running", host_ended_at=R._now())
+
+    def test_declared_wait_without_action_is_reported_incomplete(self):
+        R.update(*self.args, {"activity": "human_wait"})
+        value = G.snapshot(self.root)
+        self.assertEqual(value["badge"], "🔎[待核实]")
+        self.assertIn("human_wait_action_unrecorded", value["blockers"])
+        self.assertEqual(value["next"], "reconcile_host_and_records")
+
+    def test_cli_host_feedback_is_explicit_and_read_only(self):
+        before = self.files()
+        result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "pipeline_cli.py"), "progress",
+                                 "--project", str(self.root), "--host-status", "idle",
+                                 "--host-ended-at", R._now()], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        value = json.loads(result.stdout)
+        self.assertEqual(value["host_feedback"]["status"], "idle")
+        self.assertEqual(value["next"], "reconcile_host_and_records")
+        self.assertEqual(self.files(), before)
+
     def test_missing_report_is_unknown_and_output_is_bounded(self):
         self.plan()
         state = R.status(self.root)["state"]
