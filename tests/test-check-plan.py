@@ -48,6 +48,92 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(second["skipped_checks"], [])
         self.assertEqual(R.status(self.root)["state"]["status"], "running")
 
+    def quick_plan(self):
+        (self.root / "quick.py").write_text(
+            "from pathlib import Path\n"
+            "p=Path('quick-count'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1')\n"
+            "raise SystemExit(int(Path('fail-quick').exists()))\n")
+        (self.root / "final-input").write_text("stable final input")
+        quick = {**self.check, "argv": [sys.executable, "-B", "quick.py"],
+                 "scope": ["quick.py", "input"], "coverage": ["unit"], "layer": "quick"}
+        final = {**self.check, "argv": [sys.executable, "-B", "-c",
+                 "from pathlib import Path; Path('heavy-ran').touch()"],
+                 "scope": ["final-input"], "coverage": ["regression"], "layer": "final"}
+        return self.save({"final": final, "unit": quick}), quick, final
+
+    def assert_final_blocked(self, plan, name="blocked"):
+        with self.assertRaisesRegex(ValueError, "valid quick evidence: unit"):
+            self.execute(plan, name, key="final", impact_covered=True)
+        self.assertFalse((self.root / "heavy-ran").exists())
+
+    def test_direct_final_requires_quick_and_verify_orders_it_first(self):
+        plan, _, _ = self.quick_plan()
+        self.assert_final_blocked(plan)
+        self.assertFalse((self.root / "quick-count").exists())
+        result = P.verify_plan(self.root, self.run, self.owner, plan, "verified")
+        self.assertEqual([item["check_id"] for item in result["results"]], ["unit", "final"])
+        self.assertEqual(result["gate"], "PASS")
+
+    def test_final_rejects_quick_code_input_environment_and_log_drift(self):
+        plan, _, _ = self.quick_plan()
+        result = self.execute(plan)
+        for relative in ("quick.py", "input"):
+            path = self.root / relative
+            before = path.read_text()
+            path.write_text(before + "\n# changed")
+            self.assert_final_blocked(plan)
+            path.write_text(before)
+        with patch.dict(os.environ, {"QUICK_BOUNDARY_CONTEXT": "changed"}):
+            self.assert_final_blocked(plan)
+        proof = E.read_report(self.root, self.run, result["report"])["payload"]
+        (self.root / proof["log_path"]).write_text("edited")
+        self.assert_final_blocked(plan)
+
+    def test_later_quick_failure_blocks_final_and_preserves_reproduction_class(self):
+        plan, quick, final = self.quick_plan()
+        self.execute(plan)
+        (self.root / "fail-quick").touch()
+        failure = C.execute_check(self.root, self.run, self.owner, "later-failure",
+                                  argv=quick["argv"], scope=quick["scope"], coverage=["other"])
+        self.assertEqual(failure["exit_code"], 1)
+        self.assert_final_blocked(plan)
+        negative = self.save({"unit": {**quick, "intent": "reproduce"}, "final": final}, name="negative")
+        reproduced = self.execute(negative, "reproduced")
+        proof = E.read_report(self.root, self.run, reproduced["report"])["payload"]
+        self.assertEqual(proof["result_class"], "reproduction_nonzero")
+        self.assert_final_blocked(negative)
+
+    def test_additive_quick_carry_and_disjoint_final_input_change_do_not_rerun_quick(self):
+        plan, quick, final = self.quick_plan()
+        self.execute(plan)
+        additive = self.save({"unit": quick, "final": final,
+                              "metadata": {**self.check, "coverage": ["metadata"]}}, name="additive")
+        self.assert_final_blocked(additive)
+        carried = self.execute(additive, "carried", impact_covered=True)
+        self.assertTrue(carried["reused"])
+        self.execute(additive, "final-first", key="final")
+        (self.root / "final-input").write_text("final changed only")
+        self.assertFalse(self.execute(additive, "final-retest", key="final", impact_covered=True)["reused"])
+        self.assertEqual((self.root / "quick-count").read_text(), "1")
+        self.assertEqual(self.qa(additive)["check_failures"], {"metadata": "not_executed"})
+
+    def test_layer_only_plan_change_keeps_exact_quick_evidence_reusable(self):
+        plan, quick, _ = self.quick_plan()
+        self.execute(plan)
+        changed = self.save({"unit": {**quick, "layer": "final"}}, name="relayered")
+        self.assertTrue(self.execute(changed, "relayered", impact_covered=True)["reused"])
+        self.assertEqual((self.root / "quick-count").read_text(), "1")
+
+    def test_quick_prerequisite_error_bounds_ids_without_command_details(self):
+        plan = self.save({**{f"boundary{i}": {**self.check, "layer": "quick"} for i in range(10)},
+                          "final": {**self.check, "layer": "final"}})
+        with self.assertRaises(ValueError) as error:
+            self.execute(plan, key="final")
+        self.assertIn("boundary7 (+2 more)", str(error.exception))
+        self.assertNotIn("boundary8", str(error.exception))
+        self.assertNotIn("print", str(error.exception))
+        self.assertFalse(R.status(self.root)["state"].get("running_checks"))
+
     def test_verify_api_failure_stops_later_commands_but_records_missing_qa(self):
         failed = copy.deepcopy(self.check)
         failed["argv"][-1] = "raise SystemExit(1)"

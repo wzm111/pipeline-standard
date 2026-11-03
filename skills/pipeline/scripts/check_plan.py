@@ -147,6 +147,21 @@ def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=Fa
     snapshot = _snapshot(root, run_id, state)
     plan = _read_plan(root, run_id, owner, plan_ref, state, snapshot)
     check = plan["checks"][check_id]
+    if check.get("layer") != "quick":
+        blocked = []
+        for key, prerequisite in plan["checks"].items():
+            if prerequisite.get("layer") != "quick":
+                continue
+            try:
+                ref, _ = _valid(root, run_id, owner, state, plan_ref, key, prerequisite, snapshot)
+            except (OSError, ValueError, KeyError, TypeError):
+                ref = None
+            if ref is None:
+                blocked.append(key)
+        if blocked:
+            raise ValueError("final check requires current valid quick evidence: "
+                             + ", ".join(blocked[:8])
+                             + (f" (+{len(blocked) - 8} more)" if len(blocked) > 8 else ""))
     candidate_plan = plan_ref
     previous = snapshot["bindings"].get((plan_ref, check_id), (None, None))[1]
     if previous is None and impact_covered is True:
