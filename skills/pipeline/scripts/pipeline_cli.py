@@ -284,9 +284,9 @@ def dispatch(args):
         import visual_evidence as V
         if args.action == "visual-declare":
             payload = json.loads(args.payload)
-            if (not isinstance(payload, dict) or set(payload) - {"scope", "target", "viewport", "state", "version", "review"}
+            if (not isinstance(payload, dict) or set(payload) - {"scope", "target", "viewport", "state", "version", "review", "supersedes"}
                     or not {"scope", "target", "viewport", "state", "version"} <= payload.keys()):
-                raise ValueError("visual-declare requires scope/target/viewport/state/version and optional review")
+                raise ValueError("visual-declare requires scope/target/viewport/state/version and optional review/supersedes")
             ref = V.declare(root, run_id, owner, args.name, **payload)
         elif args.action == "visual-begin":
             return V.begin(root, run_id, owner, args.requirement, args.name, image_format=args.image_format), 0
@@ -440,11 +440,14 @@ def _finish(root, run_id, owner, *, outcome="completed", stopped=False, stop_evi
     issues = {label: sorted({item["reason"] for item in coverage.get("unavailable", [])
                             if label in item.get("coverage", [])}) or ["no_valid_evidence"]
               for label in missing or []}
-    return {**_public(state), "delivery_sealed": delivery.get("sealed", False),
+    result = {**_public(state), "delivery_sealed": delivery.get("sealed", False),
             "audit": _optional_audit(root, run_id),
             "delivery_reason": delivery.get("reason"), "delivery_detail": delivery.get("detail"),
             "coverage_complete": coverage.get("complete"), "coverage_missing": missing,
-            "coverage_issues": issues}, 0
+            "coverage_issues": issues}
+    if delivery.get("visual"):
+        result["visual"] = delivery["visual"]
+    return result, 0
 
 
 def main(argv=None):

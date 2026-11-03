@@ -12,7 +12,7 @@ import run_state as R
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 RULES = ("SKILL.md", *(f"references/{name}.md" for name in
-         ("progress", "evidence", "check-plan", "standard", "codex", "role-dispatch")))
+         ("progress", "evidence", "check-plan", "standard", "codex", "role-dispatch", "visual")))
 
 
 def _digest(value):

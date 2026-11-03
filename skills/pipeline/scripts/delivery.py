@@ -46,7 +46,8 @@ def _coverage(root, checks, required, excluded_checks=()):
             "complete": not missing if required is not None else None, "sources": sources, "unavailable": unavailable}
 
 
-def validated_receipt(root, reference, *, refresh_coverage=True):
+def _receipt_metadata(root, reference):
+    """Authenticate immutable origins, without granting current-context reuse."""
     root = Path(root).resolve(strict=True)
     packet = _read_reference(root, reference, "delivery")
     source = R.status(root, reference["run_id"])["state"]
@@ -58,6 +59,12 @@ def validated_receipt(root, reference, *, refresh_coverage=True):
             raise E.EvidenceError("delivery_acceptance_changed", "delivery acceptance changed or not passed")
     if not any(a["kind"] == "qa" for a in packet["approvals"]):
         raise E.EvidenceError("delivery_acceptance_missing", "delivery requires explicit QA acceptance")
+    return packet
+
+
+def validated_receipt(root, reference, *, refresh_coverage=True):
+    root = Path(root).resolve(strict=True)
+    packet = _receipt_metadata(root, reference)
     if E.fingerprint(root, packet["context_scope"]) != packet["context_fingerprint"]:
         raise E.EvidenceError("delivery_contract_changed", "delivery contract changed")
     if refresh_coverage:
@@ -69,6 +76,8 @@ def validated_receipt(root, reference, *, refresh_coverage=True):
 def seal(root, base, state):
     """Called by finish under its existing ownership lock; fail closed on gaps."""
     root = Path(root).resolve(strict=True)
+    import visual_evidence
+    visual = visual_evidence.delivery_bindings(root, state)
     approvals, checks, seen, blocked = {}, [], set(), set()
     excluded = deepcopy(state.get("inherited_excluded_checks", []))
     required = sorted(set(E.coverage_labels(state.get("inherited_required_checks")))
@@ -119,6 +128,8 @@ def seal(root, base, state):
     packet = {"project_root": str(root), "approvals": list(approvals.values()), "checks": checks,
               "context_scope": context, "context_fingerprint": E.fingerprint(root, context), "assets": assets,
               "excluded_checks": excluded, "coverage": _coverage(root, checks, required or None, excluded)}
+    if visual:
+        packet["visual"] = visual
     digest = hashlib.sha256(json.dumps(packet, sort_keys=True).encode()).hexdigest()[:16]
     relative = f"tmp/pipeline/runs/{state['run_id']}/artifacts/delivery/handoff-{digest}.json"
     path = E._local(root, relative)
@@ -133,6 +144,8 @@ def seal(root, base, state):
     reference = _reference(root, state["run_id"], relative)
     R._atomic(E._local(root, POINTER), reference)
     state["delivery_status"] = {"sealed": True, "reference": reference, "coverage": deepcopy(packet["coverage"])}
+    if visual:
+        state["delivery_status"]["visual"] = visual_evidence.delivery_preview(root, state)
 
 
 def adopt(root, base, state, reference):
@@ -144,6 +157,11 @@ def adopt(root, base, state, reference):
             raise ValueError("latest run has no accepted delivery; do not fall back to older PASS")
     if not isinstance(reference, dict) or reference.get("run_id") == state["run_id"]:
         raise ValueError("invalid predecessor delivery")
+    candidate = _read_reference(root, reference, "delivery")
+    if candidate.get("project_root") == str(root) and candidate.get("visual"):
+        # Retain known UI obligations even when later predecessor validation fails.
+        state["inherited_visual"] = [{"receipt": deepcopy(reference), "binding": deepcopy(binding)}
+                                     for binding in candidate["visual"]]
     packet = validated_receipt(root, reference)
     imported, skipped = [], []
     for check in packet["checks"]:

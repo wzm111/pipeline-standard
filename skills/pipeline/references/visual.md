@@ -29,7 +29,7 @@
 
 ## 本地截图与查看记录
 
-需要登记当前 UI 证据时，沿用本 run 私有 receipt；目标用无凭据短标识，完整 scope 包含实际页面/组件、样式、样本和运行器依赖，viewport 为 CSS 宽高整数，state 为实际页面状态短标识，version 为实际候选/版本标识，不保存 URL query 或原始业务输出。截图使用合成数据或已获授权的安全页面，不能含凭据或客户数据；模块不自动识别或脱敏图片。
+实际 UI 任务进入验收前，由执行者用 visual-declare 明确本任务所需目标、视口、状态、版本和完整 scope，再登记真实截图、查看与实际复核；不要等 QA 收尾才决定是否采用。沿用本 run 私有 receipt；目标用无凭据短标识，完整 scope 包含实际页面/组件、样式、样本和运行器依赖，viewport 为 CSS 宽高整数，state 为实际页面状态短标识，version 为实际候选/版本标识，不保存 URL query 或原始业务输出。截图使用合成数据或已获授权的安全页面，不能含凭据或客户数据；模块不自动识别或脱敏图片。机器只验证显式声明，不宣称自动识别所有未声明或未调用入口的 UI；非 UI 任务不造视觉要求。
 
 1. `visual-declare --receipt <receipt> --name checkout --json '{"scope":["<真实依赖>"],"target":"checkout","viewport":{"width":1280,"height":720},"state":"ready","version":"v1.2.0"}'` 返回本任务 requirement 的实际 `report` 引用。
 2. 在真实宿主截图调用前执行 `visual-begin --receipt <receipt> --requirement <返回引用> --name capture-r1`；默认 JPEG，也可 `--format png`。只有 `created:true` 才执行一次宿主调用，把原生截图字节写到返回的 `image_path`（相对项目根，本 run 的 ignored images 目录）；重复 ID 不授权再截图。不另启浏览器引擎、不通过改后缀伪装格式。
@@ -37,7 +37,7 @@
 4. 实际打开/看过返回 capture 里的图片后，才执行 `visual-view --receipt <receipt> --capture <visual-finish返回report> --name view-r1 --viewed`。它只记录调用方声明，不证明宿主读取或审美质量；没有实际查看不可传 viewed。
 5. `visual-inspect --run-id <当前run> --requirement <实际引用>` 只读返回 capture_pending/view_pending/view_declared/stale_or_unconfirmed，复核当前任务、源码与图片绑定；不会返回图片内容、凭据或审美 PASS。跨 run/旧 task、缺图、图/源码变化不能作为当前完整证据。
 
-intent=visual 专用于此观察，与普通 test/check 验收独立；不能放入 argv 验收计划或复用为正式测试通过。上述截图/查看记录目前不自动接管 QA/finish，也不替代真实业务断言或交付授权。
+intent=visual 专用于此观察，与普通 test/check 验收独立；不能放入 argv 验收计划或复用为正式测试通过。managed QA 的 single/plan/release 在原门禁后核对本任务已声明要求：缺截图、未查看、未复核、源/图/链失效及 FAIL/CONCERNS 保留 QA 的 CONCERNS，finish 复核后拒绝收口；不会用测试数量替代视觉判断，也不替代真实业务断言或交付授权。
 
 ## 发现问题、修改与复核
 
@@ -50,3 +50,11 @@ intent=visual 专用于此观察，与普通 test/check 验收独立；不能放
 发现本范围内问题后修正真实源码/状态，再以新 name 执行 begin → 宿主重新截图 → finish → 实际重新看图 → view → review；源码、图片或查看记录变化时，旧判断不能当当前判断。新 review 自动引用上一次不可变 review，未解决问题继续保留相同 id；确已解决的 id 放 `"resolved":["action-overlap"]`。解决旧问题必须有新 capture 与新 view，不能在同一旧截图上把 FAIL/CONCERNS 改成 PASS，也不能静默丢掉原问题。不要以复制旧图片或修改旧报告代替真实重拍重看；原失败和历史引用始终保留。
 
 visual-inspect 增加 `review:"pending"|"PASS"|"CONCERNS"|"FAIL"`：后三者仅为绑定当前 capture/view 的调用方审查结论，status 为 review_declared，并非自动审美认证。新截图但尚未复核时保持 review pending；新 pending/失败捕获、失效源码/图片/查看或被改写的历史引用都不能复活旧 PASS。修复循环沿用原 QA 打回/停止上限，不另增固定轮数；范围外问题只简记，需要扩展时遵守原授权。
+
+## 声明更新、交付承接与可见结果
+
+同一目标确需更新 version、viewport 或 state 时，新的 visual-declare 可带 `"supersedes":"<实际旧requirement引用>"`。必须保留同目标、原 scope 和独立复核要求，旧引用不可环/分叉；旧 finding 随链继承，修正后重新截图、查看并在 review 中明确 resolved。改名另建声明不删除本 task 的旧要求；换 task 也不能静默丢掉旧 task 未解决 UI 交付。已通过的旧任务不为新的无关非 UI 任务自动增加视觉要求。
+
+显式 delivery_from 沿用既有交付收据时，视觉 requirement/capture/view/review 的不可变来源引用一并保留。真正未变的完整链可复用，不机械重拍；当前源码、图片或声明候选不一致时保留待复核，通过上述明确替代和重新拍/看/审完成更新。已知 UI 来源的承接失败不能让视觉缺口消失；无 UI 的历史记录不追溯补要求。验收单独保存图、源码、引用完整性，不能把继承或审美判断说成新一次宿主执行。policy 快照只增加 visual.md 这个固定来源；ack 仍仅为调用方声明，不证明模型读懂/加载了说明。
+
+最终回复必须展示实际看过的目标图片（宿主原生图片或可用的本地绝对路径 Markdown 预览），说明覆盖的视口/状态/版本、真实修改和仍未验证的限制；不能只给构建/测试数量或藏在内部 report 后。finish 成功且有视觉交付时返回 visual 的本地图片路径与覆盖信息，智能体据此展示；不上传图片、不输出凭据/客户原始数据。缺捕获或宿主查看能力时明确待验、所缺条件及可继续的独立工作，不伪称视觉通过。

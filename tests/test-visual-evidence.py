@@ -15,6 +15,7 @@ import run_evidence as E
 import run_policy as Q
 import run_state as R
 import run_tasks as T
+import run_checks as C
 import visual_evidence as V
 import pipeline_cli as CLI
 import role_dispatch as D
@@ -70,6 +71,21 @@ class VisualTests(unittest.TestCase):
 
     def judgment(self, name, capture, viewed, gate="PASS", findings=None, **options):
         return V.review(*self.args, capture, viewed, name, gate=gate, findings=findings or [], **options)
+
+    def formal_qa(self, name="unit", *, reuse=False):
+        check = C.execute_check(*self.args, name, argv=[sys.executable, "-B", "-c", "print('actual unit fixture')"],
+                                scope=["source"], coverage=["unit"], write_paths=[], impact_covered=reuse)
+        ref = E.write_report(*self.args, "qa", name, {"gate": "PASS", "checks": [check["report"]], "required_checks": ["unit"]})
+        return E.read_report(self.root, self.args[1], ref)["payload"]
+
+    def completed(self):
+        return R.finish(*self.args, "completed", executors_stopped=True, stop_evidence="fixture executors returned")
+
+    def adopted(self):
+        state = R.start(self.root, {"delivery_from": "latest"}, managed=True)
+        self.args = self.root, state["run_id"], state["owner_token"]
+        Q.acknowledge(*self.args, Q.snapshot(self.root)["revision"])
+        return state
 
     def test_png_and_jpeg_actual_bytes_dimensions_timing_viewing_and_readonly_status(self):
         self.assertEqual(self.inspect()["status"], "capture_pending")
@@ -355,6 +371,198 @@ class VisualTests(unittest.TestCase):
         R._atomic(self.root / "tmp/pipeline/runs" / (self.args[1] + ".json"), state)
         with self.assertRaisesRegex(ValueError, "implementation executor"):
             V.view(*self.args, capture, "same-executor", viewed=True, reviewer_dispatch=tester["id"])
+
+    def test_managed_ui_requires_capture_view_and_review_before_qa_and_finish(self):
+        self.assertEqual(self.formal_qa("missing")["gate"], "CONCERNS")
+        with self.assertRaises(ValueError):
+            self.completed()
+        self.image(self.begin(), jpeg())
+        capture = self.finish()
+        self.assertEqual(self.formal_qa("no-view")["gate"], "CONCERNS")
+        viewed = V.view(*self.args, capture, "view", viewed=True)
+        self.assertEqual(self.formal_qa("no-review")["gate"], "CONCERNS")
+        self.judgment("actual-review", capture, viewed)
+        qa = self.formal_qa("accepted")
+        self.assertEqual(qa["gate"], "PASS")
+        self.assertTrue(qa["visual"]["complete"])
+        final = self.completed()
+        self.assertTrue(final["delivery_status"]["sealed"])
+        self.assertEqual(final["delivery_status"]["visual"][0]["target"], "checkout")
+
+    def test_finish_revalidates_source_image_view_review_and_current_failure(self):
+        capture, viewed = self.captured_view("ready")
+        review = self.judgment("ready-review", capture, viewed)
+        self.assertEqual(self.formal_qa()["gate"], "PASS")
+        payload = E.read_report(self.root, self.args[1], capture)["payload"]
+        for path in (self.root / "source", self.root / payload["image_path"], self.root / viewed, self.root / review):
+            original = path.read_bytes()
+            path.write_bytes(original + b"changed")
+            with self.assertRaises((ValueError, json.JSONDecodeError)):
+                self.completed()
+            path.write_bytes(original)
+        finding = {"id": "actual-problem", "summary": "Actual target alignment still needs correction"}
+        self.judgment("later-failure", capture, viewed, gate="FAIL", findings=[finding])
+        with self.assertRaises(ValueError):
+            self.completed()
+        self.assertEqual(self.formal_qa("failed-qa")["gate"], "CONCERNS")
+
+    def test_renaming_cannot_drop_failed_requirement_explicit_update_retains_findings(self):
+        old = self.requirement
+        capture, viewed = self.captured_view("before")
+        finding = {"id": "overlap", "summary": "Target action overlaps the heading"}
+        self.judgment("failed", capture, viewed, gate="CONCERNS", findings=[finding])
+        renamed = V.declare(*self.args, "renamed", scope=["source"], **self.surface)
+        self.requirement = renamed
+        captured, viewed = self.captured_view("renamed")
+        self.judgment("renamed-pass", captured, viewed)
+        self.assertEqual(self.formal_qa("not-erased")["gate"], "CONCERNS")
+        self.surface = {**self.surface, "version": "v2", "state": "updated", "viewport": {"width": 720, "height": 800}}
+        self.requirement = V.declare(*self.args, "updated", scope=["source"], **self.surface, supersedes=old)
+        with self.assertRaises(ValueError):
+            V.declare(*self.args, "branch", scope=["source"], **self.surface, supersedes=old)
+        (self.root / "source").write_text("scoped correction")
+        corrected, new_view = self.captured_view("corrected")
+        with self.assertRaises(ValueError):
+            self.judgment("drop-finding", corrected, new_view)
+        self.judgment("fixed", corrected, new_view, resolved=["overlap"])
+        # The separate renamed requirement also needs a current capture after the edit.
+        self.requirement, original_surface = renamed, self.surface
+        self.surface = {**self.surface, "version": "v1.2.0", "state": "ready", "viewport": {"width": 1280, "height": 720}}
+        renamed_capture, renamed_view = self.captured_view("renamed-current")
+        self.judgment("renamed-current-pass", renamed_capture, renamed_view)
+        self.assertEqual(self.formal_qa("updated-qa")["gate"], "PASS")
+        self.assertTrue(self.completed()["delivery_status"]["sealed"])
+
+    def test_prior_unresolved_task_cannot_be_dropped_but_passed_ui_does_not_pollute_non_ui(self):
+        capture, viewed = self.captured_view("old")
+        finding = {"id": "contrast", "summary": "Actual target contrast remains insufficient"}
+        self.judgment("old-fail", capture, viewed, gate="FAIL", findings=[finding])
+        old = self.requirement
+        T.start(*self.args, "next", "next task", ["observe"])
+        qa = self.formal_qa("pending-prior")
+        self.assertEqual(qa["gate"], "CONCERNS")
+        self.assertEqual(qa["visual"]["requirements"][0]["scope"], "unresolved_prior_task")
+        self.requirement = V.declare(*self.args, "current", scope=["source"], **self.surface, supersedes=old)
+        capture, viewed = self.captured_view("current")
+        self.judgment("current-pass", capture, viewed, resolved=["contrast"])
+        self.assertEqual(self.formal_qa("current-qa")["gate"], "PASS")
+        T.end(*self.args, "next")
+        T.start(*self.args, "non-ui", "unrelated non UI task", ["unit"])
+        (self.root / "source").write_text("unrelated task input")
+        qa = self.formal_qa("non-ui")
+        self.assertEqual(qa["gate"], "PASS")
+        self.assertNotIn("visual", qa)
+
+    def test_explicit_delivery_keeps_unchanged_visual_chain_and_changed_source_pending(self):
+        capture, viewed = self.captured_view("original")
+        self.judgment("original-pass", capture, viewed)
+        self.formal_qa("source-qa")
+        self.completed()
+        original_requirement = self.requirement
+        adopted = self.adopted()
+        self.assertTrue(adopted["delivery_status"]["adopted"])
+        self.assertTrue(adopted["inherited_visual"])
+        qa = self.formal_qa("commit-check", reuse=True)
+        self.assertEqual(qa["gate"], "PASS")
+        self.assertEqual(qa["visual"]["requirements"][0]["scope"], "inherited")
+        self.assertTrue(self.completed()["delivery_status"]["sealed"])
+        self.adopted()
+        (self.root / "source").write_text("changed source candidate")
+        self.assertEqual(self.formal_qa("changed-source")["gate"], "CONCERNS")
+        with self.assertRaises(ValueError):
+            self.completed()
+        self.surface = {**self.surface, "version": "v2"}
+        self.requirement = V.declare(*self.args, "replacement", scope=["source"], **self.surface, supersedes=original_requirement)
+        capture, viewed = self.captured_view("new-candidate")
+        self.judgment("new-candidate-review", capture, viewed)
+        self.assertEqual(self.formal_qa("rechecked")["gate"], "PASS")
+        self.assertTrue(self.completed()["delivery_status"]["sealed"])
+
+    def test_delivery_missing_image_and_invalid_source_approval_do_not_erase_ui_gap(self):
+        capture, viewed = self.captured_view("original")
+        self.judgment("original-pass", capture, viewed)
+        self.formal_qa("source-qa")
+        final = self.completed()
+        payload = E.read_report(self.root, self.args[1], capture)["payload"]
+        (self.root / payload["image_path"]).unlink()
+        adopted = self.adopted()
+        self.assertTrue(adopted["delivery_status"]["adopted"])
+        self.assertEqual(self.formal_qa("missing-image")["gate"], "CONCERNS")
+        R.finish(*self.args, "aborted", executors_stopped=True, stop_evidence="fixture stopped")
+        # Explicit immutable source ref still identifies UI obligations even on failed adoption.
+        reference = final["delivery_status"]["reference"]
+        import delivery
+        packet = delivery._read_reference(self.root, reference, "delivery")
+        approval_path = self.root / packet["approvals"][0]["path"]
+        approval_path.write_bytes(approval_path.read_bytes() + b" ")
+        state = R.start(self.root, {"delivery_from": reference}, managed=True)
+        self.args = self.root, state["run_id"], state["owner_token"]
+        Q.acknowledge(*self.args, Q.snapshot(self.root)["revision"])
+        self.assertFalse(state["delivery_status"]["adopted"])
+        self.assertTrue(state["inherited_visual"])
+        self.assertEqual(self.formal_qa("invalid-source")["gate"], "CONCERNS")
+
+    def test_plan_qa_and_existing_release_mode_both_preserve_visual_concerns(self):
+        import release_checks as F
+        F.prepare(*self.args)
+        for phase in ("preflight", "compatibility", "build", "activate", "smoke"):
+            source = "from pathlib import Path; Path('artifact').write_text('candidate')" if phase == "build" else f"print({phase!r})"
+            options = {"artifact_paths": ["artifact"]} if phase == "build" else {}
+            if phase == "smoke":
+                options["coverage"] = ["release_identity"]
+            F.execute(*self.args, phase, phase=phase, argv=[sys.executable, "-B", "-c", source], scope=["source"], **options)
+        concerns = F.closeout(*self.args)
+        self.assertEqual(concerns["gate"], "CONCERNS")
+        with self.assertRaises(ValueError):
+            self.completed()
+        capture, viewed = self.captured_view("candidate")
+        self.judgment("candidate-review", capture, viewed)
+        accepted = F.closeout(*self.args)
+        payload = E.read_report(self.root, self.args[1], accepted["report"])["payload"]
+        self.assertEqual(payload["machine_validation"]["mode"], "release")
+        self.assertEqual(payload["gate"], "PASS")
+        self.assertTrue(payload["visual"]["complete"])
+        self.assertTrue(self.completed()["delivery_status"]["sealed"])
+
+    def test_plan_cannot_override_missing_ui_or_latest_visual_failure(self):
+        plan = P.save_plan(*self.args, "plan", {"unit": {"argv": [sys.executable, "-B", "-c", "print('unit')"],
+                           "scope": ["source"], "coverage": ["unit"], "write_paths": []}})
+        P.run_planned(*self.args, plan, "unit", "planned")
+        qa = P.qa_from_plan(*self.args, plan, "missing-ui")
+        self.assertEqual(E.read_report(self.root, self.args[1], qa)["payload"]["gate"], "CONCERNS")
+        capture, viewed = self.captured_view("current")
+        self.judgment("actual-failure", capture, viewed, gate="FAIL", findings=[{"id": "actual", "summary": "Observed target issue remains"}])
+        qa = P.qa_from_plan(*self.args, plan, "failed-ui")
+        self.assertEqual(E.read_report(self.root, self.args[1], qa)["payload"]["gate"], "CONCERNS")
+        with self.assertRaises(ValueError):
+            self.completed()
+
+    def test_changed_delivery_contract_keeps_pending_and_allows_fresh_explicit_replacement(self):
+        capture, viewed = self.captured_view("original")
+        self.judgment("original-pass", capture, viewed)
+        self.formal_qa("source-qa")
+        self.completed()
+        old = self.requirement
+        (self.root / "PIPELINE.md").write_text("new current contract; old PASS is not current acceptance")
+        state = self.adopted()
+        self.assertFalse(state["delivery_status"]["adopted"])
+        self.assertTrue(state["inherited_visual"])
+        self.assertEqual(self.formal_qa("new-context")["gate"], "CONCERNS")
+        with self.assertRaises(ValueError):
+            self.completed()
+        self.surface = {**self.surface, "version": "v2"}
+        self.requirement = V.declare(*self.args, "new-context", scope=["source"], **self.surface, supersedes=old)
+        capture, viewed = self.captured_view("new-context-capture")
+        self.judgment("new-context-review", capture, viewed)
+        self.assertEqual(self.formal_qa("new-context-accepted")["gate"], "PASS")
+        self.assertTrue(self.completed()["delivery_status"]["sealed"])
+
+    def test_known_release_candidate_change_requires_current_visual_capture(self):
+        capture, viewed = self.captured_view("original")
+        self.judgment("original-pass", capture, viewed)
+        state = R.status(self.root)["state"]
+        state["release_plan"] = {"candidate": {"id": "changed-candidate"}}
+        self.assertFalse(V.judgment(self.root, state)["complete"])
 
 
 if __name__ == "__main__":

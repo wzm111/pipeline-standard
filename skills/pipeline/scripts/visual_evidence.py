@@ -39,6 +39,88 @@ def _read(root, state, ref, kind):
     return report["payload"]
 
 
+def _at_task(state, started):
+    result = {**state, "tasks": []}
+    tasks = T._tasks(state)
+    if started is None and tasks:
+        result["_visual_interval_end"] = tasks[0]["started_at"]
+    if started is not None:
+        for index, task in enumerate(T._tasks(state)):
+            if task["started_at"] == started:
+                result["tasks"] = state["tasks"][:index + 1]
+                break
+        else:
+            raise ValueError("visual source task is unavailable")
+    return result
+
+
+def _context(root, state, requirement):
+    if requirement in state["artifacts"]:
+        payload = E.read_report(root, state["run_id"], requirement, kind="visual_requirement")["payload"]
+        return _at_task(state, payload["task_started_at"])
+    import delivery as D
+    for inherited in state.get("inherited_visual", []):
+        binding = inherited["binding"]
+        selected = next((ref for ref in binding["reports"] if ref["path"] == requirement
+                         and "/artifacts/visual_requirement/" in ref["path"]), None)
+        if selected is not None:
+            packet = D._receipt_metadata(root, inherited["receipt"])
+            if binding not in packet.get("visual", []):
+                raise ValueError("visual inheritance is not accepted by the predecessor")
+            for ref in binding["reports"]:
+                D._read_reference(root, ref, E.read_report(root, ref["run_id"], ref["path"])["kind"])
+            source = R.status(root, selected["run_id"])["state"]
+            if source["status"] != "completed":
+                raise ValueError("visual source run is not completed")
+            payload = E.read_report(root, selected["run_id"], requirement, kind="visual_requirement")["payload"]
+            return _at_task(source, payload["task_started_at"])
+    raise ValueError("visual requirement is not owned or explicitly inherited")
+
+
+def _requirements(root, state):
+    refs = [ref for ref in state["artifacts"] if "/artifacts/visual_requirement/" in ref]
+    refs += [ref["path"] for item in state.get("inherited_visual", []) for ref in item["binding"]["reports"]
+             if "/artifacts/visual_requirement/" in ref["path"]]
+    requirements = {}
+    for ref in dict.fromkeys(refs):
+        context = _context(root, state, ref)
+        requirements[ref] = _read(root, context, ref, "visual_requirement")
+    replaced = set()
+    for ref, required in requirements.items():
+        previous = required.get("supersedes")
+        if previous is None:
+            continue
+        if previous == ref or previous not in requirements or previous in replaced:
+            raise ValueError("visual supersession must be an owned, non-branching requirement chain")
+        old = requirements[previous]
+        if (old["target"] != required["target"] or not set(old["scope"]) <= set(required["scope"])
+                or P._digest(root, previous) != required["supersedes_sha256"]
+                or old.get("review", "self") == "independent" and required.get("review", "self") != "independent"):
+            raise ValueError("visual supersession cannot drop target, source scope or independent review")
+        replaced.add(previous)
+        seen = {ref}
+        while previous:
+            if previous in seen:
+                raise ValueError("visual supersession cycle")
+            seen.add(previous)
+            previous = requirements[previous].get("supersedes")
+    return requirements, replaced
+
+
+def _ancestor_review(root, state, requirement, seen=None):
+    seen = set() if seen is None else seen
+    if requirement in seen:
+        raise ValueError("visual supersession cycle")
+    seen.add(requirement)
+    required = _read(root, _context(root, state, requirement), requirement, "visual_requirement")
+    previous = required.get("supersedes")
+    if previous is None:
+        return None, None
+    context = _context(root, state, previous)
+    history = _reviews(root, context, previous)
+    return history[-1] if history else _ancestor_review(root, state, previous, seen)
+
+
 def _surface(value):
     if not isinstance(value, dict) or set(value) != {"target", "viewport", "state", "version"}:
         raise ValueError("visual surface requires target/viewport/state/version only")
@@ -53,7 +135,7 @@ def _surface(value):
     return value
 
 
-def declare(root, run_id, owner, name, *, scope, target, viewport, state, version, review="self"):
+def declare(root, run_id, owner, name, *, scope, target, viewport, state, version, review="self", supersedes=None):
     owned = P._owned(root, run_id, owner)
     _name(name, owner)
     surface = _surface(dict(target=target, viewport=viewport, state=state, version=version))
@@ -62,8 +144,15 @@ def declare(root, run_id, owner, name, *, scope, target, viewport, state, versio
     E.fingerprint(root, scope)
     if E.write_paths_conflict(root, scope, ["tmp/pipeline"]):
         raise ValueError("visual source scope must exclude pipeline outputs")
-    return E.write_report(root, run_id, owner, "visual_requirement", name,
-                          {"task_started_at": _task(owned), "scope": scope, "review": review, **surface})
+    payload = {"task_started_at": _task(owned), "scope": scope, "review": review, **surface}
+    if supersedes is not None:
+        previous = _read(root, _context(root, owned, supersedes), supersedes, "visual_requirement")
+        requirements, replaced = _requirements(root, owned)
+        if (supersedes in replaced or previous["target"] != target or not set(previous["scope"]) <= set(scope)
+                or previous.get("review", "self") == "independent" and review != "independent"):
+            raise ValueError("visual supersession cannot branch or drop target/scope/review")
+        payload.update(supersedes=supersedes, supersedes_sha256=P._digest(root, supersedes))
+    return E.write_report(root, run_id, owner, "visual_requirement", name, payload)
 
 
 def _image_path(run_id, name, image_format):
@@ -206,7 +295,8 @@ def finish(root, run_id, owner, requirement, name, *, observed, host_stopped=Fal
                           {"task_started_at": _task(owned), "requirement": requirement,
                            "requirement_sha256": digest, "observation": observation,
                            "source_fingerprint": proof["fingerprint"], "image_path": image,
-                           "image": info, "observed": observed, "origin": "caller_observed_host"})
+                           "image": info, "observed": observed, "origin": "caller_observed_host",
+                           "candidate_id": owned.get("release_plan", {}).get("candidate", {}).get("id")})
 
 
 def _capture(root, owned, ref):
@@ -245,13 +335,16 @@ def _reviewer(owned, dispatch_id):
     import role_dispatch as D
     item = D._ticket(owned, dispatch_id)
     start = _task(owned)
+    end = owned.get("_visual_interval_end") or (T._tasks(owned)[-1]["ended_at"] if T._tasks(owned) else None)
     if (item["role"] != "tester" or item["status"] not in {"working", "completed"}
             or not item.get("accepted_at") or not item.get("executor_id")
-            or start and R._timestamp(item["accepted_at"]) < R._timestamp(start)):
+            or start and R._timestamp(item["accepted_at"]) < R._timestamp(start)
+            or end and R._timestamp(item["accepted_at"]) > R._timestamp(end)):
         raise ValueError("independent visual review requires an accepted current-task tester")
     for developer in owned.get("role_dispatches", []):
         if (developer["role"] == "developer" and developer.get("accepted_at")
                 and (not start or R._timestamp(developer["accepted_at"]) >= R._timestamp(start)) and (
+                not end or R._timestamp(developer["accepted_at"]) <= R._timestamp(end)) and (
                 developer.get("executor_id") == item["executor_id"] or
                 item.get("host_executor_id") and developer.get("host_executor_id") == item["host_executor_id"])):
             raise ValueError("visual reviewer must differ from the implementation executor")
@@ -324,7 +417,7 @@ def review(root, run_id, owner, capture_ref, view_ref, name, *, gate, findings,
         raise ValueError("PASS requires no unresolved findings; FAIL/CONCERNS retain actual findings")
     resolved = E.coverage_labels(resolved)
     previous = _reviews(root, owned, requirement)
-    prior_ref, prior = previous[-1] if previous else (None, None)
+    prior_ref, prior = previous[-1] if previous else _ancestor_review(root, owned, requirement)
     prior_ids = {item["id"] for item in prior["findings"]} if prior else set()
     if not set(resolved) <= prior_ids or not prior_ids - set(resolved) <= set(ids) or set(resolved) & set(ids):
         raise ValueError("retain or explicitly resolve previous visual findings")
@@ -351,7 +444,7 @@ def _valid_review(root, owned, ref, payload):
             or P._digest(root, payload["capture"]) != payload["capture_sha256"]
             or P._digest(root, payload["view"]) != payload["view_sha256"]):
         raise ValueError("visual review source/image/view changed")
-    previous = None
+    previous, _ = _ancestor_review(root, owned, payload["requirement"])
     for history_ref, history in _reviews(root, owned, payload["requirement"]):
         if (history["previous_review"] != previous or
                 history["previous_sha256"] != (P._digest(root, previous) if previous else None)):
@@ -392,3 +485,121 @@ def inspect(root, run_id, requirement):
     if R.status(root, run_id)["state"] != before:
         raise ValueError("run changed during visual inspection")
     return {**result, "notice": "Evidence binding only; caller-declared capture/viewing is not native proof or aesthetic acceptance."}
+
+
+def _reference(root, path):
+    import delivery as D
+    parts = Path(path).parts
+    if parts[:3] != ("tmp", "pipeline", "runs") or len(parts) < 7:
+        raise ValueError("visual reference must be a run report")
+    E.read_report(root, parts[3], path)
+    return D._reference(root, parts[3], path)
+
+
+def _binding(root, state, requirement):
+    import delivery as D
+    for inherited in state.get("inherited_visual", []):
+        if inherited["binding"]["requirement"]["path"] == requirement:
+            # Metadata can authorize a fresh explicit replacement; old PASS reuse
+            # still requires the unchanged predecessor context.
+            D.validated_receipt(root, inherited["receipt"], refresh_coverage=False)
+    context = _context(root, state, requirement)
+    capture_ref = _latest_capture(root, context, requirement)
+    if capture_ref is None:
+        raise ValueError("visual capture is pending")
+    capture = _capture(root, context, capture_ref)
+    candidate = state.get("release_plan", {}).get("candidate", {}).get("id")
+    if candidate is not None and capture.get("candidate_id") != candidate:
+        raise ValueError("visual release candidate changed; current capture required")
+    history = _reviews(root, context, requirement)
+    if not history:
+        raise ValueError("visual review is pending")
+    review_ref, reviewed = history[-1]
+    _valid_review(root, context, review_ref, reviewed)
+    if reviewed["gate"] != "PASS" or reviewed["findings"]:
+        raise ValueError("visual review has unresolved findings")
+    refs = {requirement, capture_ref, reviewed["view"], capture["observation"], review_ref}
+    previous = reviewed["previous_review"]
+    while previous:
+        if previous in refs:
+            raise ValueError("visual review history cycle")
+        refs.add(previous)
+        reference = _reference(root, previous)
+        previous = E.read_report(root, reference["run_id"], previous, kind="visual_review")["payload"]["previous_review"]
+    previous = _read(root, context, requirement, "visual_requirement").get("supersedes")
+    while previous:
+        if previous in refs:
+            raise ValueError("visual requirement history cycle")
+        refs.add(previous)
+        previous_context = _context(root, state, previous)
+        previous = _read(root, previous_context, previous, "visual_requirement").get("supersedes")
+    return {"requirement": _reference(root, requirement), "task_started_at": _task(context),
+            "capture": _reference(root, capture_ref), "view": _reference(root, reviewed["view"]),
+            "review": _reference(root, review_ref), "reports": [_reference(root, ref) for ref in sorted(refs)]}
+
+
+def judgment(root, state):
+    """Current explicit UI and carried gaps only; no inference from source names."""
+    if not state.get("inherited_visual") and not any("/artifacts/visual_requirement/" in ref for ref in state["artifacts"]):
+        return None
+    try:
+        requirements, replaced = _requirements(root, state)
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"complete": False, "requirements": [{"status": "unconfirmed_visual_source"}],
+                "notice": "Explicit visual source obligations are pending; invalid inheritance cannot erase them."}
+    inherited = {item["binding"]["requirement"]["path"] for item in state.get("inherited_visual", [])}
+    entries = []
+    for ref, required in requirements.items():
+        if ref in replaced:
+            continue
+        context = _context(root, state, ref)
+        current = context["run_id"] == state["run_id"] and required["task_started_at"] == _task(state)
+        try:
+            history = _reviews(root, context, ref)
+        except (OSError, ValueError, KeyError, TypeError):
+            history = []
+        if not current and ref not in inherited and history and history[-1][1]["gate"] == "PASS":
+            continue  # Completed older UI tasks do not invent requirements for unrelated work.
+        entry = {"requirement": _reference(root, ref),
+                 "scope": "current_task" if current else "inherited" if ref in inherited else "unresolved_prior_task",
+                 "status": "pending_or_stale"}
+        try:
+            entry.update(status="review_declared", binding=_binding(root, state, ref))
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        entries.append(entry)
+    if not entries:
+        return None
+    return {"complete": all(item["status"] == "review_declared" for item in entries), "requirements": entries,
+            "notice": "Binding completeness only; visual PASS is the actual observer's declared review, not machine aesthetic proof."}
+
+
+def apply(root, state, payload):
+    visual = judgment(root, state)
+    if visual is None:
+        return payload
+    result = {**payload, "visual": visual}
+    if not visual["complete"] and result.get("gate") != "FAIL":
+        result["gate"] = "CONCERNS"
+    return result
+
+
+def delivery_bindings(root, state):
+    visual = judgment(root, state)
+    if visual is None:
+        return []
+    if not visual["complete"]:
+        raise ValueError("explicit UI visual acceptance is incomplete")
+    return [entry["binding"] for entry in visual["requirements"]]
+
+
+def delivery_preview(root, state):
+    """Safe local paths for user-visible delivery; never upload image contents."""
+    result = []
+    for binding in delivery_bindings(root, state):
+        capture = E.read_report(root, binding["capture"]["run_id"], binding["capture"]["path"], kind="visual_capture")["payload"]
+        result.append({"image_path": str(E._local(Path(root).resolve(), capture["image_path"])),
+                       "target": capture["observed"]["target"], "state": capture["observed"]["state"],
+                       "version": capture["observed"]["version"], "viewport": capture["observed"]["viewport"],
+                       "review_basis": "caller_declared", "native_proof": False})
+    return result

@@ -340,7 +340,8 @@ def _acceptance(root, state, pending):
     if "run_policy" in state:
         managed_qa.validate_release_sources(root, state, coverage)
         packet["machine_validation"] = {"schema": 1, "mode": "release", "task_started_at": managed_qa.boundary(state)}
-    return packet
+    import visual_evidence
+    return visual_evidence.apply(root, state, packet)
 
 
 def validate_closeout(root, state):
@@ -349,7 +350,7 @@ def validate_closeout(root, state):
     if not reference:
         raise ValueError("release requires one validated closeout before finishing")
     packet = D._read_reference(Path(root).resolve(strict=True), reference, "qa")
-    if packet != _acceptance(root, state, packet["external_pending"]):
+    if packet.get("gate") != "PASS" or packet != _acceptance(root, state, packet["external_pending"]):
         raise ValueError("release changed after closeout; revalidate affected evidence")
 
 
@@ -377,7 +378,10 @@ def closeout(root, run_id, owner_token, *, external_pending=None):
             latest["release_plan"]["closeout"] = reference
             latest["updated_at"] = R._now()
             R._atomic(path, latest)
-    return {"report": relative, "reused": reused, "external_pending": pending}
+    result = {"report": relative, "reused": reused, "external_pending": pending}
+    if packet["gate"] != "PASS":
+        result["gate"] = packet["gate"]
+    return result
 
 
 def public_status(root, run_id, owner_token):
@@ -431,6 +435,7 @@ def main(argv=None):
             code = 0 if executed["release_accepted"] else 1
         elif args.action == "closeout":
             result = closeout(*owned, **declaration)
+            code = 0 if result.get("gate", "PASS") == "PASS" else 1
         else:
             result = public_status(*owned)
     except (OSError, ValueError, KeyError, TypeError) as error:

@@ -203,6 +203,26 @@ class PolicyTests(unittest.TestCase):
         final = R.finish(*self.args, "completed", executors_stopped=True, stop_evidence="fixture stopped")
         self.assertEqual(final["status"], "completed")
 
+    def test_actual_visual_rule_change_requires_refresh_without_proving_reading(self):
+        skill = self.root / "fixture-skill"
+        for relative in V.RULES:
+            destination = skill / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(V.SKILL_ROOT / relative, destination)
+        with patch.object(V, "SKILL_ROOT", skill):
+            state = R.start(self.root, managed=True)
+            args = self.root, state["run_id"], state["owner_token"]
+            V.acknowledge(*args, V.snapshot(self.root)["revision"])
+            rule = skill / "references/visual.md"
+            rule.write_bytes(rule.read_bytes() + b"\nfixture visual requirement changed\n")
+            self.assertTrue(V.inspect(self.root, R.status(self.root)["state"])["stale"])
+            with self.assertRaisesRegex(ValueError, "policy"):
+                C.execute_check(*args, "blocked", argv=self.argv, scope=["input"])
+            refreshed = V.acknowledge(*args, V.snapshot(self.root)["revision"])
+            self.assertTrue(refreshed["caller_acknowledged"])
+            self.assertNotIn("read_confirmed", refreshed)
+            self.assertFalse((self.root / "marker").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

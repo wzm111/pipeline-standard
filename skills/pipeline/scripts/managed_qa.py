@@ -136,7 +136,8 @@ def canonical(root, state, payload):
                   "summary": payload.get("summary", "")}
         mode = "single"
     result["machine_validation"] = {"schema": 1, "mode": mode, "task_started_at": boundary(state)}
-    return result
+    import visual_evidence
+    return visual_evidence.apply(root, state, result)
 
 
 def validate_finish(root, state):

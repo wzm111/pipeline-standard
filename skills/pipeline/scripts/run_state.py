@@ -169,7 +169,10 @@ def start(project_root, initial=None, *, managed=False):
             try:
                 delivery.adopt(project_root, base, state, delivery_from)
             except (OSError, ValueError, KeyError, TypeError) as error:
+                visual = state.get("inherited_visual")
                 state = before_adoption
+                if visual:
+                    state["inherited_visual"] = visual
                 state["delivery_status"] = {"adopted": False, "reason": getattr(error, "reason", type(error).__name__), "detail": str(error)[:160]}
         path = _state_path(base, state["run_id"])
         if path.exists():
