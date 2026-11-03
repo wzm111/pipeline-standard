@@ -20,7 +20,7 @@
 
 每次真实派发前按models.md解析该角色模型与强度，通过role-dispatch.md在原生工具传入实际参数并记录请求/反馈；Claude与Codex分别使用其支持的参数。简单直做沿用主会话模型。后续批次复用原角色和差量上下文；QA核验已有证据并补测缺口，不重新执行相同输入/环境下有效的全部检查。生成目录或浏览器资源冲突时顺序运行，不为并行相互覆盖。
 
-真实开始实现/派发开发前更新当前run为implementation/execution；进入独立验收前更新为verification/testing。直做在首次写入前执行同样切换，不把已发生的实现时间留在planning。使用现有`update --receipt <receipt> --stage <当前阶段> --activity <实际活动>`，不为每条命令或报告新增事件；角色并行只更新主流程的真实阶段，不按单个角色反复抢写。
+真实开始实现前更新当前run为implementation/execution；进入独立验收时更新为verification/testing。主流程实际派发开发/独立QA时，优先按[角色边界](role-dispatch.md)在begin显式绑定workflow_phase，由宿主accepted同步阶段；未接受的尝试不记实际QA开始。主会话确实等待已接受角色时用wait_for_dispatches绑定所选集合，全部返回后进入handoff，再处理验收结论。直做在首次写入前用现有`update --receipt <receipt> --stage <当前阶段> --activity <实际活动>`切换，不把已发生的实现时间留在planning。不为每条命令或报告新增事件；后台角色不绑定主阶段，角色并行只更新主流程真实状态，不能覆盖人工等待或前台检查。
 
 ## 简单任务直接执行
 

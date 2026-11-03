@@ -7,6 +7,29 @@ import role_metrics as M
 import run_state as R
 
 EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "inherit", "unknown"}
+WORKFLOW_PHASES = {"implementation": "execution", "verification": "testing"}
+
+
+def _progress(state):
+    task = state.get("tasks", [])[-1] if state.get("tasks") else None
+    return {"stage": state.get("stage"), "activity": state.get("activity", "execution"),
+            "history_size": len(state["history"]), "revision": state.get("progress_revision", 0),
+            "task": {key: task.get(key) for key in ("task_id", "status", "started_at", "ended_at")} if task else None}
+
+
+def _transition(state, stage, activity, now):
+    if (state.get("stage"), state.get("activity", "execution")) != (stage, activity):
+        state.update(stage=stage, activity=activity)
+        state["history"].append(R._event(state, "transition", now))
+
+
+def _human_wait(state):
+    return state.get("activity") == "human_wait" or state.get("continuity_wait", {}).get("status") == "waiting"
+
+
+def _checking(state):
+    return bool(state.get("running_checks")) or any(
+        item.get("status") == "running" for item in state.get("observed_checks", {}).values())
 
 
 def _model(value):
@@ -70,11 +93,13 @@ def _parameters(value, model, effort):
 
 
 def begin(project_root, run_id, owner_token, role, *, executor_id=None, requested_model=None, requested_effort=None,
-          native_parameters=None):
+          native_parameters=None, workflow_phase=None):
     """Before native spawn/follow-up: one compact attempt, no invented creation."""
     M._validate(role, executor_id or "new-executor", "reused" if executor_id else "created")
     model, effort = _model(requested_model), _effort(requested_effort)
     parameters = _parameters(native_parameters, model, effort)
+    if workflow_phase is not None and workflow_phase not in WORKFLOW_PHASES:
+        raise ValueError("workflow phase must be implementation or verification")
     if any(owner_token in text for text in (model, effort, executor_id or "")):
         raise ValueError("owner cannot appear in dispatch metadata")
     if parameters is not None and any(owner_token in str(v) for v in parameters.values()):
@@ -96,6 +121,8 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
                 "requested_at": now, "accepted_at": None, "completed_at": None}
         if parameters is not None:
             item["native_parameters"] = parameters
+        if workflow_phase is not None:
+            item.update(workflow_phase=workflow_phase, workflow_origin=_progress(state))
         state.setdefault("role_dispatches", []).append(item)
         state["role_execution"] = "delegated"
         state["updated_at"] = now
@@ -141,6 +168,12 @@ def accepted(project_root, run_id, owner_token, dispatch_id, executor_id, *, act
         item.update(executor_id=executor_id, actual_model=model, actual_effort=effort, status="working", accepted_at=now)
         if host_executor_id is not None:
             item["host_executor_id"] = host_executor_id
+        if "workflow_phase" in item:
+            item["workflow_applied"] = (item["workflow_origin"] == _progress(state)
+                                        and not _human_wait(state) and not _checking(state))
+            if item["workflow_applied"]:
+                phase = item["workflow_phase"]
+                _transition(state, phase, WORKFLOW_PHASES[phase], now)
         state["updated_at"] = now
         R._atomic(path, state)
         return deepcopy(item)
@@ -166,9 +199,41 @@ def complete(project_root, run_id, owner_token, dispatch_id, *, executors_stoppe
         if item["status"] == "working":
             _record(state, item["role"], item["executor_id"], "stopped", now)
         item.update(status=outcome, completed_at=now)
+        waiting = state.get("role_wait")
+        if (waiting and dispatch_id in waiting["dispatch_ids"] and not _human_wait(state) and not _checking(state)
+                and waiting["progress"] == _progress(state)
+                and all(_ticket(state, key)["status"] not in {"dispatching", "working"}
+                        for key in waiting["dispatch_ids"])):
+            _transition(state, state["stage"], "handoff", now)
         state["updated_at"] = now
         R._atomic(path, state)
         return deepcopy(item)
+
+
+def wait_for_dispatches(project_root, run_id, owner_token, dispatch_ids):
+    """Caller is now waiting for these accepted roles; never infer from names."""
+    if (not isinstance(dispatch_ids, list) or not dispatch_ids
+            or any(not isinstance(key, str) for key in dispatch_ids)
+            or len(set(dispatch_ids)) != len(dispatch_ids)):
+        raise ValueError("supply distinct dispatch IDs for the actual main workflow wait")
+    with R._write_guard(project_root) as base:
+        path, state = _owned(base, run_id, owner_token)
+        if _human_wait(state):
+            raise ValueError("resolve the registered human wait before waiting for roles")
+        if _checking(state):
+            raise ValueError("close foreground checks before waiting for roles")
+        keys = sorted(dispatch_ids)
+        waiting = state.get("role_wait")
+        if waiting and waiting["dispatch_ids"] == keys and waiting["progress"] == _progress(state):
+            return deepcopy(waiting)
+        if any(_ticket(state, key)["status"] != "working" for key in keys):
+            raise ValueError("role wait requires currently accepted working dispatches")
+        now = R._now()
+        _transition(state, state["stage"], "role_wait", now)
+        waiting = {"dispatch_ids": keys, "started_at": now, "progress": _progress(state)}
+        state.update(role_wait=waiting, updated_at=now)
+        R._atomic(path, state)
+        return deepcopy(waiting)
 
 
 def validate_direct(state):
