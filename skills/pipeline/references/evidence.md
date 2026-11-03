@@ -79,6 +79,8 @@ name是执行轮次，coverage是稳定的验收含义；不能把a-e2e-r2、a-b
 
 managed运行的QA报告由同一证据判断产生，不能用通用report直接认领PASS。简单单检查传完整checks引用和非空稳定required_checks；多检查使用注册plan，由qa/verify核验。报告中的文字结论不覆盖原实际退出码，也不能省略类别、忽略最新失败或引用旧任务QA冒充本轮验收。共享完成入口再次核对当前证据，检查成功与独立业务判断仍分开；暂停、中止及记录真实失败照常可用。
 
+不确定某项为何重跑时，可先只读调用 `reuse-preflight --project <root> --run-id <已知ID> --scope <完整依赖> --coverage <稳定类别> --impact-covered -- <原命令>`。只有影响范围已确认才传 `--impact-covered`；否则明确返回待确认，不自动认领旧证据。它与真实执行共享严格判断，不启动进程、不写报告，返回可复用性、拒绝原因和下一步；环境差异仍只显示允许的键名或聚合变化。不返回环境值/哈希、原日志或凭据；不回放旧环境、不忽略SHLVL等字段。查询时有效不保证稍后执行仍有效，真实check/verify照常重新核验；不要每个检查机械增加一次查询。
+
 ## 失败分类与角色开销
 
 intent按实际用途选择test/search/locate/reproduce/check。入口记录原始退出码和result_class，区分成功、搜索无匹配、定位失败、故障复现非零、测试失败、一般命令失败、工具不可用、超时和中断。test_failure表示测试命令非零，不自动判定业务回归或QA FAIL。

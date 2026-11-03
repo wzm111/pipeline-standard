@@ -174,6 +174,100 @@ def _stop(process):
     process.wait()
 
 
+def _reuse_decision(root, run_id, owner_token, *, command, scope, intent, directory, env,
+                    diagnostics, coverage, reuse_from=None, impact_covered=False):
+    """One strict decision shared by execution and read-only inspection."""
+    decision = {"reason": "impact_not_confirmed" if impact_covered is not True else "no_matching_check"}
+    if impact_covered is not True:
+        return False, reuse_from, decision
+    owned = R.status(root, run_id)["state"]
+    R._owned(owned, run_id, owner_token)
+    latest = None
+    for candidate in reversed(owned["artifacts"]):
+        if "/artifacts/check/" not in candidate:
+            continue
+        try:
+            proof = E.read_report(root, run_id, candidate, kind="check")["payload"]
+            if (proof.get("command") == command and proof.get("scope") == scope
+                    and proof.get("intent", "test") == intent
+                    and proof.get("cwd", ".") == directory.relative_to(root).as_posix()):
+                latest = candidate
+                break
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    reuse_from = reuse_from or latest
+    if not reuse_from:
+        return False, None, decision
+    decision = {"source": reuse_from, "reason": "unconfirmed_evidence"}
+    try:
+        old = E.read_report(root, run_id, reuse_from, kind="check")["payload"]
+        if env["executable_sha256"] == "unavailable":
+            verdict = {"reusable": False, "reason": "executable_unconfirmed"}
+        elif (old.get("scope") != scope or old.get("intent", "test") != intent
+              or old.get("cwd", ".") != directory.relative_to(root).as_posix()):
+            verdict = {"reusable": False, "reason": "scope_or_intent_changed"}
+        else:
+            verdict = None
+            if latest and latest != reuse_from:
+                newer = E.read_report(root, run_id, latest, kind="check")["payload"]
+                current = E.reusable_check(root, run_id, latest, command=command, environment=env,
+                                           impact_covered=True, coverage=newer.get("coverage"))
+                if not current["reusable"]:
+                    verdict = {"reusable": False, "reason": "superseded_observation"}
+                    decision.update(latest_source=latest, latest_reason=current["reason"])
+                    if current["reason"] == "command_or_environment_changed":
+                        decision["environment_changes"] = environment_changes(
+                            newer.get("observed_environment_diagnostics"), diagnostics)
+            if verdict is None:
+                verdict = E.reusable_check(root, run_id, reuse_from, command=command, environment=env,
+                                           impact_covered=True, coverage=coverage)
+        decision["reason"] = verdict["reason"]
+        if verdict["reason"] == "command_or_environment_changed":
+            decision["environment_changes"] = environment_changes(
+                old.get("observed_environment_diagnostics"), diagnostics)
+        return verdict["reusable"], reuse_from, decision
+    except (OSError, ValueError, KeyError, TypeError):
+        return False, reuse_from, decision
+
+
+def inspect_reuse(project_root, run_id, *, argv, scope, intent="test", environment=None,
+                  coverage=None, cwd=None, impact_covered=False):
+    """Read-only strict reuse diagnosis; never execute, claim or record a PASS."""
+    root = Path(project_root).resolve(strict=True)
+    before = R.status(root, run_id)
+    state = before["state"]
+    if state is None:
+        raise ValueError("existing run required for reuse inspection")
+    owner = state["owner_token"]
+    directory = _workdir(root, cwd)
+    if not isinstance(argv, list) or not argv or any(not isinstance(a, str) or not a or "\0" in a for a in argv):
+        raise ValueError("argv must be a nonempty list of arguments")
+    classify_result(0, intent)
+    command = shlex.join(argv)
+    if owner in command:
+        raise ValueError("owner token cannot be passed to a command")
+    coverage = E.coverage_labels(coverage)
+    E.fingerprint(root, scope)
+    child_env = {k: v for k, v in os.environ.items() if k != "PIPELINE_OWNER_TOKEN" and owner not in v}
+    env = _environment(directory, argv, child_env, environment, project_root=root)
+    reusable, _, decision = _reuse_decision(root, run_id, owner, command=command, scope=scope,
+        intent=intent, directory=directory, env=env, diagnostics=environment_diagnostics(child_env),
+        coverage=coverage, impact_covered=impact_covered)
+    # Do not expose report paths, hashes, commands, contexts or arbitrary env keys.
+    result = {"reusable": reusable, "reason": decision["reason"],
+              "next_action": "revalidate_at_execution" if reusable else
+                  "confirm_impact_scope" if decision["reason"] == "impact_not_confirmed" else
+                  "inspect_environment_without_replaying" if decision.get("environment_changes") else
+                  "execute_affected_check",
+              "notice": "Read-only current evidence diagnosis, not acceptance or permission to skip execution guards."}
+    for key in ("environment_changes", "latest_reason"):
+        if key in decision:
+            result[key] = decision[key]
+    if R.status(root, run_id) != before:
+        raise ValueError("run changed during reuse inspection; recheck")
+    return result
+
+
 def execute_check(project_root, run_id, owner_token, name, *, argv, scope, intent="test",
                   environment=None, write_paths=None, timeout=None, reuse_from=None, impact_covered=False,
                   coverage=None, cwd=None, protected_paths=None):
@@ -214,64 +308,14 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
     command = shlex.join(argv)
     if owner_token in command:
         raise ValueError("owner token cannot be passed to a command")
-    decision = {"reason": "impact_not_confirmed" if impact_covered is not True else "no_matching_check"}
-    latest = None
-    if impact_covered is True:
-        owned = R.status(root, run_id)["state"]
-        R._owned(owned, run_id, owner_token)
-        # Search only this run's registered evidence, including explicit imports.
-        for candidate in reversed(owned["artifacts"]):
-            if "/artifacts/check/" not in candidate:
-                continue
-            try:
-                proof = E.read_report(root, run_id, candidate, kind="check")["payload"]
-                if (proof.get("command") == command and proof.get("scope") == scope
-                        and proof.get("intent", "test") == intent
-                        and proof.get("cwd", ".") == directory.relative_to(root).as_posix()):
-                    # Select the latest observation before validating its environment;
-                    # a newer failure must not revive an older PASS in another env.
-                    latest = candidate
-                    break
-            except (OSError, ValueError, KeyError, TypeError):
-                continue
-        if reuse_from is None:
-            reuse_from = latest
-    if reuse_from and impact_covered is True:
-        decision = {"source": reuse_from, "reason": "unconfirmed_evidence"}
-        try:
-            old = E.read_report(root, run_id, reuse_from, kind="check")["payload"]
-            if env["executable_sha256"] == "unavailable":
-                verdict = {"reusable": False, "reason": "executable_unconfirmed"}
-            elif (old.get("scope") != scope or old.get("intent", "test") != intent
-                  or old.get("cwd", ".") != directory.relative_to(root).as_posix()):
-                verdict = {"reusable": False, "reason": "scope_or_intent_changed"}
-            else:
-                verdict = None
-                if latest and latest != reuse_from:
-                    newer = E.read_report(root, run_id, latest, kind="check")["payload"]
-                    current = E.reusable_check(root, run_id, latest, command=command, environment=env,
-                                               impact_covered=True, coverage=newer.get("coverage"))
-                    if not current["reusable"]:
-                        verdict = {"reusable": False, "reason": "superseded_observation"}
-                        decision.update(latest_source=latest, latest_reason=current["reason"])
-                        if current["reason"] == "command_or_environment_changed":
-                            decision["environment_changes"] = environment_changes(
-                                newer.get("observed_environment_diagnostics"), diagnostics)
-                if verdict is None:
-                    verdict = E.reusable_check(root, run_id, reuse_from, command=command, environment=env,
-                                               impact_covered=True, coverage=coverage)
-            decision["reason"] = verdict["reason"]
-            if verdict["reason"] == "command_or_environment_changed":
-                decision["environment_changes"] = environment_changes(
-                    old.get("observed_environment_diagnostics"), diagnostics)
-            reusable = verdict["reusable"]
-        except (OSError, ValueError, KeyError, TypeError):
-            reusable = False
-        if reusable:
-            path = E.write_report(root, run_id, owner_token, "check_reuse", name,
-                                  {"source": reuse_from, "coverage": coverage, "reuse_decision": decision})
-            return {"report": reuse_from, "reuse_report": path, "reused": True,
-                    "exit_code": 0, "result_class": "success", "seconds": 0.0, "reuse_decision": decision}
+    reusable, reuse_from, decision = _reuse_decision(root, run_id, owner_token,
+        command=command, scope=scope, intent=intent, directory=directory, env=env,
+        diagnostics=diagnostics, coverage=coverage, reuse_from=reuse_from, impact_covered=impact_covered)
+    if reusable:
+        path = E.write_report(root, run_id, owner_token, "check_reuse", name,
+                              {"source": reuse_from, "coverage": coverage, "reuse_decision": decision})
+        return {"report": reuse_from, "reuse_report": path, "reused": True,
+                "exit_code": 0, "result_class": "success", "seconds": 0.0, "reuse_decision": decision}
     if not inspect_resources(root, write_paths, protected_paths)["safe_to_execute"]:
         raise ValueError("declared resources only: protected paths conflict or check write paths are unknown")
     _claim(root, run_id, owner_token, name, write_paths, testing=intent not in {"search", "locate"})

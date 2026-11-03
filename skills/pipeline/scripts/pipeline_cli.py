@@ -98,6 +98,15 @@ def parser():
     preflight.add_argument("--write-path", action="append")
     preflight.add_argument("--protected-path", action="append")
     preflight.add_argument("argv", nargs=argparse.REMAINDER)
+    reuse = sub.add_parser("reuse-preflight", help="read-only strict evidence reuse diagnosis; no execution or writes")
+    reuse.add_argument("--project", default=".")
+    reuse.add_argument("--run-id", required=True)
+    reuse.add_argument("--scope", nargs="+", required=True)
+    reuse.add_argument("--coverage", nargs="+")
+    reuse.add_argument("--cwd")
+    reuse.add_argument("--intent", choices=sorted(C.INTENTS), default="test")
+    reuse.add_argument("--impact-covered", action="store_true")
+    reuse.add_argument("argv", nargs=argparse.REMAINDER)
     owned = {}
     for name in ("update", "check", "report", "finish", "plan", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "observe-begin", "observe-finish", "policy-ack"):
         owned[name] = sub.add_parser(name)
@@ -182,6 +191,12 @@ def dispatch(args):
     if args.action == "policy":
         import run_policy
         return run_policy.inspect(root, R.status(root, args.run_id)["state"]), 0
+    if args.action == "reuse-preflight":
+        argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
+        result = C.inspect_reuse(root, args.run_id, argv=argv, scope=args.scope,
+                                 coverage=args.coverage, cwd=args.cwd, intent=args.intent,
+                                 impact_covered=args.impact_covered)
+        return result, 0 if result["reusable"] else 1
     if args.action == "task-status":
         import run_tasks as T
         return T.status(root, args.run_id), 0

@@ -72,6 +72,46 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(C.check_summary(self.root)["reused"], 1)
         self.assertEqual(C.check_summary(self.root)["executed"], 1)
 
+    def test_reuse_inspection_is_read_only_and_agrees_with_execution(self):
+        self.execute("original")
+        before = {str(p): (p.read_bytes(), p.stat().st_mtime_ns)
+                  for p in self.root.rglob("*") if p.is_file()}
+        with patch.object(C.subprocess, "Popen", side_effect=AssertionError("must not run")):
+            result = C.inspect_reuse(self.root, self.state["run_id"],
+                argv=[sys.executable, "-c", "print('PASS')"], scope=["input.txt"], impact_covered=True)
+        self.assertTrue(result["reusable"])
+        self.assertEqual(result["next_action"], "revalidate_at_execution")
+        self.assertEqual(before, {str(p): (p.read_bytes(), p.stat().st_mtime_ns)
+                                 for p in self.root.rglob("*") if p.is_file()})
+        self.assertTrue(self.execute("actual", impact_covered=True)["reused"])
+        (self.root / "input.txt").write_text("changed after inspection")
+        self.assertFalse(self.execute("changed", impact_covered=True)["reused"])
+
+    def test_reuse_inspection_requires_impact_and_preserves_latest_failure(self):
+        self.execute("original")
+        args = dict(argv=[sys.executable, "-c", "print('PASS')"], scope=["input.txt"])
+        unknown = C.inspect_reuse(self.root, self.state["run_id"], **args)
+        self.assertFalse(unknown["reusable"])
+        self.assertEqual(unknown["next_action"], "confirm_impact_scope")
+        # A new observation for the same command must defeat the old success.
+        with patch.object(C.subprocess, "Popen", side_effect=OSError("unavailable")):
+            self.execute("later")
+        failed = C.inspect_reuse(self.root, self.state["run_id"], **args, impact_covered=True)
+        self.assertFalse(failed["reusable"])
+        self.assertEqual(failed["reason"], "check_not_passed")
+
+    def test_reuse_inspection_environment_diff_never_exposes_values(self):
+        with patch.dict(os.environ, {"NODE_ENV": "first", "PRIVATE_KEY_NAME": "secret-value"}):
+            self.execute("env-original")
+        with patch.dict(os.environ, {"NODE_ENV": "second", "PRIVATE_KEY_NAME": "new-secret"}):
+            result = C.inspect_reuse(self.root, self.state["run_id"],
+                argv=[sys.executable, "-c", "print('PASS')"], scope=["input.txt"], impact_covered=True)
+        self.assertFalse(result["reusable"])
+        self.assertEqual(result["environment_changes"]["changed_keys"], ["NODE_ENV"])
+        self.assertTrue(result["environment_changes"]["other_environment_changed"])
+        for private in ("first", "second", "PRIVATE_KEY_NAME", "secret-value", "new-secret", self.state["owner_token"]):
+            self.assertNotIn(private, json.dumps(result))
+
     def test_environment_diagnostics_are_private_and_strict_drift_blocks_reuse(self):
         previous = {"PATH": "private-path", "SECRET_FIXTURE": "private-secret"}
         current = dict(previous, PATH="changed-path", SECRET_FIXTURE="changed-secret")
