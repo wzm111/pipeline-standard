@@ -89,6 +89,16 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
             last_result_at = at
     completed, remaining = [], []
     checks = plan["payload"].get("checks", {}) if plan else {}
+
+    def append_result(key, proof):
+        result = "not_observed"
+        if proof is not None:
+            result = ("recorded_failure" if proof.get("exit_code") != 0 else
+                      "recorded_success" if proof.get("inputs_stable") is True else "unconfirmed_inputs")
+        item = {"step": label(key), "result": result,
+                "finished_at": stamp(proof.get("finished_at")) if proof else None}
+        (completed if result == "recorded_success" else remaining).append(item)
+
     for key in checks:
         binding = bindings.get(key, {})
         source = binding.get("result", {}).get("report")
@@ -97,13 +107,15 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
         # A later observation wins even if recorded under a different coverage label.
         if proof is not None:
             proof = by_ref[latest[check_identity(proof)]]["payload"]
-        result = "not_observed"
-        if proof is not None:
-            result = ("recorded_failure" if proof.get("exit_code") != 0 else
-                      "recorded_success" if proof.get("inputs_stable") is True else "unconfirmed_inputs")
-        item = {"step": label(key), "result": result,
-                "finished_at": stamp(proof.get("finished_at")) if proof else None}
-        (completed if result == "recorded_success" else remaining).append(item)
+        append_result(key, proof)
+    if plan is None:
+        # Direct single-check work needs no plan or task segmentation. Reuse
+        # the same bounded, task-filtered observations and latest-result rule;
+        # observed results do not establish a complete remaining-work list.
+        for ref in latest.values():
+            proof = by_ref[ref]["payload"]
+            if proof.get("intent", "test") in {"test", "check"}:
+                append_result(ref.rsplit("/", 1)[-1][:-5], proof)
     active_checks = [{"step": label(item.get("name")), "started_at": stamp(item.get("started_at"))}
                      for item in state.get("running_checks", [])]
     roles = [{"role": label(item.get("role")), "status": item["status"]}
@@ -140,7 +152,7 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
               "next": "user_action_then_verify" if waiting else
                       "reconcile_host_and_records" if conflicts or observed_host in {"idle", "stale"} and status != "completed" else
                       "review_task_acceptance" if ended and status != "completed" else "inspect_remaining" if remaining else
-                      "review_current_qa" if plan and status == "running" else
+                      "review_current_qa" if (plan or completed) and status == "running" else
                       "none" if status == "completed" else "inspect_host_and_plan",
               "last_result_at": last_result_at, "state_updated_at": stamp(state.get("updated_at")),
               "unavailable_records": unavailable,

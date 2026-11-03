@@ -11,6 +11,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "skills/pipeline/scripts"
 sys.path.insert(0, str(SCRIPTS))
 import check_plan as P
 import run_evidence as E
+import run_checks as C
 import run_progress as G
 import run_state as R
 import run_tasks as T
@@ -78,6 +79,65 @@ class ProgressTests(unittest.TestCase):
         self.assertIsNone(value["counts"]["planned"])
         self.assertIsNone(value["last_result_at"])
         self.assertNotIn("private", json.dumps(value))
+
+    def test_direct_checks_without_plan_show_results_read_only(self):
+        C.execute_check(*self.args, "direct-unit", argv=[sys.executable, "-B", "-c", "print('PRIVATE')"],
+                        scope=["input"], coverage=["unit"])
+        before = self.files()
+        with patch.object(E, "fingerprint", side_effect=AssertionError("no source hashing")), \
+             patch.object(E, "reusable_check", side_effect=AssertionError("not acceptance")):
+            value = G.snapshot(self.root)
+        self.assertEqual(self.files(), before)
+        self.assertIsNone(value["task_id"])
+        self.assertEqual(value["counts"], {"recorded_success": 1, "remaining": 0, "planned": None})
+        self.assertEqual(value["completed"][0]["step"], "direct-unit")
+        self.assertEqual(value["next"], "review_current_qa")
+        self.assertIn("已记录成功：direct-unit", G.render(value))
+        self.assertIn("无计划时剩余步骤未知", G.render(value))
+        self.assertEqual(value["delivery"]["acceptance"], "not_revalidated")
+        self.assertNotIn("PRIVATE", json.dumps(value))
+        self.assertNotIn(self.args[2], json.dumps(value))
+
+    def test_unplanned_results_honor_task_boundaries_and_latest_failure(self):
+        argv = [sys.executable, "-B", "-c", "print('fixture')"]
+        C.execute_check(*self.args, "previous", argv=argv, scope=["input"])
+        T.start(*self.args, "current-task", "private goal", ["private acceptance"])
+        self.assertEqual(G.snapshot(self.root)["completed"], [])
+        result = C.execute_check(*self.args, "current", argv=argv, scope=["input"])
+        payload = E.read_report(self.root, self.args[1], result["report"])["payload"]
+        E.write_report(*self.args, "check", "later-failure", {**payload, "exit_code": 1,
+                       "coverage": ["different"], "environment": {"PRIVATE": "SECRET"}})
+        value = G.snapshot(self.root)
+        self.assertEqual(value["completed"], [])
+        self.assertEqual(value["remaining"][0]["step"], "later-failure")
+        self.assertEqual(value["remaining"][0]["result"], "recorded_failure")
+        self.assertIn("recorded_check_failure", value["blockers"])
+        self.assertNotIn("SECRET", json.dumps(value))
+        T.end(*self.args, "current-task")
+        E.write_report(*self.args, "check", "after-end", payload)
+        self.assertEqual(G.snapshot(self.root)["counts"], value["counts"])
+
+    def test_unplanned_search_and_unstable_inputs_do_not_become_success(self):
+        argv = [sys.executable, "-B", "-c", "print('fixture')"]
+        C.execute_check(*self.args, "search", argv=argv, scope=["input"], intent="search")
+        result = C.execute_check(*self.args, "unit", argv=argv, scope=["input"])
+        payload = E.read_report(self.root, self.args[1], result["report"])["payload"]
+        E.write_report(*self.args, "check", "unstable", {**payload, "inputs_stable": False})
+        value = G.snapshot(self.root)
+        self.assertEqual(value["completed"], [])
+        self.assertEqual(len(value["remaining"]), 1)
+        self.assertEqual(value["remaining"][0]["result"], "unconfirmed_inputs")
+
+    def test_unplanned_success_output_is_bounded(self):
+        result = C.execute_check(*self.args, "unit", argv=[sys.executable, "-B", "-c", "print('fixture')"],
+                                 scope=["input"])
+        payload = E.read_report(self.root, self.args[1], result["report"])["payload"]
+        for i in range(25):
+            E.write_report(*self.args, "check", f"observed-{i}", {**payload, "command": f"fixture-{i}"})
+        value = G.snapshot(self.root)
+        self.assertEqual(value["counts"]["recorded_success"], 26)
+        self.assertEqual(len(value["completed"]), 20)
+        self.assertTrue(value["truncated"])
 
     def test_state_refresh_is_not_a_new_result_or_milestone(self):
         first = G.snapshot(self.root)
