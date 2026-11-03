@@ -69,6 +69,10 @@ def parser():
     status.add_argument("--recovery", action="store_true", help="bounded registered recovery pointers; no retry permission")
     status.add_argument("--host-status", choices=["unknown", "running", "idle"], default="unknown")
     status.add_argument("--host-ended-at", help="explicit native host idle boundary, never inferred from run age")
+    progress = sub.add_parser("progress", help="bounded read-only steps; no health or acceptance claim")
+    progress.add_argument("--project", default=".")
+    progress.add_argument("--run-id")
+    progress.add_argument("--format", choices=["json", "text"], default="json")
     task_status = sub.add_parser("task-status", help="read-only execution task records, not acceptance")
     task_status.add_argument("--project", default=".")
     task_status.add_argument("--run-id")
@@ -162,6 +166,10 @@ def dispatch(args):
         result = A.audit(args.project, args.run_id, live=args.live) if args.action == "audit" else A.scan(args.project, args.limit)
         return result, int(result["status"] == "error")
     root = Path(args.project).resolve(strict=True)
+    if args.action == "progress":
+        import run_progress as G
+        value = G.snapshot(root, args.run_id)
+        return G.render(value) if args.format == "text" else value, 0
     if args.action == "policy":
         import run_policy
         return run_policy.inspect(root, R.status(root, args.run_id)["state"]), 0
@@ -358,7 +366,7 @@ def main(argv=None):
         value, code = dispatch(args)
     except (OSError, ValueError, KeyError, TypeError) as error:
         value, code = {"error": type(error).__name__, "message": str(error)}, 2
-    print(json.dumps(value, ensure_ascii=False, allow_nan=False))
+    print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, allow_nan=False))
     return code
 
 
