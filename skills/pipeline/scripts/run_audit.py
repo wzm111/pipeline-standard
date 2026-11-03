@@ -59,7 +59,7 @@ def _stamp(value):
 def _implementation():
     try:
         digest = hashlib.sha256()
-        for name in ("run_audit.py", "run_state.py", "pipeline_cli.py"):
+        for name in ("run_audit.py", "run_latency.py", "run_state.py", "pipeline_cli.py"):
             path = Path(__file__).parent / name
             if path.is_symlink():
                 return None
@@ -133,7 +133,7 @@ def _log_source(payload):
                                      allow_nan=False).encode()).hexdigest()
 
 
-def _checks(root, state):
+def _checks(root, state, telemetry=None):
     result = {"executed": 0, "reused": 0, "inherited": 0, "reviews": 0,
               "unavailable": 0, "by_raw_result_class": {k: 0 for k in sorted(RESULTS)},
               "by_result_class": {k: 0 for k in sorted(RESULTS)}, "coverage": "unknown",
@@ -160,6 +160,15 @@ def _checks(root, state):
                 raise AuditError("invalid_report")
             payload = report["payload"]
             kind = match[2]
+            if telemetry is not None and kind in {"check", "check_reuse"}:
+                changes = payload.get("reuse_decision", {}).get("environment_changes", {})
+                telemetry.append({"kind": kind, "recorded_at": report["recorded_at"],
+                    "inherited": bool(payload.get("inherited_from")),
+                    "started_at": _stamp(payload.get("started_at")),
+                    "finished_at": _stamp(payload.get("finished_at")),
+                    "failure": payload.get("result_class") in RESULTS - {"success", "search_no_match", "reproduction_nonzero", "unclassified"},
+                    "environment_mismatch": changes.get("status") == "known" and bool(
+                        changes.get("changed_keys") or changes.get("other_environment_changed"))})
             if kind == "check":
                 result["check_records"] += 1
                 if payload.get("observation_kind") == "host_tool":
@@ -196,6 +205,12 @@ def _checks(root, state):
 
 def _build(root, state):
     import run_policy
+    import run_latency
+    telemetry = []
+    checks = _checks(root, state, telemetry)
+    latency = run_latency.summarize(state, telemetry)
+    if checks["unavailable"]:
+        latency["coverage"] = "partial"
     tasks = state.get("tasks")
     coverage = state.get("delivery_status", {}).get("coverage", {})
     missing = coverage.get("missing")
@@ -214,7 +229,8 @@ def _build(root, state):
                                      for index, item in enumerate(tasks, 1) if isinstance(item, dict)]
                       if isinstance(tasks, list) else None},
             "roles": _counts(state, "role_events", "event", {"created", "reused", "stopped"}),
-            "checks": _checks(root, state),
+            "checks": checks,
+            "latency": latency,
             "adoption": run_policy.audit_summary(root, state),
             "coverage": {"missing_count": len(missing) if isinstance(missing, list) else None,
                          "complete": coverage.get("complete") if type(coverage.get("complete")) is bool else None},
@@ -264,7 +280,10 @@ KEYS = {"schema_version", "run_id", "notice", "source_state_hash", "implementati
         "check_records", "host_observation_records", "shared_log_source_candidates", "source_identity_unknown",
         "adoption", "mode", "managed", "current", "caller_acknowledged", "stale",
         *R.ACTIVITIES, *R.FINAL, *RESULTS}
+import run_latency as L
+KEYS |= {"latency", "samples", "truncated", *L.SAMPLE_KEYS}
 WORDS = {NOTICE, "partial", "recorded_only", "unknown", "complete", "running", "execution_ended", "managed", "legacy_untracked", *R.FINAL}
+WORDS |= L.CANDIDATES
 
 
 def _validate(value, key=None):
@@ -273,7 +292,7 @@ def _validate(value, key=None):
             raise AuditError("invalid_audit")
         for name, child in value.items():
             _validate(child, name)
-    elif isinstance(value, list) and key == "boundaries":
+    elif isinstance(value, list) and key in {"boundaries", "samples", "review_candidates"}:
         for child in value:
             _validate(child)
     elif value is None or type(value) is bool:
@@ -296,12 +315,17 @@ def _validate_document(document):
     required = {"schema_version", "run_id", "notice", "source_state_hash", "implementation_hash",
                 "created_at", "snapshot_at", "status", "completeness", "timing", "tasks", "roles",
                 "checks", "coverage", "actual_model", "tokens"}
-    if (not isinstance(document, dict) or not required <= set(document) or set(document) - required - {"adoption"}
+    if (not isinstance(document, dict) or not required <= set(document) or set(document) - required - {"adoption", "latency"}
             or type(document["schema_version"]) is not int or document["schema_version"] != 1
             or document["notice"] != NOTICE or document["actual_model"] is not None or document["tokens"] is not None
             or document["status"] not in R.FINAL | {"running", "unknown"}
             or document["completeness"] not in {"partial", "recorded_only"}):
         raise AuditError("invalid_audit")
+    if "latency" in document:
+        try:
+            L.validate(document["latency"])
+        except (ValueError, TypeError):
+            raise AuditError("invalid_audit") from None
     if "adoption" in document:
         adoption = document["adoption"]
         if (not isinstance(adoption, dict)
