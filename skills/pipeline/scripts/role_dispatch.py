@@ -171,12 +171,17 @@ def complete(project_root, run_id, owner_token, dispatch_id, *, executors_stoppe
         return deepcopy(item)
 
 
+def validate_direct(state):
+    """Check the caller's direct declaration without changing execution history."""
+    if state.get("role_events") or state.get("role_dispatches"):
+        raise ValueError("observed role work cannot be relabeled direct")
+
+
 def confirm_direct(project_root, run_id, owner_token):
     """Caller confirms the completed batch had no actual role delegation."""
     with R._write_guard(project_root) as base:
         path, state = _owned(base, run_id, owner_token)
-        if state.get("role_events") or state.get("role_dispatches"):
-            raise ValueError("observed role work cannot be relabeled direct")
+        validate_direct(state)
         if state.get("role_execution") != "direct":
             state["role_execution"] = "direct"
             state["updated_at"] = R._now()

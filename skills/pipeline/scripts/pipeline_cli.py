@@ -237,7 +237,10 @@ def dispatch(args):
         import check_plan as P
         if args.action == "verify":
             if args.finish:
-                R._stopped(args.stopped, args.stop_evidence)
+                current = R.preflight_finish(root, run_id, owner, executors_stopped=args.stopped,
+                                             stop_evidence=args.stop_evidence)
+                if args.direct:
+                    D.validate_direct(current)
             elif args.direct or args.stopped or args.stop_evidence is not None:
                 raise ValueError("verify stopping/direct options require explicit --finish")
             result = P.verify_plan(root, run_id, owner, args.plan, args.name, summary=args.summary)
