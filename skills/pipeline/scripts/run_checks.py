@@ -16,7 +16,7 @@ import run_evidence as E
 import run_state as R
 import operation_metrics as O
 
-INTENTS = {"test", "search", "locate", "reproduce", "check", "baseline"}
+INTENTS = {"test", "search", "locate", "reproduce", "check", "baseline", "visual"}
 RESULTS = {"success", "search_no_match", "path_lookup_failure", "reproduction_nonzero",
            "test_failure", "command_failure", "command_unavailable", "timeout", "interrupted"}
 REVIEW_RESULTS = {"environment_failure", "fixture_failure", "regression_failure"}

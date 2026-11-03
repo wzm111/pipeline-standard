@@ -26,3 +26,15 @@
 实际视觉判断必须看目标表面：按[浏览器交接](browser-handoff.md)等待加载、hydration 与所需状态就绪，查看真实页面或实际截图，核对视口、状态和版本。已有有效观察可直接沿用，不机械重复开浏览器或截图。仅有构建、单测、DOM/CSS 或 HTTP 成功不能宣称视觉通过；截图存在也不等于已经看过。缺浏览器、截图或所需状态时明确写视觉待验及缺什么，继续可独立完成的工作，不要求用户截图来替代智能体本可执行的验证，也不安静标 PASS。
 
 当前规则提供设计路由和人工观察纪律，不声称已机器证明宿主截图、阅读或审美质量。交付按实际观察说明改了什么、看过什么和剩余缺口；不能把设计 skill 的建议当作真实界面验收结果。
+
+## 本地截图与查看记录
+
+需要登记当前 UI 证据时，沿用本 run 私有 receipt；目标用无凭据短标识，完整 scope 包含实际页面/组件、样式、样本和运行器依赖，viewport 为 CSS 宽高整数，state 为实际页面状态短标识，version 为实际候选/版本标识，不保存 URL query 或原始业务输出。截图使用合成数据或已获授权的安全页面，不能含凭据或客户数据；模块不自动识别或脱敏图片。
+
+1. `visual-declare --receipt <receipt> --name checkout --json '{"scope":["<真实依赖>"],"target":"checkout","viewport":{"width":1280,"height":720},"state":"ready","version":"v1.2.0"}'` 返回本任务 requirement 的实际 `report` 引用。
+2. 在真实宿主截图调用前执行 `visual-begin --receipt <receipt> --requirement <返回引用> --name capture-r1`；默认 JPEG，也可 `--format png`。只有 `created:true` 才执行一次宿主调用，把原生截图字节写到返回的 `image_path`（相对项目根，本 run 的 ignored images 目录）；重复 ID 不授权再截图。不另启浏览器引擎、不通过改后缀伪装格式。
+3. 宿主实际返回/确认停止后执行 `visual-finish --receipt <receipt> --requirement <同一引用> --name capture-r1 --host-stopped --stop-evidence '<实际返回依据>' --json '{"target":"checkout","viewport":{"width":1280,"height":720},"state":"ready","version":"v1.2.0"}'`。参数必须来自当前实际观察并与声明相符。入口沿用 observed_checks 的真实起止、资源归属及输入稳定性；JPEG/PNG 按字节检查有界文件结构、尺寸和摘要，不是完整像素解码或页面来源认证。失败保留原 ticket/结果；需要关闭失败调用时按原 observe-finish 记录真实非零/异常，不能补写成功或重复调用原 ID。
+4. 实际打开/看过返回 capture 里的图片后，才执行 `visual-view --receipt <receipt> --capture <visual-finish返回report> --name view-r1 --viewed`。它只记录调用方声明，不证明宿主读取或审美质量；没有实际查看不可传 viewed。
+5. `visual-inspect --run-id <当前run> --requirement <实际引用>` 只读返回 capture_pending/view_pending/view_declared/stale_or_unconfirmed，复核当前任务、源码与图片绑定；不会返回图片内容、凭据或审美 PASS。跨 run/旧 task、缺图、图/源码变化不能作为当前完整证据。
+
+intent=visual 专用于此观察，与普通 test/check 验收独立；不能放入 argv 验收计划或复用为正式测试通过。上述截图/查看记录目前不自动接管 QA/finish，也不替代真实业务断言、独立 review 或交付授权。

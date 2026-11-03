@@ -162,6 +162,8 @@ def reusable_check(project_root, run_id, relative, *, command, environment, impa
         validate_lineage(project_root, payload)
         if payload.get("intent") == "baseline":
             return {"reusable": False, "reason": "baseline_not_acceptance"}
+        if payload.get("intent") == "visual":
+            return {"reusable": False, "reason": "visual_not_acceptance"}
         if not _local(Path(project_root).resolve(strict=True), payload.get("cwd", ".")).is_dir():
             return {"reusable": False, "reason": "working_directory_unavailable"}
         if coverage_labels(payload.get("coverage")) != coverage:

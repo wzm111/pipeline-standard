@@ -116,12 +116,27 @@ def parser():
     reuse.add_argument("--intent", choices=sorted(C.INTENTS), default="test")
     reuse.add_argument("--impact-covered", action="store_true")
     reuse.add_argument("argv", nargs=argparse.REMAINDER)
+    visual_status = sub.add_parser("visual-inspect", help="read-only screenshot/view binding status; never aesthetic PASS")
+    visual_status.add_argument("--project", default=".")
+    visual_status.add_argument("--run-id", required=True)
+    visual_status.add_argument("--requirement", required=True)
     owned = {}
-    for name in ("update", "check", "report", "finish", "plan", "plan-preflight", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "observe-begin", "observe-finish", "policy-ack"):
+    for name in ("update", "check", "report", "finish", "plan", "plan-preflight", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
     owned["policy-ack"].add_argument("--revision", required=True)
+    for action in ("visual-declare", "visual-begin", "visual-finish", "visual-view"):
+        owned[action].add_argument("--name", required=True)
+    owned["visual-declare"].add_argument("--json", required=True, dest="payload")
+    for action in ("visual-begin", "visual-finish"):
+        owned[action].add_argument("--requirement", required=True)
+    owned["visual-begin"].add_argument("--format", choices=["jpeg", "png"], default="jpeg", dest="image_format")
+    owned["visual-finish"].add_argument("--json", required=True, dest="payload", help="actually observed target/viewport/state/version")
+    owned["visual-finish"].add_argument("--host-stopped", action="store_true")
+    owned["visual-finish"].add_argument("--stop-evidence", required=True)
+    owned["visual-view"].add_argument("--capture", required=True)
+    owned["visual-view"].add_argument("--viewed", action="store_true", help="caller confirms actual image viewing; not native proof")
     for action in ("observe-begin", "observe-finish"):
         owned[action].add_argument("--id", required=True, dest="observation_id")
     owned["observe-begin"].add_argument("--json", required=True, dest="declaration")
@@ -197,6 +212,9 @@ def dispatch(args):
         result = V.preview(args.project, args.run_id, live=args.live)
         return V.render(result) if args.format == "text" else result, int(result["snapshot_status"] == "error")
     root = Path(args.project).resolve(strict=True)
+    if args.action == "visual-inspect":
+        import visual_evidence as V
+        return V.inspect(root, args.run_id, args.requirement), 0
     if args.action == "progress":
         import run_progress as G
         value = G.snapshot(root, args.run_id, host_status=args.host_status, host_ended_at=args.host_ended_at)
@@ -259,6 +277,21 @@ def dispatch(args):
                 "audit": _optional_audit(root, state["run_id"]), **paths()}, 0
     receipt = _receipt(root, args.receipt)
     run_id, owner = receipt["run_id"], receipt["owner_token"]
+    if args.action.startswith("visual-"):
+        import visual_evidence as V
+        if args.action == "visual-declare":
+            payload = json.loads(args.payload)
+            if not isinstance(payload, dict) or set(payload) != {"scope", "target", "viewport", "state", "version"}:
+                raise ValueError("visual-declare requires scope/target/viewport/state/version only")
+            ref = V.declare(root, run_id, owner, args.name, **payload)
+        elif args.action == "visual-begin":
+            return V.begin(root, run_id, owner, args.requirement, args.name, image_format=args.image_format), 0
+        elif args.action == "visual-finish":
+            ref = V.finish(root, run_id, owner, args.requirement, args.name, observed=json.loads(args.payload),
+                           host_stopped=args.host_stopped, stop_evidence=args.stop_evidence)
+        else:
+            ref = V.view(root, run_id, owner, args.capture, args.name, viewed=args.viewed)
+        return {"report": ref, "notice": "Visual evidence only; no aesthetic or business PASS."}, 0
     if args.action == "policy-ack":
         import run_policy
         return run_policy.acknowledge(root, run_id, owner, args.revision), 0
