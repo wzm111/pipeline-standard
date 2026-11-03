@@ -1,12 +1,22 @@
 # pipeline-standard
 
+[English](docs/README.en.md) · 简体中文
+
 ![GitHub stars](https://img.shields.io/github/stars/wzm111/pipeline-standard?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
 ![Last commit](https://img.shields.io/github/last-commit/wzm111/pipeline-standard?style=flat-square)
+[![CI](https://github.com/wzm111/pipeline-standard/actions/workflows/test.yml/badge.svg)](https://github.com/wzm111/pipeline-standard/actions/workflows/test.yml)
 
 **用对话完成需求、开发、测试和交付，支持 Claude Code 与 Codex。**
 
 pipeline 是一套由编码智能体执行的 skill 和本地工具。你描述需求，智能体明确范围与验收标准，按复杂度选择直接实现或必要的角色协作，并记录可核验的执行证据。项目差异由智能体维护的 `PIPELINE.md` 承载，无需先填写配置、选择流程档位或学习内部命令。
+
+- **控制范围**：只做当前需求和必要配套，发现无关问题先记录。
+- **看清过程**：展示当前动作、有效结果、剩余步骤和阻塞，区分执行结束与交付完成。
+- **复用证据**：输入、环境、日志和来源仍有效时复用检查，保留必要复测。
+- **本地诊断**：运行记录可在本地预览，诊断模块不自动上传报告。
+
+先试用：[独立小项目示例](docs/TRY-PIPELINE.md)。目录或平台分发：[安装与分发状态](docs/DISTRIBUTION.md)。
 
 版本说明：[v3.13.0：检查前置、复用诊断与真实进度](docs/releases/v3.13.0.md)。
 
@@ -25,6 +35,8 @@ bash install.sh
 默认同时安装 Claude Code 和 Codex；仅安装一端可用 `bash install.sh --claude` 或 `bash install.sh --codex`。
 
 安装器将 skill 链接到当前仓库，并为 Claude 准备角色和 hook 链接，请保留仓库目录。首次安装准备本机默认模型配置；重装保留已有选择。上述命令安装当前默认分支的内容，需要固定版本时可让智能体切换到指定发布标签。
+
+当前推荐完整仓库安装：`agents/`、`hooks/`、模板和脚本共同组成工具。只复制 `SKILL.md` 或 `skills/pipeline/` 不能视为完整安装；第三方目录的一键安装、官方插件商店上架尚未作为已验证能力提供。
 
 ### 2. 在业务项目会话中描述需求
 
