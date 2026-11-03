@@ -1,6 +1,6 @@
-# v3.14.0-rc.1：视觉验收、原生检查计划与发布承接
+# 未发布更新：视觉验收、原生检查计划与发布承接
 
-这是候选版本（prerelease），供有边界地试用新入口；不替换 `v3.13.0` 稳定版。代码的本地回归通过，真实宿主的完整采用仍有待验项，不能据版本号认定所有会话已遵循规范。
+以下更新已同步到 `main`，尚未创建新版本标签或 GitHub Release；当前已发布稳定版仍为 `v3.13.0`。这份文档是开发分支更新记录，不是新版本发布说明。代码的本地回归通过，真实宿主的完整采用仍有待验项，不能据此认定所有会话已遵循规范。
 
 ## 本次变化
 
@@ -14,7 +14,7 @@
 
 ## 验证与已知限制
 
-- 本地 45 套 Python 测试共 608 项通过，另有 Codex 隔离安装冒烟、Shell 语法、文档链接和流程图结构检查。发布目标提交的 GitHub Ubuntu/macOS CI 结果另行核验；本地通过不冒充远端 CI 通过。
+- 本地 45 套 Python 测试共 608 项通过，另有 Codex 隔离安装冒烟、Shell 语法、文档链接和流程图结构检查。原版本准备提交 `81187d1` 的 GitHub Ubuntu/macOS CI 已通过；本次文档调整的目标提交仍单独核验，不用旧提交结果冒充新提交通过。
 - 首次全新 Codex 页面试用实际采用设计能力，并取得三个视口的截图、查看和复核；收口暴露的原生检查计划接口缺口已修复并经独立探针核验，原失败 run 不改写。
 - 第二次全新试用遇到浏览器自动审批拒绝本地 `file://` 入口，未绕过，缺少截图的 QA 保留 `CONCERNS`。修复后的完整原生浏览器端到端采用尚未确认。
 - **进度格式仍可能遗漏。** 只读观察与 `progress` 摘要不会自行发送或逐条纠正聊天消息；读取 skill、policy ack 或脚本门禁均不能证明每条消息已合规。
@@ -23,10 +23,10 @@
 
 ## 更新与试用
 
-完整安装继续使用仓库根 `bash install.sh`，固定本候选版本可检出 `v3.14.0-rc.1`。更新后，已有聊天需重新读取最新版入口及本次适用引用，保留原任务与仍有效的检查；不要求重做已通过的工作。旧状态保留兼容，不倒填采用记录。
+试用这些未发布更新时使用 `main`，完整安装继续使用仓库根 `bash install.sh`；目前没有可检出的新 RC 标签。更新后，已有聊天需重新读取最新版入口及本次适用引用，保留原任务与仍有效的检查；不要求重做已通过的工作。旧状态保留兼容，不倒填采用记录。
 
-需要稳定版时继续使用 `v3.13.0`；候选版本试用请从合成任务开始，并明确区分本地检查、实际宿主采用和业务验收。
+需要稳定版时继续使用 `v3.13.0`；开发分支试用请从合成任务开始，并明确区分本地检查、实际宿主采用和业务验收。完整验证补齐后再考虑正式版本发布。
 
 ## English summary
 
-This is a **prerelease**, not a replacement for stable `v3.13.0`. It adds explicit visual evidence and QA gates, native `observed_ref` check plans, managed release integration, resource discovery, and bilingual workflow diagrams. Local tests pass; complete native-host adoption is still unconfirmed. Progress formatting is not enforced at message-send time, and observer-declared reviews are not machine aesthetic certification. Diagnostics remain local; no run-data upload service is introduced.
+These are **unreleased main-branch updates**, not a new tag or GitHub Release. Stable `v3.13.0` remains unchanged. The updates add explicit visual evidence and QA gates, native `observed_ref` check plans, managed release integration, resource discovery, and bilingual workflow diagrams. Local tests pass; complete native-host adoption is still unconfirmed. Progress formatting is not enforced at message-send time, and observer-declared reviews are not machine aesthetic certification. Diagnostics remain local; no run-data upload service is introduced.

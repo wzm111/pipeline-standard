@@ -115,7 +115,7 @@ Diagnostics are recorded under the project's ignored `tmp/pipeline/` directory. 
 
 ## Releases and details
 
-Candidate release: [v3.14.0-rc.1 — visual acceptance, native check plans, and delivery handoffs](releases/v3.14.0-rc.1.md). Complete native-host adoption is still unconfirmed; [v3.13.0](releases/v3.13.0.md) remains the stable release. This guide describes the current checkout; consult a fixed tag's own documentation for its capabilities. The complete Chinese guide covers [project setup](../skills/pipeline/references/interaction.md), [check plans](../skills/pipeline/references/check-plan.md), [delivery](../skills/pipeline/references/delivery.md), and [local records](../skills/pipeline/references/audit.md).
+Main-branch updates: [unreleased — visual acceptance, native check plans, and delivery handoffs](releases/UNRELEASED.md). No new tag or GitHub Release has been created. Complete native-host adoption is still unconfirmed; [v3.13.0](releases/v3.13.0.md) remains the stable release. This guide describes the current checkout; consult a fixed tag's own documentation for its capabilities. The complete Chinese guide covers [project setup](../skills/pipeline/references/interaction.md), [check plans](../skills/pipeline/references/check-plan.md), [delivery](../skills/pipeline/references/delivery.md), and [local records](../skills/pipeline/references/audit.md).
 
 Maintainers run `bash tests/run-all.sh` from the repository root. Local tests and CI are implementation evidence; actual project adoption and performance require separate measurements.
 

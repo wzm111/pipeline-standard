@@ -19,7 +19,7 @@ pipeline 是一套由编码智能体执行的 skill 和本地工具。你描述�
 
 先试用：[独立小项目示例](docs/TRY-PIPELINE.md)。目录或平台分发：[安装与分发状态](docs/DISTRIBUTION.md)。
 
-候选版本：[v3.14.0-rc.1：视觉验收、原生检查计划与发布承接](docs/releases/v3.14.0-rc.1.md)。真实宿主完整采用仍待验；稳定版继续使用 [v3.13.0](docs/releases/v3.13.0.md)。
+开发分支：[未发布更新：视觉验收、原生检查计划与发布承接](docs/releases/UNRELEASED.md)。尚未创建新版本标签或 Release，真实宿主完整采用仍待验；稳定版继续使用 [v3.13.0](docs/releases/v3.13.0.md)。
 
 本文描述当前检出版本；固定标签的能力以该标签内的文档和发布说明为准。
 
