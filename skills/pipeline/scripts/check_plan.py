@@ -28,7 +28,7 @@ def _validate(root, checks, required, owner, inherited, *, scan_inputs=True):
     inherited = E.coverage_labels(inherited)
     if not isinstance(checks, dict) or not checks:
         raise ValueError("nonempty checks required")
-    allowed = {"argv", "scope", "coverage", "cwd", "timeout", "write_paths", "protected_paths", "environment", "intent", "layer"}
+    allowed = {"argv", "scope", "coverage", "cwd", "timeout", "write_paths", "protected_paths", "environment", "intent", "layer", "depends_on"}
     normalized = {}
     for key, value in checks.items():
         E._label(key)
@@ -61,6 +61,7 @@ def _validate(root, checks, required, owner, inherited, *, scan_inputs=True):
         if "environment" in value:
             E._environment(value["environment"])
         normalized[key] = {**value, "coverage": labels, "cwd": cwd}
+    _ordered(normalized)
     encoded = json.dumps(normalized, allow_nan=False)
     # Plans are reports, never a credential transport. Environment is identity
     # context only; actual child environment remains controlled by run_checks.
@@ -125,7 +126,34 @@ def _identity(proof):
 
 def _execution_spec(check):
     # Scheduling metadata cannot change the identity of the executed command.
-    return {key: value for key, value in check.items() if key != "layer"}
+    return {key: value for key, value in check.items() if key not in {"layer", "depends_on"}}
+
+
+def _dependencies(checks):
+    quick = {key for key, check in checks.items() if check.get("layer") == "quick"}
+    dependencies = {}
+    for key, check in checks.items():
+        declared = check.get("depends_on", [])
+        if not isinstance(declared, list) or any(not isinstance(item, str) for item in declared):
+            raise ValueError("depends_on must be a list of check IDs")
+        if any(item not in checks or item == key for item in declared):
+            raise ValueError("depends_on requires existing other check IDs")
+        dependencies[key] = set(declared) | (quick if key not in quick else set())
+    return dependencies
+
+
+def _ordered(checks):
+    dependencies = _dependencies(checks)
+    pending = sorted(checks, key=lambda key: checks[key].get("layer") != "quick")
+    ordered, done = [], set()
+    while pending:
+        ready = next((key for key in pending if dependencies[key] <= done), None)
+        if ready is None:
+            raise ValueError("check dependency cycle (including quick-before-final gate)")
+        pending.remove(ready)
+        ordered.append(ready)
+        done.add(ready)
+    return ordered
 
 
 def _snapshot(root, run_id, state):
@@ -147,21 +175,31 @@ def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=Fa
     snapshot = _snapshot(root, run_id, state)
     plan = _read_plan(root, run_id, owner, plan_ref, state, snapshot)
     check = plan["checks"][check_id]
-    if check.get("layer") != "quick":
-        blocked = []
-        for key, prerequisite in plan["checks"].items():
-            if prerequisite.get("layer") != "quick":
-                continue
-            try:
-                ref, _ = _valid(root, run_id, owner, state, plan_ref, key, prerequisite, snapshot)
-            except (OSError, ValueError, KeyError, TypeError):
-                ref = None
-            if ref is None:
-                blocked.append(key)
-        if blocked:
-            raise ValueError("final check requires current valid quick evidence: "
-                             + ", ".join(blocked[:8])
-                             + (f" (+{len(blocked) - 8} more)" if len(blocked) > 8 else ""))
+    dependencies = _dependencies(plan["checks"])
+    required, pending = set(), list(dependencies[check_id])
+    while pending:
+        key = pending.pop()
+        if key not in required:
+            required.add(key)
+            pending.extend(dependencies[key])
+    blocked = []
+    for key in plan["checks"]:
+        if key not in required:
+            continue
+        try:
+            ref, _ = _valid(root, run_id, owner, state, plan_ref, key, plan["checks"][key], snapshot)
+        except (OSError, ValueError, KeyError, TypeError):
+            ref = None
+        if ref is None:
+            blocked.append(key)
+    if blocked:
+        quick_blocked = [key for key in blocked if plan["checks"][key].get("layer") == "quick"]
+        message = "check requires current valid dependency evidence: "
+        if check.get("layer") != "quick" and quick_blocked:
+            blocked = quick_blocked
+            message = "final check requires current valid quick evidence: "
+        raise ValueError(message + ", ".join(blocked[:8])
+                         + (f" (+{len(blocked) - 8} more)" if len(blocked) > 8 else ""))
     candidate_plan = plan_ref
     previous = snapshot["bindings"].get((plan_ref, check_id), (None, None))[1]
     if previous is None and impact_covered is True:
@@ -341,7 +379,7 @@ def verify_plan(root, run_id, owner, plan_ref, name, summary=""):
     """
     E._label(name)
     plan = read_plan(root, run_id, owner, plan_ref)
-    ordered = sorted(plan["checks"], key=lambda key: plan["checks"][key].get("layer") != "quick")
+    ordered = _ordered(plan["checks"])
     attempts = [(check_id, f"{name}-c{index}")
                 for index, check_id in enumerate(ordered, 1)]
     for _, attempt in attempts:

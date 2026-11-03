@@ -124,6 +124,109 @@ class PlanTests(unittest.TestCase):
         self.assertTrue(self.execute(changed, "relayered", impact_covered=True)["reused"])
         self.assertEqual((self.root / "quick-count").read_text(), "1")
 
+    def dependency_plan(self):
+        (self.root / "ready-input").write_text("ready")
+        ready = {**self.check, "layer": "quick", "scope": ["ready-input"],
+                 "coverage": ["ready"], "argv": [sys.executable, "-B", "-c", "print('ready')"]}
+        dependent = {**self.check, "layer": "quick", "depends_on": ["ready"],
+                     "argv": [sys.executable, "-B", "-c",
+                              "from pathlib import Path; Path('dependent-ran').touch()"]}
+        return self.save({"dependent": dependent, "ready": ready}), ready, dependent
+
+    def test_dependencies_reject_invalid_references_types_and_cycles_before_execution(self):
+        for dependencies in ("unit", [1], ["missing"], ["unit"]):
+            with self.subTest(dependencies=dependencies), self.assertRaisesRegex(ValueError, "depends_on"):
+                self.save({"unit": {**self.check, "depends_on": dependencies}})
+        for checks in (
+            {"a": {**self.check, "depends_on": ["b"]}, "b": {**self.check, "depends_on": ["a"]}},
+            {"a": {**self.check, "layer": "quick", "depends_on": ["b"]}, "b": self.check},
+        ):
+            with self.subTest(checks=checks), self.assertRaisesRegex(ValueError, "cycle"):
+                self.save(checks)
+        self.assertFalse(R.status(self.root)["state"].get("running_checks"))
+
+    def test_read_revalidates_dependency_graph(self):
+        plan = self.save()
+        payload = P.read_plan(self.root, self.run, self.owner, plan)
+        payload["checks"]["unit"]["depends_on"] = ["missing"]
+        with patch.object(P, "_report", return_value=payload):
+            with self.assertRaisesRegex(ValueError, "depends_on"):
+                P.read_plan(self.root, self.run, self.owner, plan)
+
+    def test_verify_stable_topological_order_keeps_quick_priority(self):
+        plan, ready, dependent = self.dependency_plan()
+        final = {**self.check, "coverage": ["final"], "depends_on": ["other-final"]}
+        plan = self.save({"final": final, "dependent": dependent,
+                          "independent": {**ready, "coverage": ["independent"]}, "ready": ready,
+                          "other-final": {**self.check, "coverage": ["other-final"]}}, name="ordered")
+        result = P.verify_plan(self.root, self.run, self.owner, plan, "ordered")
+        self.assertEqual([item["check_id"] for item in result["results"]],
+                         ["independent", "ready", "dependent", "other-final", "final"])
+        self.assertEqual(result["gate"], "PASS")
+
+    def test_direct_dependency_checks_current_input_environment_logs_and_latest_failure(self):
+        plan, ready, _ = self.dependency_plan()
+        def blocked(name):
+            with self.assertRaisesRegex(ValueError, "valid dependency evidence: ready"):
+                self.execute(plan, name, key="dependent", impact_covered=True)
+            self.assertFalse((self.root / "dependent-ran").exists())
+        blocked("missing")
+        result = self.execute(plan, "ready", key="ready")
+        (self.root / "ready-input").write_text("drift")
+        blocked("input-drift")
+        (self.root / "ready-input").write_text("ready")
+        with patch.dict(os.environ, {"READINESS_CONTEXT": "drift"}):
+            blocked("environment-drift")
+        proof = E.read_report(self.root, self.run, result["report"])["payload"]
+        log = self.root / proof["log_path"]
+        content = log.read_bytes()
+        log.write_text("tampered")
+        blocked("log-drift")
+        log.write_bytes(content)
+        (self.root / "failure.log").write_text("later observed failure")
+        E.record_check(self.root, self.run, self.owner, "later-failure", command=proof["command"],
+                       scope=proof["scope"], environment=proof["environment"], exit_code=1,
+                       log_path="failure.log", coverage=["other"],
+                       started_fingerprint=E.fingerprint(self.root, ready["scope"]))
+        blocked("latest-failure")
+
+    def test_direct_dependency_checks_transitive_prerequisites(self):
+        plan, ready, dependent = self.dependency_plan()
+        leaf = {**self.check, "layer": "quick", "depends_on": ["dependent"]}
+        plan = self.save({"ready": ready, "dependent": dependent, "leaf": leaf}, name="chain")
+        self.execute(plan, "ready", key="ready")
+        self.execute(plan, "dependent", key="dependent")
+        (self.root / "ready-input").write_text("drift")
+        with self.assertRaisesRegex(ValueError, "valid dependency evidence: ready"):
+            self.execute(plan, "leaf", key="leaf")
+
+    def test_dependency_only_change_reuses_identity_after_current_prerequisite(self):
+        plan, ready, dependent = self.dependency_plan()
+        original = self.save({"dependent": {k: v for k, v in dependent.items() if k != "depends_on"}},
+                             name="original")
+        self.execute(original, "original", key="dependent")
+        (self.root / "dependent-ran").unlink()
+        with self.assertRaisesRegex(ValueError, "valid dependency evidence"):
+            self.execute(plan, "blocked", key="dependent", impact_covered=True)
+        self.execute(plan, "ready", key="ready")
+        reused = self.execute(plan, "carried", key="dependent", impact_covered=True)
+        self.assertTrue(reused["reused"])
+        self.assertFalse((self.root / "dependent-ran").exists())
+        self.assertEqual(self.qa(plan)["gate"], "PASS")
+
+    def test_failed_readiness_stops_dependent_quick_before_heavy_check(self):
+        plan, ready, dependent = self.dependency_plan()
+        ready["argv"][-1] = "raise SystemExit(1)"
+        final = {**self.check, "coverage": ["final"], "argv": [sys.executable, "-B", "-c",
+                 "from pathlib import Path; Path('heavy-ran').touch()"]}
+        plan = self.save({"dependent": dependent, "ready": ready, "final": final}, name="failed-ready")
+        result = P.verify_plan(self.root, self.run, self.owner, plan, "failed-ready")
+        self.assertEqual([item["check_id"] for item in result["results"]], ["ready"])
+        self.assertEqual(result["skipped_checks"], ["dependent", "final"])
+        self.assertEqual(result["gate"], "CONCERNS")
+        self.assertFalse((self.root / "dependent-ran").exists())
+        self.assertFalse((self.root / "heavy-ran").exists())
+
     def test_quick_prerequisite_error_bounds_ids_without_command_details(self):
         plan = self.save({**{f"boundary{i}": {**self.check, "layer": "quick"} for i in range(10)},
                           "final": {**self.check, "layer": "final"}})
