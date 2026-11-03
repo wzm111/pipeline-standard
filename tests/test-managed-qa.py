@@ -82,6 +82,83 @@ class ManagedQaTests(unittest.TestCase):
         self.assertEqual(final["status"], "completed")
         self.assertTrue(final["delivery_status"]["sealed"])
 
+    def test_baseline_failure_then_changed_source_accepts_only_final_check(self):
+        argv = [sys.executable, "-B", "-c",
+                "from pathlib import Path; raise SystemExit(int(Path('input').read_text() != 'fixed'))"]
+        baseline = self.check("before", argv=argv, intent="baseline", coverage=["before-change"])
+        original = (self.root / baseline["report"]).read_bytes()
+        proof = self.payload(baseline["report"])
+        self.assertEqual((proof["exit_code"], proof["result_class"]), (1, "test_failure"))
+        self.assertGreater(proof["seconds"], 0)
+        self.assertNotIn("gate", proof)
+        (self.root / "input").write_text("fixed")
+        final_check = self.check("after", argv=argv, impact_covered=True)
+        self.assertFalse(final_check["reused"])
+        self.single(final_check)
+        final = self.finish()
+        self.assertTrue(final["delivery_status"]["sealed"])
+        self.assertEqual(final["delivery_status"]["coverage"]["required"], ["unit"])
+        self.assertEqual(final["delivery_status"]["coverage"]["covered"], ["unit"])
+        self.assertEqual(original, (self.root / baseline["report"]).read_bytes())
+        self.assertIn(baseline["report"], final["artifacts"])
+        self.assertEqual(C.check_summary(self.root, self.args[1])["by_raw_result_class"]["test_failure"], 1)
+
+    def test_baseline_pass_cannot_masquerade_as_acceptance_or_reusable_check(self):
+        baseline = self.check("before", intent="baseline")
+        proof = self.payload(baseline["report"])
+        with self.assertRaises(ValueError):
+            self.single(baseline)
+        with self.assertRaisesRegex(ValueError, "baseline"):
+            P.save_plan(*self.args, "bad-plan", {"unit": self.spec | {"intent": "baseline"}})
+        verdict = E.reusable_check(self.root, self.args[1], baseline["report"], command=proof["command"],
+                                  environment=proof["environment"], coverage=proof["coverage"], impact_covered=True)
+        self.assertEqual(verdict, {"reusable": False, "reason": "baseline_not_acceptance"})
+        formal = self.check("formal", reuse_from=baseline["report"], impact_covered=True)
+        self.assertFalse(formal["reused"])
+        self.single(formal)
+        self.assertTrue(self.finish()["delivery_status"]["sealed"])
+
+    def test_baseline_only_completion_has_no_delivered_acceptance(self):
+        self.check("before", intent="baseline")
+        final = self.finish()
+        self.assertEqual(final["status"], "completed")
+        self.assertFalse(final["delivery_status"]["sealed"])
+
+    def test_baseline_does_not_satisfy_or_erase_existing_plan_requirements(self):
+        plan = P.save_plan(*self.args, "required", {"unit": self.spec})
+        self.check("before", intent="baseline")
+        qa = P.qa_from_plan(*self.args, plan, "missing")
+        self.assertEqual(self.payload(qa)["gate"], "CONCERNS")
+        self.assertEqual(self.payload(qa)["required_checks"], ["unit"])
+        self.assertEqual(self.payload(qa)["missing_checks"], ["unit"])
+        with self.assertRaises(ValueError):
+            self.finish()
+        P.run_planned(*self.args, plan, "unit", "actual", impact_covered=True)
+        qa = P.qa_from_plan(*self.args, plan, "actual-qa")
+        self.assertEqual(self.payload(qa)["gate"], "PASS")
+        self.assertTrue(self.finish()["delivery_status"]["sealed"])
+
+    def test_coverage_named_baseline_remains_formal_evidence(self):
+        old = self.check("legacy", coverage=["baseline"])
+        before = (self.root / old["report"]).read_bytes()
+        checked = self.check("new")
+        with self.assertRaisesRegex(ValueError, "plan"):
+            self.single(checked)
+        self.assertEqual(before, (self.root / old["report"]).read_bytes())
+
+    def test_later_baseline_pass_cannot_erase_formal_failure(self):
+        argv = [sys.executable, "-B", "-c",
+                "from pathlib import Path; raise SystemExit(int(Path('fail').exists()))"]
+        passed = self.check("old-pass", argv=argv)
+        (self.root / "fail").touch()
+        failure = self.check("formal-failure", argv=argv)
+        original = (self.root / failure["report"]).read_bytes()
+        (self.root / "fail").unlink()
+        self.assertEqual(self.check("baseline-pass", argv=argv, intent="baseline")["exit_code"], 0)
+        with self.assertRaises(ValueError):
+            self.single(passed)
+        self.assertEqual(original, (self.root / failure["report"]).read_bytes())
+
     def test_later_failure_cannot_revive_old_pass_via_report_or_shared_finish(self):
         argv = [sys.executable, "-B", "-c", "import os; raise SystemExit(int(os.environ['QA_FIXTURE_EXIT']))"]
         with patch.dict(os.environ, {"QA_FIXTURE_EXIT": "0"}):

@@ -83,7 +83,7 @@ managed运行的QA报告由同一证据判断产生，不能用通用report直�
 
 ## 失败分类与角色开销
 
-intent按实际用途选择test/search/locate/reproduce/check。入口记录原始退出码和result_class，区分成功、搜索无匹配、定位失败、故障复现非零、测试失败、一般命令失败、工具不可用、超时和中断。test_failure表示测试命令非零，不自动判定业务回归或QA FAIL。
+intent按实际用途选择test/search/locate/reproduce/check/baseline。改前观察使用baseline，保留原始退出码、日志、耗时及正常测试进度，非零仍按test_failure记录（超时/中断保持原分类）；它是观察证据，不可复用为验收、放入验收plan或作为QA PASS依据。改后正式检查仍用test/check；baseline不删除原失败或既有必验要求，旧intent=test且coverage=baseline的报告仍按正式检查处理，不追溯改写。入口还区分成功、搜索无匹配、定位失败、故障复现非零、测试失败、一般命令失败、工具不可用、超时和中断。test_failure表示测试命令非零，不自动判定业务回归或QA FAIL。
 
 需要区分环境、测试夹具与真实回归时，用`review_check(root, run_id, owner_token, name, source, result_class, reason)`写有依据的独立诊断；result_class为environment_failure/fixture_failure/regression_failure。check_summary同时保留原始及诊断分类、执行与复用次数，不改原结果、不自动增加或重置QA打回轮次，也不把并行命令时长相加。
 

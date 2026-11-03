@@ -48,13 +48,27 @@ class CheckTests(unittest.TestCase):
         for index, (intent, code, expected) in enumerate([
             ("search", 1, "search_no_match"), ("search", 2, "command_failure"),
             ("locate", 1, "path_lookup_failure"), ("reproduce", 1, "reproduction_nonzero"),
-            ("test", 1, "test_failure"), ("check", 1, "command_failure")]):
+            ("test", 1, "test_failure"), ("check", 1, "command_failure"),
+            ("baseline", 1, "test_failure")]):
             row = self.execute(f"case{index}", f"raise SystemExit({code})", intent=intent)
             self.assertEqual(row["result_class"], expected)
             self.assertNotIn("gate", self.payload(row))
         summary = C.check_summary(self.root)
-        self.assertEqual(summary["executed"], 6)
-        self.assertEqual(summary["by_result_class"]["test_failure"], 1)
+        self.assertEqual(summary["executed"], 7)
+        self.assertEqual(summary["by_result_class"]["test_failure"], 2)
+
+    def test_baseline_keeps_real_testing_progress_and_failure_timing(self):
+        source = ("import json; from pathlib import Path; "
+                  f"s=json.loads(Path('tmp/pipeline/runs/{self.state['run_id']}.json').read_text()); "
+                  "assert s['stage']=='checking' and s['activity']=='testing'; raise SystemExit(3)")
+        result = self.execute("baseline", source, intent="baseline")
+        self.assertEqual((result["exit_code"], result["result_class"]), (3, "test_failure"))
+        self.assertGreater(self.payload(result)["seconds"], 0)
+        state = R.status(self.root)["state"]
+        self.assertEqual([e["stage"] for e in state["history"]], ["implementation", "checking", "implementation"])
+        self.assertEqual(state["activity"], "execution")
+        self.assertEqual(C.classify_result(1, "baseline", "timeout"), "timeout")
+        self.assertEqual(C.classify_result(-9, "baseline"), "interrupted")
 
     def test_search_and_locate_keep_execution_phase_instead_of_test_phase(self):
         for index, intent in enumerate(("search", "locate")):

@@ -57,6 +57,8 @@ def _validate(root, checks, required, owner, inherited, *, scan_inputs=True):
         directory = C._workdir(project, value.get("cwd")) if scan_inputs else E._local(project, value.get("cwd", "."))
         cwd = directory.relative_to(project).as_posix()
         C.classify_result(0, value.get("intent", "test"))
+        if value.get("intent") == "baseline":
+            raise ValueError("baseline observations cannot be acceptance-plan checks")
         timeout = value.get("timeout")
         if timeout is not None and (type(timeout) not in (int, float) or not 0 < timeout < float("inf")):
             raise ValueError("invalid timeout")

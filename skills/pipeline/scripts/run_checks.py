@@ -16,7 +16,7 @@ import run_evidence as E
 import run_state as R
 import operation_metrics as O
 
-INTENTS = {"test", "search", "locate", "reproduce", "check"}
+INTENTS = {"test", "search", "locate", "reproduce", "check", "baseline"}
 RESULTS = {"success", "search_no_match", "path_lookup_failure", "reproduction_nonzero",
            "test_failure", "command_failure", "command_unavailable", "timeout", "interrupted"}
 REVIEW_RESULTS = {"environment_failure", "fixture_failure", "regression_failure"}
@@ -60,7 +60,7 @@ def classify_result(exit_code, intent, error=None):
     if intent == "search" and exit_code == 1:
         return "search_no_match"
     return {"test": "test_failure", "locate": "path_lookup_failure",
-            "reproduce": "reproduction_nonzero"}.get(intent, "command_failure")
+            "reproduce": "reproduction_nonzero", "baseline": "test_failure"}.get(intent, "command_failure")
 
 
 def _workdir(root, cwd=None):
