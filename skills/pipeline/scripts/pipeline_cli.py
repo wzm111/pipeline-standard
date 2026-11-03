@@ -63,6 +63,11 @@ def parser():
     scan = sub.add_parser("scan", help="bounded read-only existing audit discovery, no repair")
     scan.add_argument("--project", default=".")
     scan.add_argument("--limit", type=int, default=20)
+    preview = sub.add_parser("preview", help="local read-only audit preview; never upload, export or start a run")
+    preview.add_argument("--project", default=".")
+    preview.add_argument("--run-id", help="explicit run; otherwise select active or latest local record")
+    preview.add_argument("--live", action="store_true", help="compute existing metadata in memory without saving")
+    preview.add_argument("--format", choices=["text", "json"], default="text")
     status = sub.add_parser("status", help="compact read-only status, no credentials")
     status.add_argument("--project", default=".")
     status.add_argument("--run-id")
@@ -165,6 +170,10 @@ def dispatch(args):
         import run_audit as A
         result = A.audit(args.project, args.run_id, live=args.live) if args.action == "audit" else A.scan(args.project, args.limit)
         return result, int(result["status"] == "error")
+    if args.action == "preview":
+        import audit_preview as V
+        result = V.preview(args.project, args.run_id, live=args.live)
+        return V.render(result) if args.format == "text" else result, int(result["snapshot_status"] == "error")
     root = Path(args.project).resolve(strict=True)
     if args.action == "progress":
         import run_progress as G
