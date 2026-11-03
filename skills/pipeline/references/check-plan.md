@@ -1,6 +1,6 @@
 # 同一份检查计划执行与验收
 
-同一需求有多个稳定验收类别、需要开发与QA交接时使用。由智能体根据需求和契约维护，用户无需配置。单个简单检查继续用`check/report`，不强制另造计划。
+同一需求有多个稳定验收类别、需要开发与QA交接时使用。由智能体根据需求和契约维护，用户无需配置。单个简单检查可用 verify 内联声明，无需手写计划文档；原 `check/report` 仍可用。
 
 计划一次声明命令、真实输入范围和coverage；`run`执行该定义，`qa`从相同定义核验证据并生成required_checks。重试仅换name，不改coverage。示例中路径、命令和超时须按项目实际替换：
 
@@ -9,6 +9,8 @@ python3 <runner> plan --receipt <receipt> --name acceptance --json '{"checks":{"
 python3 <runner> run --receipt <receipt> --plan <返回的plan引用> --id unit --name unit-r1 --impact-covered
 python3 <runner> qa --receipt <receipt> --plan <同一plan引用> --name final --summary '<业务验收结论与未验证项>'
 ```
+
+`--plan` 必须使用 plan 返回的 `plan` 或 verify 返回的 `plan_ref` 实际完整引用；不按 name 猜测 artifacts/plan 路径。只为本轮检查声明时，可用 `verify --receipt <receipt> --name verify-r1 --json '<与plan相同的checks/required_checks对象>' --summary '<真实业务结论与未验证项>'`，与 `--plan` 二选一。入口以本轮 name 登记不可变计划，再调用同一 verify/QA 门禁；返回实际 plan_ref，后续入口沿用它。JSON 不接受 gate 或替代既有必验类别；baseline 观察不能列为验收检查。
 
 每个check按该命令真实依赖分别声明scope，不把`git ls-files <整个子包>`的全量结果复用给所有检查。定向逻辑/夹具检查包含其源码、用例及共享配置/运行器/锁文件；独立文档或映射检查只在确实不依赖业务源码时使用独立scope。全量构建仍覆盖真实完整依赖，不能为命中复用自动排除文件。verify按每项身份核验：仅一项输入变化时，另一项仍有效的证据可继续复用，不重跑整个计划。范围完整性由执行者负责，脚本不推断语义依赖。
 

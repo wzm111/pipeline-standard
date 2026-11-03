@@ -43,6 +43,13 @@ def _public(state):
     return {key: state.get(key) for key in ("run_id", "status", "stage", "activity", "pending", "next")}
 
 
+def _plan_payload(value):
+    payload = json.loads(value)
+    if not isinstance(payload, dict) or set(payload) - {"checks", "required_checks"}:
+        raise ValueError("plan accepts checks and required_checks only")
+    return payload
+
+
 def _optional_audit(root, run_id):
     # The lifecycle already succeeded. Optional diagnostics cannot undo it.
     try:
@@ -155,12 +162,16 @@ def parser():
     owned["plan"].add_argument("--name", required=True)
     owned["plan"].add_argument("--json", required=True, dest="payload", help="agent-maintained checks and required_checks")
     for action in ("run", "qa", "verify", "plan-preflight"):
-        owned[action].add_argument("--plan", required=True)
+        if action != "verify":
+            owned[action].add_argument("--plan", required=True)
         owned[action].add_argument("--name", required=True)
     owned["run"].add_argument("--id", required=True, dest="check_id")
     owned["run"].add_argument("--impact-covered", action="store_true")
     owned["qa"].add_argument("--summary", default="")
     verify = owned["verify"]
+    source = verify.add_mutually_exclusive_group(required=True)
+    source.add_argument("--plan", help="actual registered plan reference returned by plan/verify")
+    source.add_argument("--json", dest="payload", help="inline checks and required_checks; saved as this attempt's plan")
     verify.add_argument("--summary", default="")
     verify.add_argument("--finish", action="store_true", help="explicitly complete after PASS using original completion guards")
     verify.add_argument("--stopped", action="store_true", help="only after host confirms all run executors stopped")
@@ -280,7 +291,12 @@ def dispatch(args):
                     D.validate_direct(current)
             elif args.direct or args.stopped or args.stop_evidence is not None:
                 raise ValueError("verify stopping/direct options require explicit --finish")
-            result = P.verify_plan(root, run_id, owner, args.plan, args.name, summary=args.summary)
+            plan_ref = args.plan
+            if args.payload is not None:
+                payload = _plan_payload(args.payload)
+                plan_ref = P.save_plan(root, run_id, owner, args.name, payload.get("checks"),
+                                       payload.get("required_checks"))
+            result = P.verify_plan(root, run_id, owner, plan_ref, args.name, summary=args.summary)
             if result["gate"] != "PASS":
                 return result, 1
             if args.finish:
@@ -289,9 +305,7 @@ def dispatch(args):
                 return {**result, "completion": completion}, code
             return result, 0
         if args.action == "plan":
-            payload = json.loads(args.payload)
-            if not isinstance(payload, dict) or set(payload) - {"checks", "required_checks"}:
-                raise ValueError("plan accepts checks and required_checks only")
+            payload = _plan_payload(args.payload)
             ref = P.save_plan(root, run_id, owner, args.name, payload.get("checks"), payload.get("required_checks"))
             return {"run_id": run_id, "plan": ref}, 0
         if args.action == "run":

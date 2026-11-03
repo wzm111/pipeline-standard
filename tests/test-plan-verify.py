@@ -34,8 +34,18 @@ class VerifyCliTests(unittest.TestCase):
         self.check = {"argv": [sys.executable, "-B", "-c",
                      "from pathlib import Path; p=Path('counter'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1')"],
                       "scope": ["input"], "coverage": ["unit"], "write_paths": []}
-        self.plan = self.cli("plan", "--receipt", self.receipt, "--name", "plan",
-                             "--json", json.dumps({"checks": {"unit": self.check}}))["plan"]
+        self._plan = None
+
+    @property
+    def plan(self):
+        if self._plan is None:
+            self._plan = self.cli("plan", "--receipt", self.receipt, "--name", "plan",
+                                  "--json", json.dumps({"checks": {"unit": self.check}}))["plan"]
+        return self._plan
+
+    @plan.setter
+    def plan(self, value):
+        self._plan = value
 
     def cli(self, *args, expected=0, env=None):
         result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "pipeline_cli.py"), *args],
@@ -46,6 +56,11 @@ class VerifyCliTests(unittest.TestCase):
 
     def verify(self, name, *args, **kwargs):
         return self.cli("verify", "--receipt", self.receipt, "--plan", self.plan,
+                        "--name", name, *args, **kwargs)
+
+    def inline(self, name, *args, check=None, payload=None, **kwargs):
+        payload = {"checks": {"unit": check or self.check}} if payload is None else payload
+        return self.cli("verify", "--receipt", self.receipt, "--json", json.dumps(payload),
                         "--name", name, *args, **kwargs)
 
     def finish_args(self):
@@ -61,6 +76,138 @@ class VerifyCliTests(unittest.TestCase):
         self.assertIsNone(R.status(self.root)["active"])
         self.assertNotIn(self.owner, json.dumps(result))
         self.assertEqual((self.root / "counter").read_text(), "1")
+
+    def test_inline_baseline_then_changed_source_executes_final_once_and_seals(self):
+        argv = [sys.executable, "-B", "-c",
+                "from pathlib import Path; p=Path('counter'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); "
+                "raise SystemExit(int(Path('input').read_text() != 'fixed'))"]
+        baseline = self.cli("check", "--receipt", self.receipt, "--name", "before", "--scope", "input",
+                            "--coverage", "before-change", "--intent", "baseline", "--", *argv, expected=1)
+        original = (self.root / baseline["report"]).read_bytes()
+        (self.root / "input").write_text("fixed")
+        result = self.inline("after", *self.finish_args(), "--summary", "fixture source fixed; final exit checked",
+                             check={**self.check, "argv": argv})
+        self.assertFalse(result["results"][0]["reused"])
+        self.assertEqual(result["gate"], "PASS")
+        self.assertTrue(result["completion"]["coverage_complete"])
+        self.assertTrue(result["completion"]["delivery_sealed"])
+        self.assertEqual((self.root / "counter").read_text(), "2")
+        self.assertEqual(original, (self.root / baseline["report"]).read_bytes())
+        self.assertEqual(E.read_report(self.root, self.run, result["plan_ref"], kind="check_plan")["payload"]["required_checks"], ["unit"])
+        self.assertNotIn(self.owner, json.dumps(result))
+
+    def test_inline_reuses_only_still_valid_final_evidence(self):
+        first = self.verify("original")
+        second = self.inline("inline")
+        self.assertTrue(second["results"][0]["reused"])
+        self.assertEqual(second["results"][0]["report"], first["results"][0]["report"])
+        self.assertEqual((self.root / "counter").read_text(), "1")
+        (self.root / "input").write_text("changed")
+        third = self.inline("changed")
+        self.assertFalse(third["results"][0]["reused"])
+        self.assertEqual((self.root / "counter").read_text(), "2")
+
+    def test_inline_invalid_payloads_stopping_flags_and_names_never_execute(self):
+        for index, payload in enumerate(([], {}, {"checks": {}}, {"checks": {"unit": self.check}, "gate": "PASS"},
+                {"checks": {"unit": self.check}, "required_checks": ["unknown"]},
+                {"checks": {"unit": {**self.check, "intent": "baseline"}}})):
+            with self.subTest(payload=payload):
+                self.inline(f"bad-json-{index}", payload=payload, expected=2)
+        for index, options in enumerate((("--finish",), ("--finish", "--stopped"),
+                ("--direct",), ("--stopped",), ("--stop-evidence", "observed"))):
+            before = R.status(self.root)["state"]["artifacts"]
+            self.inline(f"bad-flags-{index}", *options, expected=2)
+            self.assertEqual(R.status(self.root)["state"]["artifacts"], before)
+        self.inline("bad/name", expected=2)
+        self.inline("a" * 64, expected=2)  # Derived check attempt exceeds the existing label limit.
+        invalid = self.cli("verify", "--receipt", self.receipt, "--name", "malformed", "--json", "{", expected=2)
+        self.assertNotIn(self.owner, json.dumps(invalid))
+        self.assertFalse((self.root / "counter").exists())
+
+    def test_verify_sources_are_required_and_mutually_exclusive(self):
+        for sources in ([], ["--plan", self.plan, "--json", "{}"]):
+            result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "pipeline_cli.py"), "verify",
+                "--receipt", self.receipt, "--name", "invalid", *sources], cwd=self.root,
+                env=self.env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertNotIn(self.owner, result.stdout + result.stderr)
+        self.assertFalse((self.root / "counter").exists())
+
+    def test_inline_name_collisions_never_overwrite_or_execute(self):
+        before_plan = (self.root / self.plan).read_bytes()
+        self.inline("plan", expected=2)
+        self.assertEqual(before_plan, (self.root / self.plan).read_bytes())
+        qa = E.write_report(self.root, self.run, self.owner, "qa", "occupied", {"gate": "CONCERNS"})
+        original = (self.root / qa).read_bytes()
+        result = self.inline("occupied", expected=1)
+        self.assertEqual(result["results"], [])
+        self.assertIsNone(result["report"])
+        self.assertEqual(original, (self.root / qa).read_bytes())
+        self.assertFalse((self.root / "counter").exists())
+        first = self.inline("first")
+        attempt = E.write_report(self.root, self.run, self.owner, "check_reuse", "attempt-c1",
+                                 {"source": first["results"][0]["report"]})
+        original = (self.root / attempt).read_bytes()
+        result = self.inline("attempt", expected=1)
+        self.assertEqual(result["results"], [])
+        self.assertEqual(original, (self.root / attempt).read_bytes())
+        self.assertEqual((self.root / "counter").read_text(), "1")
+
+    def test_inline_late_runner_and_resource_preflight_block_first_command(self):
+        for name, check in (("missing-runner", {**self.check, "argv": ["pipeline-fixture-missing-runner"]}),
+                            ("resources", {**self.check, "write_paths": None, "protected_paths": ["dist"]})):
+            result = self.inline(name, payload={"checks": {"unit": self.check, "late": check}}, expected=1)
+            self.assertEqual(result["results"], [])
+            self.assertEqual(result["gate"], "CONCERNS")
+            self.assertFalse((self.root / "counter").exists())
+
+    def test_inline_missing_registered_requirement_and_nonzero_keep_run_active(self):
+        self.cli("plan", "--receipt", self.receipt, "--name", "required-other", "--json",
+                 json.dumps({"checks": {"other": {**self.check, "coverage": ["other"]}}}))
+        missing = self.inline("narrow", *self.finish_args(), expected=1)
+        self.assertEqual(missing["preflight"]["missing_checks"], ["other"])
+        self.assertEqual(missing["results"], [])
+        self.assertFalse((self.root / "counter").exists())
+        failed = {**self.check, "coverage": ["unit", "other"],
+                  "argv": [sys.executable, "-B", "-c", "raise SystemExit(3)"]}
+        result = self.inline("failed", *self.finish_args(), check=failed, expected=1)
+        self.assertEqual(result["gate"], "CONCERNS")
+        self.assertEqual(result["results"][0]["exit_code"], 3)
+        self.assertNotIn("completion", result)
+        self.assertIsNotNone(R.status(self.root)["active"])
+
+    def test_inline_stopping_preflight_happens_before_plan_registration(self):
+        T.start(self.root, self.run, self.owner, "active", "goal", ["observe"])
+        before = R.status(self.root)["state"]["artifacts"]
+        self.inline("blocked", *self.finish_args(), expected=2)
+        self.assertEqual(before, R.status(self.root)["state"]["artifacts"])
+        self.assertFalse((self.root / "counter").exists())
+
+    def test_inline_finish_revalidates_input_log_environment_and_required_coverage(self):
+        original = P.verify_plan
+        for kind in ("input", "log", "environment", "required"):
+            with self.subTest(kind=kind), mock.patch.dict(os.environ, self.env, clear=True):
+                def drift(*args, **kwargs):
+                    result = original(*args, **kwargs)
+                    self.assertEqual(result["gate"], "PASS")
+                    if kind == "input":
+                        (self.root / "input").write_text("changed after QA")
+                    elif kind == "log":
+                        proof = E.read_report(self.root, self.run, result["results"][0]["report"])["payload"]
+                        (self.root / proof["log_path"]).write_text("changed after QA")
+                    elif kind == "environment":
+                        os.environ["INLINE_VERIFY_CONTEXT"] = "changed after QA"
+                    else:
+                        P.save_plan(self.root, self.run, self.owner, "late-required",
+                                    {"other": {**self.check, "coverage": ["other"]}})
+                    return result
+                args = CLI.parser().parse_args(["verify", "--project", str(self.root), "--receipt", self.receipt,
+                    "--json", json.dumps({"checks": {"unit": self.check}}), "--name", "drift-" + kind,
+                    *self.finish_args()])
+                with mock.patch.object(P, "verify_plan", side_effect=drift):
+                    with self.assertRaisesRegex(ValueError, "QA evidence changed"):
+                        CLI.dispatch(args)
+                self.assertIsNotNone(R.status(self.root)["active"])
 
     def test_valid_existing_evidence_seals_without_another_execution(self):
         self.verify("first")
@@ -103,8 +250,9 @@ class VerifyCliTests(unittest.TestCase):
         self.assertFalse((self.root / "tmp/pipeline/delivery/latest.json").exists())
 
     def test_plan_preflight_cli_is_read_only_and_valid_plan_still_executes(self):
+        plan = self.plan
         before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
-        result = self.cli("plan-preflight", "--receipt", self.receipt, "--plan", self.plan, "--name", "ready")
+        result = self.cli("plan-preflight", "--receipt", self.receipt, "--plan", plan, "--name", "ready")
         self.assertTrue(result["ready"])
         self.assertNotIn("gate", result)
         self.assertNotIn("argv", json.dumps(result))
