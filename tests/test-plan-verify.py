@@ -102,6 +102,64 @@ class VerifyCliTests(unittest.TestCase):
         self.assertNotIn("completion", second)
         self.assertFalse((self.root / "tmp/pipeline/delivery/latest.json").exists())
 
+    def test_plan_preflight_cli_is_read_only_and_valid_plan_still_executes(self):
+        before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        result = self.cli("plan-preflight", "--receipt", self.receipt, "--plan", self.plan, "--name", "ready")
+        self.assertTrue(result["ready"])
+        self.assertNotIn("gate", result)
+        self.assertNotIn("argv", json.dumps(result))
+        self.assertNotIn(self.owner, json.dumps(result))
+        self.assertEqual(before, {p.relative_to(self.root): p.read_bytes()
+                                  for p in self.root.rglob("*") if p.is_file()})
+        self.assertFalse((self.root / "counter").exists())
+        self.assertEqual(self.verify("ready")["gate"], "PASS")
+
+    def test_verify_managed_preflight_rejects_missing_coverage_and_late_runner(self):
+        missing = {**self.check, "argv": ["pipeline-fixture-no-such-runner"], "coverage": ["late"]}
+        self.plan = self.cli("plan", "--receipt", self.receipt, "--name", "late-plan",
+                             "--json", json.dumps({"checks": {"unit": self.check, "late": missing}}))["plan"]
+        result = self.verify("late", expected=1)
+        self.assertEqual(result["gate"], "CONCERNS")
+        self.assertEqual(result["results"], [])
+        self.assertFalse((self.root / "counter").exists())
+        self.plan = self.cli("plan", "--receipt", self.receipt, "--name", "narrow-plan",
+                             "--json", json.dumps({"checks": {"unit": self.check}}))["plan"]
+        static = self.cli("plan-preflight", "--receipt", self.receipt, "--plan", self.plan,
+                          "--name", "narrow", expected=1)
+        self.assertEqual(static["missing_checks"], ["late"])
+        result = self.verify("narrow", expected=1)
+        self.assertEqual(result["gate"], "CONCERNS")
+        self.assertEqual(result["preflight"]["missing_checks"], ["late"])
+        self.assertEqual(result["missing_checks"], ["late", "unit"])
+        self.assertEqual(result["results"], [])
+        self.assertFalse((self.root / "counter").exists())
+        self.assertEqual(R.status(self.root)["state"]["status"], "running")
+
+    def test_preflight_concerns_and_reason_survive_managed_qa_with_valid_prior_pass(self):
+        first = self.verify("first")
+        E.write_report(self.root, self.run, self.owner, "check_reuse", "blocked-c1",
+                       {"source": first["results"][0]["report"], "coverage": ["unit"]})
+        result = self.verify("blocked", expected=1)
+        self.assertEqual(result["gate"], "CONCERNS")
+        self.assertEqual(result["results"], [])
+        self.assertEqual(result["missing_checks"], [])
+        qa = E.read_report(self.root, self.run, result["report"], kind="qa")["payload"]
+        self.assertEqual(qa["gate"], "CONCERNS")
+        self.assertIn("attempt_name_already_used", qa["summary"])
+        self.assertEqual((self.root / "counter").read_text(), "1")
+
+    def test_repeated_verify_name_returns_concerns_without_writing_or_executing(self):
+        first = self.verify("same-round")
+        self.assertEqual(first["gate"], "PASS")
+        before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        result = self.verify("same-round", expected=1)
+        self.assertEqual(result["gate"], "CONCERNS")
+        self.assertIsNone(result["report"])
+        self.assertEqual(result["results"], [])
+        self.assertEqual(before, {p.relative_to(self.root): p.read_bytes()
+                                  for p in self.root.rglob("*") if p.is_file()})
+        self.assertEqual((self.root / "counter").read_text(), "1")
+
     def test_real_env_including_shlvl_input_and_log_changes_force_execution(self):
         self.verify("first")
         changed = {**self.env, "SHLVL": str(int(self.env.get("SHLVL", "0")) + 1)}

@@ -48,6 +48,102 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(second["skipped_checks"], [])
         self.assertEqual(R.status(self.root)["state"]["status"], "running")
 
+    def test_preflight_is_read_only_and_does_not_launch_or_claim(self):
+        plan = self.save()
+        before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        with patch.object(R, "_write_guard", side_effect=AssertionError("write lock")), \
+                patch.object(C, "execute_check", side_effect=AssertionError("execute")):
+            result = P.preflight_plan(self.root, self.run, self.owner, plan, "ready")
+        self.assertTrue(result["ready"])
+        self.assertNotIn("gate", result)
+        self.assertNotIn(self.owner, json.dumps(result))
+        self.assertNotIn("print", json.dumps(result))
+        after = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        self.assertEqual(before, after)
+
+    def test_whole_plan_missing_last_runner_blocks_first_process_and_records_concerns(self):
+        first = {**self.check, "argv": [sys.executable, "-B", "-c",
+                 "from pathlib import Path; Path('counter').touch()"]}
+        missing = {**self.check, "argv": ["pipeline-fixture-missing-runner"], "coverage": ["heavy"]}
+        plan = self.save({"first": first, "last": missing})
+        preflight = P.preflight_plan(self.root, self.run, self.owner, plan, "blocked")
+        self.assertFalse(preflight["ready"])
+        self.assertIn({"check_id": "last", "category": "runner", "reason": "executable_unavailable"},
+                      preflight["failures"])
+        result = P.verify_plan(self.root, self.run, self.owner, plan, "blocked")
+        self.assertEqual(result["gate"], "CONCERNS")
+        self.assertEqual(result["results"], [])
+        self.assertEqual(result["skipped_checks"], ["first", "last"])
+        self.assertEqual(E.read_report(self.root, self.run, result["report"], kind="qa")["payload"]["gate"],
+                         "CONCERNS")
+        self.assertFalse((self.root / "counter").exists())
+
+    def test_preflight_required_coverage_uses_registered_and_valid_inherited_requirements(self):
+        self.save({"original": {**self.check, "coverage": ["original"]}}, name="original")
+        narrow = self.save({"narrow": {**self.check, "coverage": ["narrow"]}}, name="narrow")
+        result = P.verify_plan(self.root, self.run, self.owner, narrow, "blocked")
+        self.assertEqual(result["gate"], "CONCERNS")
+        self.assertEqual(result["preflight"]["missing_checks"], ["original"])
+        self.assertEqual(result["missing_checks"], ["narrow", "original"])
+        self.assertEqual(result["results"], [])
+        state = R.status(self.root)["state"]
+        state["inherited_required_checks"] = ["inherited"]
+        R._atomic(self.root / "tmp/pipeline/runs" / (self.run + ".json"), state)
+        inherited = self.save({"narrow": {**self.check, "coverage": ["narrow"]}}, name="inherited")
+        self.assertEqual(P.preflight_plan(self.root, self.run, self.owner, inherited, "inherited")["missing_checks"],
+                         ["inherited", "original"])
+
+    def test_preflight_checks_late_cwd_resources_names_and_active_claims(self):
+        package = self.root / "package"
+        package.mkdir()
+        plan = self.save({"first": self.check, "last": {**self.check, "cwd": "package",
+                          "write_paths": ["output"], "protected_paths": ["output"]}})
+        result = P.preflight_plan(self.root, self.run, self.owner, plan, "resources")
+        self.assertIn({"check_id": "last", "category": "resources", "reason": "conflict"}, result["failures"])
+        package.rmdir()
+        result = P.verify_plan(self.root, self.run, self.owner, plan, "cwd")
+        self.assertEqual(result["results"], [])
+        self.assertIn({"check_id": "last", "category": "cwd", "reason": "working_directory_unavailable"},
+                      result["preflight"]["failures"])
+        valid = self.save(name="valid")
+        self.assertEqual(P.preflight_plan(self.root, self.run, self.owner, valid, "a" * 64)["failures"],
+                         [{"check_id": "unit", "category": "attempt", "reason": "invalid_attempt_name"}])
+        self.execute(valid, "used-c1")
+        self.assertFalse(P.preflight_plan(self.root, self.run, self.owner, valid, "used")["ready"])
+        (self.root / "input").write_text("changed")
+        state = R.status(self.root)["state"]
+        state["running_checks"] = [{"name": "running", "write_paths": None}]
+        R._atomic(self.root / "tmp/pipeline/runs" / (self.run + ".json"), state)
+        self.assertIn({"check_id": "unit", "category": "resources", "reason": "active_check_conflict"},
+                      P.preflight_plan(self.root, self.run, self.owner, valid, "claims")["failures"])
+
+    def test_preflight_resource_claim_does_not_block_current_cached_reuse(self):
+        plan = self.save()
+        self.execute(plan)
+        state = R.status(self.root)["state"]
+        state["running_checks"] = [{"name": "running", "write_paths": None}]
+        R._atomic(self.root / "tmp/pipeline/runs" / (self.run + ".json"), state)
+        self.assertTrue(P.preflight_plan(self.root, self.run, self.owner, plan, "cached")["ready"])
+        result = P.verify_plan(self.root, self.run, self.owner, plan, "cached")
+        self.assertEqual(result["gate"], "PASS")
+        self.assertTrue(result["results"][0]["reused"])
+        self.assertEqual(R.status(self.root)["state"]["running_checks"], state["running_checks"])
+
+    def test_repeated_successful_verify_name_refuses_without_execution_or_qa_overwrite(self):
+        plan = self.save()
+        first = P.verify_plan(self.root, self.run, self.owner, plan, "same-round")
+        self.assertEqual(first["gate"], "PASS")
+        before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        with patch.object(C, "execute_check", side_effect=AssertionError("must not execute")):
+            result = P.verify_plan(self.root, self.run, self.owner, plan, "same-round")
+        self.assertEqual(result["gate"], "CONCERNS")
+        self.assertIsNone(result["report"])
+        self.assertEqual(result["results"], [])
+        self.assertIn("qa_name_already_used", [item["reason"] for item in result["preflight"]["failures"]])
+        self.assertEqual(before, {p.relative_to(self.root): p.read_bytes()
+                                  for p in self.root.rglob("*") if p.is_file()})
+        self.assertEqual(E.read_report(self.root, self.run, first["report"], kind="qa")["payload"]["gate"], "PASS")
+
     def quick_plan(self):
         (self.root / "quick.py").write_text(
             "from pathlib import Path\n"
