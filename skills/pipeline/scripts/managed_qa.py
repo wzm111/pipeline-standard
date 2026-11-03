@@ -84,6 +84,12 @@ def canonical(root, state, payload):
     if payload.get("plan_ref") is None and payload.get("gate") in {"CONCERNS", "FAIL"}:
         return payload  # Failure recording never grants acceptance or needs a refreshed ack.
     run_policy.require(root, state)
+    if payload.get("scope") == "engineering_release; pending external outcomes are not passed":
+        import release_checks
+        expected = release_checks._acceptance(root, state, E.coverage_labels(payload.get("external_pending")))
+        if payload != expected:
+            raise ValueError("release QA must match current candidate and complete acceptance evidence")
+        return expected
     if payload.get("plan_ref") is not None:
         ref = payload["plan_ref"]
         if ref not in _plans(root, state):
@@ -144,9 +150,46 @@ def validate_finish(root, state):
         raise ValueError("current machine-validated QA is required before completing")
     report = _read(root, state, qa_refs[-1], "qa")
     payload = report["payload"]
+    mode = ("release" if isinstance(payload.get("machine_validation"), dict) and payload["machine_validation"].get("mode") == "release"
+            else "plan" if payload.get("plan_ref") else "single") if isinstance(payload, dict) else None
     if (not _current(report, state) or not isinstance(payload, dict) or payload.get("gate") != "PASS"
-            or payload.get("machine_validation") != {"schema": 1, "mode": "plan" if payload.get("plan_ref") else "single",
+            or payload.get("machine_validation") != {"schema": 1, "mode": mode,
                                                        "task_started_at": boundary(state)}):
         raise ValueError("current task machine-validated QA PASS is required before completing")
     if canonical(root, state, payload) != payload:
         raise ValueError("QA evidence changed after acceptance; revalidate current evidence before completing")
+
+
+def release_requirements(root, state):
+    """Keep current source plans and observed categories when release QA joins them."""
+    import check_plan as P
+    required = set(required_for_state(root, state))
+    source_qa = {}
+    for ref in state["artifacts"]:
+        if "/artifacts/qa/" not in ref:
+            continue
+        report = _read(root, state, ref, "qa")
+        payload = report["payload"]
+        if (_current(report, state) and isinstance(payload, dict)
+                and payload.get("scope") != "engineering_release; pending external outcomes are not passed"):
+            source_qa[payload.get("plan_ref", "single")] = payload
+    if any(payload.get("gate") != "PASS" for payload in source_qa.values()):
+        raise ValueError("current source QA has unresolved concerns or failure")
+    for ref in _plans(root, state):
+        result = P.inspect_state(root, state["run_id"], state["owner_token"], ref, state)
+        if result["gate"] != "PASS":
+            raise ValueError("current source plan acceptance is incomplete")
+    current, _ = _checks(root, state)
+    for ref in current:
+        required.update(E.coverage_labels(_read(root, state, ref, "check")["payload"].get("coverage")))
+    return required
+
+
+def validate_release_sources(root, state, coverage):
+    current, _ = _checks(root, state)
+    for label in coverage["required"]:
+        sources = [ref["path"] for ref in coverage["sources"].get(label, []) if ref["path"] in current]
+        if not sources:
+            raise ValueError("release acceptance needs current-task observation or explicit reuse")
+        for ref in sources:
+            _validate_ref(root, state, ref)

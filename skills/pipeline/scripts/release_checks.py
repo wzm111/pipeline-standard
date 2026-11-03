@@ -3,9 +3,14 @@
 Callers supply authorized project commands. Live observations are never cached.
 """
 from copy import deepcopy
+import argparse
 import hashlib
 import json
 from pathlib import Path
+import sys
+
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
 
 import delivery as D
 import run_checks as C
@@ -322,13 +327,20 @@ def _acceptance(root, state, pending):
         raise ValueError("release recovery hold unresolved; cannot accept or finish")
     required = sorted(set(plan.get("required_before", [])) | set(plan.get("required_after", []))
                       | {"build", "release_activation"} | set(state.get("inherited_required_checks") or []))
+    if "run_policy" in state:
+        import managed_qa
+        required = sorted(set(required) | managed_qa.release_requirements(root, state))
     coverage = _coverage(root, state, required)
     candidate = _candidate(root, state, coverage)
     if not _activated(plan, candidate) or not coverage["complete"]:
         raise ValueError("release acceptance incomplete; fill only missing or invalid checks")
-    return {"gate": "PASS", "required_checks": required, "coverage": coverage,
+    packet = {"gate": "PASS", "required_checks": required, "coverage": coverage,
               "candidate_id": candidate["id"], "external_pending": pending,
               "scope": "engineering_release; pending external outcomes are not passed"}
+    if "run_policy" in state:
+        managed_qa.validate_release_sources(root, state, coverage)
+        packet["machine_validation"] = {"schema": 1, "mode": "release", "task_started_at": managed_qa.boundary(state)}
+    return packet
 
 
 def validate_closeout(root, state):
@@ -366,3 +378,67 @@ def closeout(root, run_id, owner_token, *, external_pending=None):
             latest["updated_at"] = R._now()
             R._atomic(path, latest)
     return {"report": relative, "reused": reused, "external_pending": pending}
+
+
+def public_status(root, run_id, owner_token):
+    """Read current gate validity without exposing commands or ownership secrets."""
+    _, base = R._paths(root)
+    _, state = _owned(base, run_id, owner_token)
+    plan = state.get("release_plan", {})
+    coverage = _coverage(root, state, plan.get("required_before", []))
+    candidate = _candidate(root, state, coverage)
+    return {"run_id": run_id, "prepared": bool(plan),
+            "candidate_id": candidate["id"] if candidate else None,
+            "activated": _activated(plan, candidate),
+            "missing_before": coverage["missing"],
+            "recovery_blocked": _recovery_blocked(root, state),
+            "attempts": [{k: a[k] for k in ("name", "phase", "status")} for a in plan.get("attempts", [])]}
+
+
+def main(argv=None):
+    # Reuse the original receipt ownership/path/permission checks; no second
+    # credential format or lifecycle entrypoint.
+    from pipeline_cli import _receipt
+    parser = argparse.ArgumentParser(description="Invoke existing authorized project release commands.")
+    sub = parser.add_subparsers(dest="action", required=True)
+    for action in ("prepare", "execute", "status", "closeout"):
+        command = sub.add_parser(action, allow_abbrev=False)
+        command.add_argument("--project", default=".")
+        command.add_argument("--receipt", required=True)
+        if action != "status":
+            command.add_argument("--json", required=True, dest="declaration")
+    args = parser.parse_args(argv)
+    try:
+        declaration = {} if args.action == "status" else json.loads(args.declaration)
+        allowed = {"prepare": {"required_before", "required_after"},
+                   "execute": {"name", "phase", "argv", "scope", "artifact_paths", "timeout", "cwd",
+                               "environment", "coverage", "write_paths", "protected_paths"},
+                   "closeout": {"external_pending"}, "status": set()}[args.action]
+        if not isinstance(declaration, dict) or set(declaration) - allowed:
+            raise ValueError("unknown declaration fields")
+        if args.action == "execute" and not {"name", "phase", "argv", "scope"} <= set(declaration):
+            raise ValueError("execute requires name, phase, argv and scope")
+        root = Path(args.project).resolve(strict=True)
+        receipt = _receipt(root, args.receipt)
+        owned = root, receipt["run_id"], receipt["owner_token"]
+        code = 0
+        if args.action == "prepare":
+            prepare(*owned, **declaration)
+            result = public_status(*owned)
+        elif args.action == "execute":
+            executed = execute(*owned, **declaration)
+            result = {k: executed[k] for k in ("report", "exit_code", "reused", "release_accepted", "recovery_blocked")}
+            code = 0 if executed["release_accepted"] else 1
+        elif args.action == "closeout":
+            result = closeout(*owned, **declaration)
+        else:
+            result = public_status(*owned)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        # Exception text can contain submitted argv, paths or environment values.
+        result, code = {"error": type(error).__name__, "message": "release request rejected; inspect the declaration and current gate evidence"}, 2
+    print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -82,6 +82,17 @@ PIPELINE.md保存稳定的权限、范围、测试与上线规则；本次版本
 
 由智能体从现有项目契约与已验证部署命令维护，不让用户填写新配置。先确认项目已有候选构建、完整产物验收及只激活既有产物的可靠入口；再用`scripts/release_checks.py`对接。所有命令仍须已有授权，不会因套用接口自动获得线上权限。
 
+可直接调用同一模块的薄CLI，无需每轮编写Python协调脚本。`--receipt`沿用pipeline_cli start返回的私有引用；以下JSON中的命令、范围、产物路径均由智能体替换为项目已有且已确认的实际值，不照抄占位命令：
+
+```sh
+python3 <release_runner> prepare --project <root> --receipt <receipt> --json '{}'
+python3 <release_runner> execute --project <root> --receipt <receipt> --json '{"name":"preflight-r1","phase":"preflight","argv":["<真实现有快检命令>"],"scope":["<真实依赖路径>"],"timeout":120}'
+python3 <release_runner> status --project <root> --receipt <receipt>
+python3 <release_runner> closeout --project <root> --receipt <receipt> --json '{}'
+```
+
+`release_runner`为本skill实际`scripts/release_checks.py`。execute每次只安排声明的一个phase，依次沿用原preflight/compatibility/build/activate/smoke门禁；build另传`artifact_paths`，smoke声明实际验证的release_identity。允许的执行字段为name、phase、argv、scope、artifact_paths、timeout、cwd、environment、coverage、write_paths、protected_paths；prepare仅接受required_before/required_after，closeout仅接受external_pending。未知字段/旗标拒绝；不自动激活、重试或轮询。退出码0表示本次调用成功，1表示实际命令未被接受，2表示请求或门禁拒绝；命令真实结果与失败详情保留在原检查证据中。status只读返回当前有效候选ID、激活状态、前置缺项、恢复阻塞及尝试状态，不输出receipt内容、命令或环境。它不是线上观察或最终验收结论。
+
 - `execute(root, run_id, owner_token, name, phase=..., argv=[...], scope=[...], timeout=..., **check_options)`沿用run_checks，phase为preflight/compatibility/build/activate/smoke。scope声明真实输入与工具/依赖配置，输出目录放write_paths；不能为了缓存删依赖。额外coverage只写命令实际覆盖的类别。
 - preflight执行本轮目标现场快检；compatibility用真实运行器执行受影响用例。两者必须本轮实际执行，不能以继承的旧现场观察替代。相关开发单测、E2E等已验证证据仍按原指纹复用。项目有额外必要门禁时，`prepare(..., required_before=[...], required_after=[...])`只能追加要求，不能删除默认门禁或原验收要求。
 - build传`artifact_paths=[...]`绑定已有产物或项目适配器生成的真实完整性清单。清单必须来自实际产物核验，远端清单不能冒充本机已校验远端文件。build命令仍执行项目必需的候选门禁；本地入口核验输入、命令、当前工具环境、日志及实际产物后才可跳过重复构建。缺失/损坏产物、新规格失败均阻止静默沿用旧候选。
@@ -90,6 +101,8 @@ PIPELINE.md保存稳定的权限、范围、测试与上线规则；本次版本
 - `closeout(..., external_pending=["search_indexing", ...])`生成一份简短工程QA；相同输入重复收口只返回原报告。Google收录、canonical重新抓取、AI自然推荐等外部结果单列待确认，不循环刷新等待外部平台。需要人工验证码/登录时报告人工动作；后续观察仅在用户已授权时安排。明确属于本次必需验收的外部结果不能靠pending绕过，追加的required_after及原需求约束仍生效。
 
 确认执行者停止后按原规则finish；采用本入口的run必须有仍有效的closeout，不能漏掉线上冒烟就终结。未采用本入口的旧run保留原流程。模块提供已接入调用的校验，不拦截未接入的宿主工具，也不自动观察远端进程；外部时间/token缺数据不估算。
+
+managed run的closeout使用同一release验收重算生成machine_validation.mode=release，继续核对当前task、原源码检查计划及必要类别、源QA未解决结论和当前环境/日志；不能用release标记、候选ID字符串或旧任务PASS替代这些证据。收口与finish都会复核，CLI不另造一条QA捷径。
 
 项目只有单体部署脚本时，先完成快预检，再经execute_check执行现有脚本一次并保留原门禁；不为套用分阶段接口额外部署一次，不虚构skip-build参数。无法安全复用时说明项目适配器缺口，按当前授权处理；不能自动改项目部署脚本或绕过保护。没有明确缺口时，不为了收尾另起规划/角色、重复整理多份报告或反复全量核对。
 
