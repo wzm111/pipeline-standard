@@ -37,4 +37,16 @@
 4. 实际打开/看过返回 capture 里的图片后，才执行 `visual-view --receipt <receipt> --capture <visual-finish返回report> --name view-r1 --viewed`。它只记录调用方声明，不证明宿主读取或审美质量；没有实际查看不可传 viewed。
 5. `visual-inspect --run-id <当前run> --requirement <实际引用>` 只读返回 capture_pending/view_pending/view_declared/stale_or_unconfirmed，复核当前任务、源码与图片绑定；不会返回图片内容、凭据或审美 PASS。跨 run/旧 task、缺图、图/源码变化不能作为当前完整证据。
 
-intent=visual 专用于此观察，与普通 test/check 验收独立；不能放入 argv 验收计划或复用为正式测试通过。上述截图/查看记录目前不自动接管 QA/finish，也不替代真实业务断言、独立 review 或交付授权。
+intent=visual 专用于此观察，与普通 test/check 验收独立；不能放入 argv 验收计划或复用为正式测试通过。上述截图/查看记录目前不自动接管 QA/finish，也不替代真实业务断言或交付授权。
+
+## 发现问题、修改与复核
+
+小范围、低风险 UI 可由调用方自查，声明省略 review 或写 `"review":"self"`。大范围改版、重要页面或实质风险使用 `"review":"independent"`，复用本任务已有 tester 做独立复核，不为简单 UI 自动增加角色。风险由执行者据目标、影响面和项目规则判断，机器不从截图打分或猜业务重要性；项目明确要求独立复核时不能以 self 规避。
+
+实际看过当前图后，用 `visual-review --receipt <receipt> --capture <实际capture引用> --view <实际view引用> --name review-r1 --json '{"gate":"PASS","findings":[]}'` 记录真实判断。无实际问题可一次结束，不凑缺陷数或轮数。真实发现的问题用 `CONCERNS` 或 `FAIL`，findings 仅列本范围内未解决事项的稳定短 id 和非敏感 summary，例如 `{"gate":"CONCERNS","findings":[{"id":"action-overlap","summary":"目标视口主要操作与相邻文本重叠"}]}`。PASS 不可仍有未解决事项；机器只验证记录一致性，审美/可用性判断仍来自实际观察者。
+
+独立复核由已有 accepted 的当前任务 tester 执行：其实际看图后，在 visual-view 与 visual-review 都传同一个 `--reviewer-dispatch <真实tester派发ID>`。入口核验角色派发已被宿主接受、当前任务归属、观察者一致及已知实现者/审查者身份不相同；随意字符串、未接受派发、developer 自称 tester 或沿用实现者的 viewed 声明均不满足。实际模型或宿主身份未知仍保持未知，派发记录与 viewed 声明都不证明任意宿主行为或审美质量。
+
+发现本范围内问题后修正真实源码/状态，再以新 name 执行 begin → 宿主重新截图 → finish → 实际重新看图 → view → review；源码、图片或查看记录变化时，旧判断不能当当前判断。新 review 自动引用上一次不可变 review，未解决问题继续保留相同 id；确已解决的 id 放 `"resolved":["action-overlap"]`。解决旧问题必须有新 capture 与新 view，不能在同一旧截图上把 FAIL/CONCERNS 改成 PASS，也不能静默丢掉原问题。不要以复制旧图片或修改旧报告代替真实重拍重看；原失败和历史引用始终保留。
+
+visual-inspect 增加 `review:"pending"|"PASS"|"CONCERNS"|"FAIL"`：后三者仅为绑定当前 capture/view 的调用方审查结论，status 为 review_declared，并非自动审美认证。新截图但尚未复核时保持 review pending；新 pending/失败捕获、失效源码/图片/查看或被改写的历史引用都不能复活旧 PASS。修复循环沿用原 QA 打回/停止上限，不另增固定轮数；范围外问题只简记，需要扩展时遵守原授权。

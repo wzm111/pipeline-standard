@@ -53,15 +53,17 @@ def _surface(value):
     return value
 
 
-def declare(root, run_id, owner, name, *, scope, target, viewport, state, version):
+def declare(root, run_id, owner, name, *, scope, target, viewport, state, version, review="self"):
     owned = P._owned(root, run_id, owner)
     _name(name, owner)
     surface = _surface(dict(target=target, viewport=viewport, state=state, version=version))
+    if review not in {"self", "independent"}:
+        raise ValueError("visual review must be self or independent")
     E.fingerprint(root, scope)
     if E.write_paths_conflict(root, scope, ["tmp/pipeline"]):
         raise ValueError("visual source scope must exclude pipeline outputs")
     return E.write_report(root, run_id, owner, "visual_requirement", name,
-                          {"task_started_at": _task(owned), "scope": scope, **surface})
+                          {"task_started_at": _task(owned), "scope": scope, "review": review, **surface})
 
 
 def _image_path(run_id, name, image_format):
@@ -237,16 +239,126 @@ def _capture(root, owned, ref):
     return capture
 
 
-def view(root, run_id, owner, capture_ref, name, *, viewed=False):
+def _reviewer(owned, dispatch_id):
+    if dispatch_id is None:
+        return
+    import role_dispatch as D
+    item = D._ticket(owned, dispatch_id)
+    start = _task(owned)
+    if (item["role"] != "tester" or item["status"] not in {"working", "completed"}
+            or not item.get("accepted_at") or not item.get("executor_id")
+            or start and R._timestamp(item["accepted_at"]) < R._timestamp(start)):
+        raise ValueError("independent visual review requires an accepted current-task tester")
+    for developer in owned.get("role_dispatches", []):
+        if (developer["role"] == "developer" and developer.get("accepted_at")
+                and (not start or R._timestamp(developer["accepted_at"]) >= R._timestamp(start)) and (
+                developer.get("executor_id") == item["executor_id"] or
+                item.get("host_executor_id") and developer.get("host_executor_id") == item["host_executor_id"])):
+            raise ValueError("visual reviewer must differ from the implementation executor")
+
+
+def view(root, run_id, owner, capture_ref, name, *, viewed=False, reviewer_dispatch=None):
     owned = P._owned(root, run_id, owner)
     _name(name, owner)
     _capture(root, owned, capture_ref)
+    _reviewer(owned, reviewer_dispatch)
     if viewed is not True:
         raise ValueError("record viewing only after actual image inspection")
     return E.write_report(root, run_id, owner, "visual_view", name,
                           {"task_started_at": _task(owned), "capture": capture_ref,
                            "capture_sha256": P._digest(root, capture_ref), "viewed": True,
+                           "reviewer_dispatch": reviewer_dispatch,
                            "basis": "caller_declared", "native_proof": False})
+
+
+def _latest_capture(root, owned, requirement):
+    run_id = owned["run_id"]
+    captures = [ref for ref in owned["artifacts"] if "/artifacts/visual_capture/" in ref
+                and E.read_report(root, run_id, ref, kind="visual_capture")["payload"].get("requirement") == requirement]
+    attempts = [ticket for ticket in owned.get("observed_checks", {}).values()
+                if ticket["declaration"]["command"].startswith(f"visual screenshot {requirement} ")]
+    latest = max(attempts, key=lambda ticket: ticket["started_at"], default=None)
+    if not captures or latest and (latest["status"] != "completed" or
+            E.read_report(root, run_id, captures[-1], kind="visual_capture")["payload"]["observation"] != latest.get("report")):
+        return None
+    return captures[-1]
+
+
+def _reviews(root, owned, requirement):
+    return [(ref, _read(root, owned, ref, "visual_review")) for ref in owned["artifacts"]
+            if "/artifacts/visual_review/" in ref and
+            E.read_report(root, owned["run_id"], ref, kind="visual_review")["payload"].get("requirement") == requirement]
+
+
+def _view(root, owned, view_ref, capture_ref, reviewer_dispatch):
+    viewed = _read(root, owned, view_ref, "visual_view")
+    if (viewed["capture"] != capture_ref or viewed["capture_sha256"] != P._digest(root, capture_ref)
+            or viewed["viewed"] is not True or viewed.get("reviewer_dispatch") != reviewer_dispatch):
+        raise ValueError("visual review requires this reviewer's actual current image-view declaration")
+    _reviewer(owned, reviewer_dispatch)
+
+
+def review(root, run_id, owner, capture_ref, view_ref, name, *, gate, findings,
+           resolved=None, reviewer_dispatch=None):
+    """Record an actual judgment; never calculate aesthetic quality or scores."""
+    owned = P._owned(root, run_id, owner)
+    _name(name, owner)
+    capture = _capture(root, owned, capture_ref)
+    requirement = capture["requirement"]
+    required = _read(root, owned, requirement, "visual_requirement")
+    if capture_ref != _latest_capture(root, owned, requirement):
+        raise ValueError("review requires the latest completed visual capture")
+    _view(root, owned, view_ref, capture_ref, reviewer_dispatch)
+    if required.get("review", "self") == "independent" and reviewer_dispatch is None:
+        raise ValueError("this UI requirement needs independent tester review")
+    if gate not in {"PASS", "CONCERNS", "FAIL"} or not isinstance(findings, list) or len(findings) > 64:
+        raise ValueError("visual review requires gate and bounded actual findings")
+    ids = []
+    for finding in findings:
+        if (not isinstance(finding, dict) or set(finding) != {"id", "summary"}
+                or not isinstance(finding["summary"], str) or not finding["summary"].strip()
+                or len(finding["summary"]) > 1000):
+            raise ValueError("visual findings require id and short non-secret summary")
+        ids.append(E._label(finding["id"]))
+    if len(set(ids)) != len(ids) or (gate == "PASS") != (not ids):
+        raise ValueError("PASS requires no unresolved findings; FAIL/CONCERNS retain actual findings")
+    resolved = E.coverage_labels(resolved)
+    previous = _reviews(root, owned, requirement)
+    prior_ref, prior = previous[-1] if previous else (None, None)
+    prior_ids = {item["id"] for item in prior["findings"]} if prior else set()
+    if not set(resolved) <= prior_ids or not prior_ids - set(resolved) <= set(ids) or set(resolved) & set(ids):
+        raise ValueError("retain or explicitly resolve previous visual findings")
+    if resolved and (capture_ref == prior["capture"] or view_ref == prior["view"]):
+        raise ValueError("resolved visual findings require a new screenshot and new viewing")
+    return E.write_report(root, run_id, owner, "visual_review", name,
+                          {"task_started_at": _task(owned), "requirement": requirement,
+                           "capture": capture_ref, "capture_sha256": P._digest(root, capture_ref),
+                           "view": view_ref, "view_sha256": P._digest(root, view_ref),
+                           "reviewer_dispatch": reviewer_dispatch, "gate": gate, "findings": findings,
+                           "previous_review": prior_ref,
+                           "previous_sha256": P._digest(root, prior_ref) if prior_ref else None,
+                           "resolved": resolved, "basis": "caller_declared", "native_proof": False})
+
+
+def _valid_review(root, owned, ref, payload):
+    capture = _capture(root, owned, payload["capture"])
+    required = _read(root, owned, payload["requirement"], "visual_requirement")
+    if (capture["requirement"] != payload["requirement"] or
+            required.get("review", "self") == "independent" and payload["reviewer_dispatch"] is None):
+        raise ValueError("visual review requirement/reviewer changed")
+    _view(root, owned, payload["view"], payload["capture"], payload["reviewer_dispatch"])
+    if (payload["capture"] != _latest_capture(root, owned, payload["requirement"])
+            or P._digest(root, payload["capture"]) != payload["capture_sha256"]
+            or P._digest(root, payload["view"]) != payload["view_sha256"]):
+        raise ValueError("visual review source/image/view changed")
+    previous = None
+    for history_ref, history in _reviews(root, owned, payload["requirement"]):
+        if (history["previous_review"] != previous or
+                history["previous_sha256"] != (P._digest(root, previous) if previous else None)):
+            raise ValueError("previous visual review changed")
+        previous = history_ref
+        if history_ref == ref:
+            break
 
 
 def inspect(root, run_id, requirement):
@@ -255,17 +367,9 @@ def inspect(root, run_id, requirement):
     if before is None:
         raise ValueError("visual inspection requires an existing run")
     _read(root, before, requirement, "visual_requirement")
-    captures = [ref for ref in before["artifacts"] if "/artifacts/visual_capture/" in ref
-                and E.read_report(root, run_id, ref, kind="visual_capture")["payload"].get("requirement") == requirement]
-    result = {"status": "capture_pending", "viewed": False, "native_proof": False}
-    attempts = [ticket for ticket in before.get("observed_checks", {}).values()
-                if ticket["declaration"]["command"].startswith(f"visual screenshot {requirement} ")]
-    latest = max(attempts, key=lambda ticket: ticket["started_at"], default=None)
-    if latest and (latest["status"] != "completed" or not captures or
-            E.read_report(root, run_id, captures[-1], kind="visual_capture")["payload"]["observation"] != latest.get("report")):
-        captures = []  # A pending/failed later attempt cannot revive an older image.
-    if captures:
-        ref = captures[-1]
+    result = {"status": "capture_pending", "viewed": False, "native_proof": False, "review": "pending"}
+    ref = _latest_capture(root, before, requirement)
+    if ref:
         try:
             capture = _capture(root, before, ref)
             result.update(status="view_pending", image={k: capture["image"][k] for k in ("mime", "width", "height")})
@@ -277,6 +381,12 @@ def inspect(root, run_id, requirement):
                     _read(root, before, view_ref, "visual_view")
                     result.update(status="view_declared", viewed=True)
                     break
+            reviews = _reviews(root, before, requirement)
+            if reviews:
+                review_ref, reviewed = reviews[-1]
+                if reviewed["capture"] == ref:
+                    _valid_review(root, before, review_ref, reviewed)
+                    result.update(status="review_declared", review=reviewed["gate"])
         except (OSError, ValueError, KeyError, TypeError):
             result["status"] = "stale_or_unconfirmed"
     if R.status(root, run_id)["state"] != before:

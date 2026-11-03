@@ -121,12 +121,12 @@ def parser():
     visual_status.add_argument("--run-id", required=True)
     visual_status.add_argument("--requirement", required=True)
     owned = {}
-    for name in ("update", "check", "report", "finish", "plan", "plan-preflight", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view"):
+    for name in ("update", "check", "report", "finish", "plan", "plan-preflight", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
     owned["policy-ack"].add_argument("--revision", required=True)
-    for action in ("visual-declare", "visual-begin", "visual-finish", "visual-view"):
+    for action in ("visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
         owned[action].add_argument("--name", required=True)
     owned["visual-declare"].add_argument("--json", required=True, dest="payload")
     for action in ("visual-begin", "visual-finish"):
@@ -137,6 +137,11 @@ def parser():
     owned["visual-finish"].add_argument("--stop-evidence", required=True)
     owned["visual-view"].add_argument("--capture", required=True)
     owned["visual-view"].add_argument("--viewed", action="store_true", help="caller confirms actual image viewing; not native proof")
+    for action in ("visual-view", "visual-review"):
+        owned[action].add_argument("--reviewer-dispatch", help="actual accepted current-task tester dispatch for independent review")
+    owned["visual-review"].add_argument("--capture", required=True)
+    owned["visual-review"].add_argument("--view", required=True)
+    owned["visual-review"].add_argument("--json", required=True, dest="payload", help="actual gate/findings and optional resolved IDs")
     for action in ("observe-begin", "observe-finish"):
         owned[action].add_argument("--id", required=True, dest="observation_id")
     owned["observe-begin"].add_argument("--json", required=True, dest="declaration")
@@ -281,16 +286,24 @@ def dispatch(args):
         import visual_evidence as V
         if args.action == "visual-declare":
             payload = json.loads(args.payload)
-            if not isinstance(payload, dict) or set(payload) != {"scope", "target", "viewport", "state", "version"}:
-                raise ValueError("visual-declare requires scope/target/viewport/state/version only")
+            if (not isinstance(payload, dict) or set(payload) - {"scope", "target", "viewport", "state", "version", "review"}
+                    or not {"scope", "target", "viewport", "state", "version"} <= payload.keys()):
+                raise ValueError("visual-declare requires scope/target/viewport/state/version and optional review")
             ref = V.declare(root, run_id, owner, args.name, **payload)
         elif args.action == "visual-begin":
             return V.begin(root, run_id, owner, args.requirement, args.name, image_format=args.image_format), 0
         elif args.action == "visual-finish":
             ref = V.finish(root, run_id, owner, args.requirement, args.name, observed=json.loads(args.payload),
                            host_stopped=args.host_stopped, stop_evidence=args.stop_evidence)
+        elif args.action == "visual-view":
+            ref = V.view(root, run_id, owner, args.capture, args.name, viewed=args.viewed, reviewer_dispatch=args.reviewer_dispatch)
         else:
-            ref = V.view(root, run_id, owner, args.capture, args.name, viewed=args.viewed)
+            payload = json.loads(args.payload)
+            if (not isinstance(payload, dict) or set(payload) - {"gate", "findings", "resolved"}
+                    or not {"gate", "findings"} <= payload.keys()):
+                raise ValueError("visual-review requires gate/findings and optional resolved IDs")
+            ref = V.review(root, run_id, owner, args.capture, args.view, args.name,
+                           reviewer_dispatch=args.reviewer_dispatch, **payload)
         return {"report": ref, "notice": "Visual evidence only; no aesthetic or business PASS."}, 0
     if args.action == "policy-ack":
         import run_policy

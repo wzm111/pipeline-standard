@@ -17,6 +17,7 @@ import run_state as R
 import run_tasks as T
 import visual_evidence as V
 import pipeline_cli as CLI
+import role_dispatch as D
 
 
 def png():
@@ -60,6 +61,15 @@ class VisualTests(unittest.TestCase):
 
     def inspect(self):
         return V.inspect(self.root, self.args[1], self.requirement)
+
+    def captured_view(self, name, reviewer=None):
+        self.image(self.begin(name), jpeg())
+        capture = self.finish(name)
+        viewed = V.view(*self.args, capture, name + "-view", viewed=True, reviewer_dispatch=reviewer)
+        return capture, viewed
+
+    def judgment(self, name, capture, viewed, gate="PASS", findings=None, **options):
+        return V.review(*self.args, capture, viewed, name, gate=gate, findings=findings or [], **options)
 
     def test_png_and_jpeg_actual_bytes_dimensions_timing_viewing_and_readonly_status(self):
         self.assertEqual(self.inspect()["status"], "capture_pending")
@@ -222,10 +232,129 @@ class VisualTests(unittest.TestCase):
         self.image(begun, jpeg())
         captured = cli("visual-finish", "--receipt", "fixture", "--requirement", declaration, "--name", "cli",
                        "--json", json.dumps(self.surface), "--host-stopped", "--stop-evidence", "fixture host returned")["report"]
-        cli("visual-view", "--receipt", "fixture", "--capture", captured, "--name", "cli-view", "--viewed")
+        viewed = cli("visual-view", "--receipt", "fixture", "--capture", captured, "--name", "cli-view", "--viewed")["report"]
         self.assertEqual(cli("visual-inspect", "--run-id", self.args[1], "--requirement", declaration)["status"], "view_declared")
+        cli("visual-review", "--receipt", "fixture", "--capture", captured, "--view", viewed,
+            "--name", "cli-review", "--json", '{"gate":"PASS","findings":[]}')
+        self.assertEqual(cli("visual-inspect", "--run-id", self.args[1], "--requirement", declaration)["review"], "PASS")
         with self.assertRaises(ValueError):
             V.begin(*self.args, self.requirement, "v" + self.args[2])
+
+    def test_small_ui_no_findings_one_self_review_without_extra_role(self):
+        capture, viewed = self.captured_view("small")
+        ref = self.judgment("review", capture, viewed)
+        result = self.inspect()
+        self.assertEqual((result["status"], result["review"]), ("review_declared", "PASS"))
+        self.assertFalse(result["native_proof"])
+        self.assertFalse(R.status(self.root)["state"].get("role_dispatches"))
+        with self.assertRaises(FileExistsError):
+            self.judgment("review", capture, viewed)
+        before = (self.root / ref).read_bytes()
+        (self.root / "source").write_text("changed")
+        self.assertEqual(self.inspect()["status"], "stale_or_unconfirmed")
+        self.assertEqual(before, (self.root / ref).read_bytes())
+
+    def test_find_fix_recapture_review_preserves_failure_and_previous_refs(self):
+        capture, viewed = self.captured_view("before")
+        finding = {"id": "overlap", "summary": "Primary action overlaps adjacent text in target viewport"}
+        failed = self.judgment("failed", capture, viewed, gate="FAIL", findings=[finding])
+        original = (self.root / failed).read_bytes()
+        self.assertEqual(self.inspect()["review"], "FAIL")
+        with self.assertRaisesRegex(ValueError, "retain or explicitly resolve"):
+            self.judgment("quiet-drop", capture, viewed)
+        with self.assertRaisesRegex(ValueError, "new screenshot"):
+            self.judgment("same-image", capture, viewed, resolved=["overlap"])
+        (self.root / "source").write_text("scoped layout correction")
+        revised, new_view = self.captured_view("fixed")
+        self.assertEqual(self.inspect()["review"], "pending")
+        with self.assertRaises(ValueError):
+            self.judgment("wrong-view", revised, viewed, resolved=["overlap"])
+        accepted = self.judgment("fixed-review", revised, new_view, resolved=["overlap"])
+        proof = E.read_report(self.root, self.args[1], accepted)["payload"]
+        self.assertEqual(proof["previous_review"], failed)
+        self.assertEqual(self.inspect()["review"], "PASS")
+        self.assertEqual(original, (self.root / failed).read_bytes())
+        failed_report = json.loads(original)
+        failed_report["payload"]["findings"][0]["summary"] = "tampered history"
+        (self.root / failed).write_text(json.dumps(failed_report))
+        self.assertEqual(self.inspect()["status"], "stale_or_unconfirmed")
+
+    def test_latest_concerns_cannot_revive_prior_pass_or_ignore_unresolved_findings(self):
+        capture, viewed = self.captured_view("one")
+        self.judgment("old-pass", capture, viewed)
+        finding = {"id": "spacing", "summary": "Actual target spacing is inconsistent with approved neighbor"}
+        self.judgment("concerns", capture, viewed, gate="CONCERNS", findings=[finding])
+        self.assertEqual(self.inspect()["review"], "CONCERNS")
+        next_capture, next_view = self.captured_view("next")
+        with self.assertRaises(ValueError):
+            self.judgment("unresolved", next_capture, next_view)
+        self.judgment("still-concerns", next_capture, next_view, gate="CONCERNS", findings=[finding])
+        self.assertEqual(self.inspect()["review"], "CONCERNS")
+        with self.assertRaises(ValueError):
+            self.judgment("old-image", capture, viewed, gate="CONCERNS", findings=[finding])
+
+    def test_independent_review_requires_actual_current_tester_and_their_view(self):
+        self.requirement = V.declare(*self.args, "important", scope=["source"], **self.surface, review="independent")
+        capture, self_view = self.captured_view("important")
+        with self.assertRaisesRegex(ValueError, "independent"):
+            self.judgment("self-is-not-independent", capture, self_view)
+        with self.assertRaises(ValueError):
+            V.view(*self.args, capture, "fake", viewed=True, reviewer_dispatch="not-a-dispatch")
+        developer = D.begin(*self.args, "developer")
+        D.accepted(*self.args, developer["id"], "developer", host_executor_id="host-dev")
+        with self.assertRaises(ValueError):
+            V.view(*self.args, capture, "developer-review", viewed=True, reviewer_dispatch=developer["id"])
+        tester = D.begin(*self.args, "tester")
+        with self.assertRaises(ValueError):
+            V.view(*self.args, capture, "not-accepted", viewed=True, reviewer_dispatch=tester["id"])
+        D.accepted(*self.args, tester["id"], "tester", host_executor_id="host-tester")
+        with self.assertRaises(ValueError):
+            self.judgment("wrong-observer", capture, self_view, reviewer_dispatch=tester["id"])
+        tester_view = V.view(*self.args, capture, "tester-view", viewed=True, reviewer_dispatch=tester["id"])
+        self.judgment("independent", capture, tester_view, reviewer_dispatch=tester["id"])
+        self.assertEqual(self.inspect()["review"], "PASS")
+        self.assertFalse(self.inspect()["native_proof"])
+
+    def test_review_requires_current_untampered_view_and_truthful_findings(self):
+        capture, viewed = self.captured_view("one")
+        for gate, findings in (("PASS", [{"id": "actual", "summary": "Still unresolved"}]),
+                               ("FAIL", []), ("score-100", [])):
+            with self.assertRaises(ValueError):
+                self.judgment("bad-judgment", capture, viewed, gate=gate, findings=findings)
+        self.judgment("valid", capture, viewed)
+        path = self.root / viewed
+        report = json.loads(path.read_text())
+        report["payload"]["viewed"] = False
+        path.write_text(json.dumps(report))
+        self.assertEqual(self.inspect()["status"], "stale_or_unconfirmed")
+        T.start(*self.args, "next", "new UI task", ["observe"])
+        with self.assertRaises(ValueError):
+            self.judgment("old-task", capture, viewed)
+
+    def test_old_task_developer_can_review_new_task_but_current_implementer_cannot(self):
+        T.start(*self.args, "old", "old UI", ["observe"])
+        old = D.begin(*self.args, "developer")
+        D.accepted(*self.args, old["id"], "old-dev", host_executor_id="host-reused")
+        D.complete(*self.args, old["id"], executors_stopped=True, stop_evidence="fixture old task stopped")
+        T.end(*self.args, "old")
+        T.start(*self.args, "current", "current UI", ["observe"])
+        self.requirement = V.declare(*self.args, "current", scope=["source"], **self.surface, review="independent")
+        capture, _ = self.captured_view("current")
+        tester = D.begin(*self.args, "tester")
+        D.accepted(*self.args, tester["id"], "current-tester", host_executor_id="host-reused")
+        viewed = V.view(*self.args, capture, "current-tester-view", viewed=True, reviewer_dispatch=tester["id"])
+        self.judgment("current-review", capture, viewed, reviewer_dispatch=tester["id"])
+        developer = D.begin(*self.args, "developer")
+        D.accepted(*self.args, developer["id"], "current-dev", host_executor_id="host-reused")
+        with self.assertRaisesRegex(ValueError, "implementation executor"):
+            V.view(*self.args, capture, "same-host", viewed=True, reviewer_dispatch=tester["id"])
+        # Executor identity alone is also disallowed when a host mapping is unknown.
+        state = R.status(self.root)["state"]
+        state["role_dispatches"][-1].pop("host_executor_id")
+        state["role_dispatches"][-1]["executor_id"] = "current-tester"
+        R._atomic(self.root / "tmp/pipeline/runs" / (self.args[1] + ".json"), state)
+        with self.assertRaisesRegex(ValueError, "implementation executor"):
+            V.view(*self.args, capture, "same-executor", viewed=True, reviewer_dispatch=tester["id"])
 
 
 if __name__ == "__main__":
