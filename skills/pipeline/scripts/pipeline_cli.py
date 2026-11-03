@@ -13,14 +13,11 @@ import run_checks as C
 import run_evidence as E
 import run_state as R
 import role_dispatch as D
+import resource_paths
 
 
-def paths():
-    skill = Path(__file__).resolve().parents[1]
-    candidates = {"skill": skill / "SKILL.md", "runner": Path(__file__).resolve(),
-                  "developer": skill.parent.parent / "agents/pipeline-developer.md"}
-    return {"paths": {key: str(p) for key, p in candidates.items() if p.is_file()},
-            "unavailable": [key for key, p in candidates.items() if not p.is_file()]}
+def paths(project=None):
+    return resource_paths.discover(Path(__file__), project=project)
 
 
 def _receipt(root, value):
@@ -62,7 +59,8 @@ def _optional_audit(root, run_id):
 def parser():
     cli = argparse.ArgumentParser(description=__doc__)
     sub = cli.add_subparsers(dest="action", required=True)
-    sub.add_parser("paths", help="resolve installed skill, runner and developer paths without starting a run")
+    resources = sub.add_parser("paths", allow_abbrev=False, help="resolve real installed resources without starting a run")
+    resources.add_argument("--project", help="validate project root; resource paths remain anchored to the runner")
     audit = sub.add_parser("audit", help="read a safe existing audit; --live computes metadata in memory only")
     audit.add_argument("--project", default=".")
     audit.add_argument("--run-id", required=True)
@@ -207,7 +205,7 @@ def parser():
 
 def dispatch(args):
     if args.action == "paths":
-        return paths(), 0
+        return paths(args.project), 0
     if args.action in {"audit", "scan"}:
         import run_audit as A
         result = A.audit(args.project, args.run_id, live=args.live) if args.action == "audit" else A.scan(args.project, args.limit)

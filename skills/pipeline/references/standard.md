@@ -33,10 +33,10 @@
 
 ### 直通调用（由智能体执行）
 
-runner为本skill实际目录的`scripts/pipeline_cli.py`；`paths`返回真实存在的skill、runner和developer路径，不猜agents/developer.md或run_dispatch.py。常用命令如下，私有receipt由start返回并由当前调度上下文保存，用户无需配置：
+runner为本skill实际目录的`scripts/pipeline_cli.py`；`paths --project <root>`返回真实存在的skill、runner、各角色、release_runner、模板、init_project及hook路径，保留原skill/runner/developer字段。资源从实际runner位置跟随安装软链接解析，与业务项目目录分开；unavailable列出缺失资源，不猜templates位于skill内或使用项目同名文件补齐。缺少必要资源时报告安装缺口，不凭空拼路径。调用参数不确定先读该入口`--help`，再用已有preflight核对真实cwd/运行器；未知参数应在操作前纠正，静态快检不代替业务或上线验收。常用命令如下，私有receipt由start返回并由当前调度上下文保存，用户无需配置：
 
 ```sh
-python3 <runner> paths
+python3 <runner> paths --project <root>
 python3 <runner> status --project <root>
 python3 <runner> start --project <root> --stage review
 # 读取本轮适用规则后，使用start返回的policy.revision确认；不是让用户填写。
