@@ -361,6 +361,80 @@ class PlanTests(unittest.TestCase):
         proof = E.read_report(self.root, self.run, first["report"])["payload"]
         self.assertEqual(proof["coverage"], qa["required_checks"])
 
+    def test_first_binding_reuses_direct_check_only_with_explicit_impact_confirmation(self):
+        self.check["argv"][-1] = "from pathlib import Path; p=Path('count'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1')"
+        direct = C.execute_check(self.root, self.run, self.owner, "direct", **self.check)
+        plan = self.save()
+        with patch.object(C.subprocess, "Popen", side_effect=AssertionError("must reuse direct check")):
+            bound = self.execute(plan, "bound", impact_covered=True)
+        self.assertTrue(bound["reused"])
+        self.assertEqual(bound["report"], direct["report"])
+        self.assertEqual((self.root / "count").read_text(), "1")
+        binding = E.read_report(self.root, self.run, bound["planned_report"])["payload"]
+        self.assertNotIn("carried_from_plan", binding)
+        self.assertEqual(self.qa(plan)["gate"], "PASS")
+        for index, options in enumerate(({}, {"impact_covered": False})):
+            other = self.save(name=f"unconfirmed-{index}")
+            self.assertFalse(self.execute(other, f"fresh-{index}", **options)["reused"])
+        self.assertEqual((self.root / "count").read_text(), "3")
+
+    def test_first_binding_keeps_strict_direct_evidence_guards(self):
+        for case in ("input", "environment", "log", "coverage", "command", "cwd", "failure"):
+            with self.subTest(case=case):
+                (self.root / "input").write_text("stable")
+                check = {**self.check, "argv": [sys.executable, "-B", "-c", f"print({case!r})"]}
+                if case == "failure":
+                    check["argv"][-1] = "from pathlib import Path; raise SystemExit(int(Path('fail-direct').exists()))"
+                direct = C.execute_check(self.root, self.run, self.owner, f"direct-{case}", **check)
+                if case == "input":
+                    (self.root / "input").write_text("changed")
+                elif case == "environment":
+                    check["environment"] = {"fixture": "changed"}
+                elif case == "log":
+                    proof = E.read_report(self.root, self.run, direct["report"])["payload"]
+                    (self.root / proof["log_path"]).write_text("changed log")
+                elif case == "coverage":
+                    check["coverage"] = ["different"]
+                elif case == "command":
+                    check["argv"] = [*check["argv"][:-1], "print('changed command')"]
+                elif case == "cwd":
+                    (self.root / "package").mkdir()
+                    check["cwd"] = "package"
+                elif case == "failure":
+                    (self.root / "fail-direct").touch()
+                    failed = C.execute_check(self.root, self.run, self.owner, "later-failure", **check)
+                    self.assertEqual(failed["exit_code"], 1)
+                plan = self.save({"unit": check}, name=f"plan-{case}")
+                result = self.execute(plan, f"bound-{case}", impact_covered=True)
+                self.assertFalse(result["reused"])
+                self.assertEqual(result["exit_code"], 1 if case == "failure" else 0)
+
+    def test_first_binding_preflight_allows_only_current_direct_reuse_under_resource_conflict(self):
+        C.execute_check(self.root, self.run, self.owner, "direct", **self.check)
+        plan = self.save()
+        state = R.status(self.root)["state"]
+        state["running_checks"] = [{"name": "running", "write_paths": None}]
+        R._atomic(self.root / "tmp/pipeline/runs" / (self.run + ".json"), state)
+        before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        self.assertTrue(P.preflight_plan(self.root, self.run, self.owner, plan, "cached")["ready"])
+        self.assertEqual(before, {p.relative_to(self.root): p.read_bytes()
+                                  for p in self.root.rglob("*") if p.is_file()})
+        result = P.verify_plan(self.root, self.run, self.owner, plan, "cached")
+        self.assertEqual(result["gate"], "PASS")
+        self.assertTrue(result["results"][0]["reused"])
+        self.assertEqual(R.status(self.root)["state"]["running_checks"], state["running_checks"])
+        (self.root / "input").write_text("changed")
+        self.assertFalse(P.preflight_plan(self.root, self.run, self.owner, plan, "stale")["ready"])
+        with self.assertRaisesRegex(ValueError, "conflict"):
+            self.execute(plan, "stale", impact_covered=True)
+
+    def test_direct_final_evidence_cannot_bypass_missing_dependency_binding(self):
+        plan, _, final = self.quick_plan()
+        C.execute_check(self.root, self.run, self.owner, "direct-final", **P._execution_spec(final))
+        with self.assertRaisesRegex(ValueError, "valid quick evidence: unit"):
+            self.execute(plan, "bound-final", key="final", impact_covered=True)
+        self.assertEqual(self.qa(plan)["gate"], "CONCERNS")
+
     def test_unexecuted_and_partial_shared_coverage_are_concerns(self):
         plan = self.save({"unit": self.check, "other": copy.deepcopy(self.check)})
         self.assertEqual(self.qa(plan)["gate"], "CONCERNS")

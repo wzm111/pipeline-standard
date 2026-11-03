@@ -229,10 +229,10 @@ def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=Fa
                                                candidate_plan, check_id, check, snapshot)[0] is not None
     result = C.execute_check(root, run_id, owner, name, **args,
                              reuse_from=previous["result"]["report"] if previous else None,
-                             impact_covered=impact_covered is True and reusable)
+                             impact_covered=impact_covered is True and (previous is None or reusable))
     payload = {"plan_ref": plan_ref, "plan_sha256": _cached_digest(root, plan_ref, snapshot),
                "check_id": check_id, "result": result}
-    if result["reused"] and (candidate_plan != plan_ref or previous.get("carried_from_plan")):
+    if result["reused"] and previous and (candidate_plan != plan_ref or previous.get("carried_from_plan")):
         origin = previous.get("carried_from_plan", candidate_plan)
         payload.update(carried_from_plan=origin,
                        carried_from_plan_sha256=_cached_digest(root, origin, snapshot))
@@ -434,6 +434,10 @@ def preflight_plan(root, run_id, owner, plan_ref, name):
                 source, binding = _reuse_candidate(root, run_id, owner, state, plan_ref, key, check, snapshot, True)
                 reusable = binding is not None and _valid(
                     root, run_id, owner, state, source, key, check, snapshot)[0] is not None
+                if binding is None:
+                    reusable = C.inspect_reuse(root, run_id, argv=check["argv"], scope=check["scope"],
+                        intent=check.get("intent", "test"), environment=check.get("environment"),
+                        coverage=check["coverage"], cwd=check.get("cwd"), impact_covered=True)["reusable"]
                 if not reusable:
                     if not runner["resources"]["safe_to_execute"]:
                         fail(key, "resources", runner["resources"]["status"])
