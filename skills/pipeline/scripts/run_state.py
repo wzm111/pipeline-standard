@@ -202,6 +202,9 @@ def update(project_root, run_id, owner_token, changes):
             raise ValueError("only a running run can be updated")
         previous = (state.get("stage"), state.get("activity", "execution"))
         state.update(deepcopy(changes))
+        if {"stage", "activity"} & changes.keys():
+            # Explicit same-value main updates also supersede pending role bindings.
+            state["progress_revision"] = state.get("progress_revision", 0) + 1
         state["updated_at"] = _now()
         if previous != (state.get("stage"), state.get("activity", "execution")):
             state["history"].append(_event(state, "transition", state["updated_at"]))

@@ -8,6 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills/pipeline/scripts"))
 import role_dispatch as D
 import run_state as R
+import run_tasks as T
 
 
 class RoleDispatchTests(unittest.TestCase):
@@ -145,6 +146,123 @@ class RoleDispatchTests(unittest.TestCase):
         fresh = D.begin(*self.args, "developer")
         D.accepted(*self.args, fresh["id"], "new-dev")
         self.done(fresh)
+
+    def test_opted_in_phase_changes_only_at_acceptance_and_is_idempotent(self):
+        R.update(*self.args, {"stage": "implementation", "activity": "execution"})
+        ticket = D.begin(*self.args, "tester", workflow_phase="verification")
+        self.assertEqual(R.status(self.root)["state"]["stage"], "implementation")
+        accepted = D.accepted(*self.args, ticket["id"], "qa")
+        self.assertTrue(accepted["workflow_applied"])
+        state = R.status(self.root)["state"]
+        self.assertEqual((state["stage"], state["activity"]), ("verification", "testing"))
+        self.assertEqual(state["history"][-1]["at"], accepted["accepted_at"])
+        self.assertEqual(D.accepted(*self.args, ticket["id"], "qa"), accepted)
+        self.assertEqual(R.status(self.root)["state"]["history"], state["history"])
+
+    def test_failed_or_unaccepted_phase_request_does_not_claim_qa_entry(self):
+        before = R.status(self.root)["state"]
+        ticket = D.begin(*self.args, "tester", workflow_phase="verification")
+        with self.assertRaisesRegex(ValueError, "accepted working"):
+            D.wait_for_dispatches(*self.args, [ticket["id"]])
+        self.done(ticket, "failed")
+        state = R.status(self.root)["state"]
+        self.assertEqual(state["history"], before["history"])
+        self.assertEqual((state["stage"], state["activity"]), (before["stage"], before["activity"]))
+
+    def test_background_roles_and_stale_phase_requests_preserve_explicit_main_state(self):
+        R.update(*self.args, {"stage": "implementation", "activity": "execution"})
+        background = D.begin(*self.args, "tester")
+        D.accepted(*self.args, background["id"], "background")
+        self.assertEqual(R.status(self.root)["state"]["stage"], "implementation")
+        primary = D.begin(*self.args, "tester", workflow_phase="verification")
+        R.update(*self.args, {"stage": "review", "activity": "execution"})
+        accepted = D.accepted(*self.args, primary["id"], "primary")
+        self.assertFalse(accepted["workflow_applied"])
+        self.assertEqual(R.status(self.root)["state"]["stage"], "review")
+
+    def test_parallel_selected_wait_reaches_handoff_only_after_all_return(self):
+        tickets = [D.begin(*self.args, role) for role in ("developer", "tester", "scope_guardian")]
+        for index, ticket in enumerate(tickets):
+            D.accepted(*self.args, ticket["id"], "actor" + str(index))
+        waiting = D.wait_for_dispatches(*self.args, [item["id"] for item in tickets[:2]])
+        history = R.status(self.root)["state"]["history"]
+        self.assertEqual(D.wait_for_dispatches(*self.args, [item["id"] for item in tickets[:2]]), waiting)
+        self.assertEqual(R.status(self.root)["state"]["history"], history)
+        self.done(tickets[2])  # A background return cannot close the selected wait.
+        self.assertEqual(R.status(self.root)["state"]["activity"], "role_wait")
+        self.done(tickets[0])
+        self.assertEqual(R.status(self.root)["state"]["activity"], "role_wait")
+        self.assertEqual(D.wait_for_dispatches(*self.args, [item["id"] for item in tickets[:2]]), waiting)
+        done = self.done(tickets[1], "failed")
+        state = R.status(self.root)["state"]
+        self.assertEqual(state["activity"], "handoff")
+        self.assertEqual(state["history"][-1]["at"], done["completed_at"])
+        self.done(tickets[1], "failed")
+        self.assertEqual(R.status(self.root)["state"]["history"], state["history"])
+
+    def test_human_wait_wins_over_phase_acceptance_and_role_return(self):
+        ticket = D.begin(*self.args, "tester", workflow_phase="verification")
+        R.update(*self.args, {"activity": "human_wait"})
+        self.assertFalse(D.accepted(*self.args, ticket["id"], "qa")["workflow_applied"])
+        with self.assertRaisesRegex(ValueError, "human wait"):
+            D.wait_for_dispatches(*self.args, [ticket["id"]])
+        R.update(*self.args, {"activity": "testing"})
+        D.wait_for_dispatches(*self.args, [ticket["id"]])
+        R.update(*self.args, {"activity": "human_wait"})
+        self.done(ticket)
+        self.assertEqual(R.status(self.root)["state"]["activity"], "human_wait")
+
+    def test_explicit_main_transition_invalidates_wait_even_if_activity_returns(self):
+        ticket = D.begin(*self.args, "tester")
+        D.accepted(*self.args, ticket["id"], "qa")
+        D.wait_for_dispatches(*self.args, [ticket["id"]])
+        R.update(*self.args, {"activity": "execution"})
+        R.update(*self.args, {"activity": "role_wait"})
+        before = R.status(self.root)["state"]["history"]
+        self.done(ticket)
+        self.assertEqual(R.status(self.root)["state"]["activity"], "role_wait")
+        self.assertEqual(R.status(self.root)["state"]["history"], before)
+
+    def test_same_value_main_update_and_new_task_supersede_pending_phase(self):
+        for kind in ("same-value", "task"):
+            with self.subTest(kind=kind):
+                ticket = D.begin(*self.args, "tester", workflow_phase="verification")
+                state = R.status(self.root)["state"]
+                if kind == "same-value":
+                    R.update(*self.args, {"stage": state["stage"], "activity": state["activity"]})
+                else:
+                    T.start(*self.args, "new-task", "new goal", ["observed"])
+                accepted = D.accepted(*self.args, ticket["id"], kind)
+                self.assertFalse(accepted["workflow_applied"])
+                self.done(ticket)
+
+    def test_same_value_update_supersedes_registered_wait_without_duplicate_transition(self):
+        ticket = D.begin(*self.args, "tester")
+        D.accepted(*self.args, ticket["id"], "qa")
+        D.wait_for_dispatches(*self.args, [ticket["id"]])
+        R.update(*self.args, {"activity": "role_wait"})
+        before = R.status(self.root)["state"]["history"]
+        self.done(ticket)
+        self.assertEqual(R.status(self.root)["state"]["history"], before)
+        self.assertEqual(R.status(self.root)["state"]["activity"], "role_wait")
+
+    def test_foreground_check_or_host_claim_prevents_role_wait_and_phase_takeover(self):
+        for field, claim in (("running_checks", [{"name": "foreground", "write_paths": []}]),
+                             ("observed_checks", {"host": {"status": "running"}})):
+            with self.subTest(field=field):
+                with R._write_guard(self.root) as base:
+                    path, state = R._load_owned(base, self.s["run_id"], self.s["owner_token"])
+                    state[field] = claim
+                    R._atomic(path, state)
+                ticket = D.begin(*self.args, "tester", workflow_phase="verification")
+                self.assertFalse(D.accepted(*self.args, ticket["id"], field)["workflow_applied"])
+                with self.assertRaisesRegex(ValueError, "foreground checks"):
+                    D.wait_for_dispatches(*self.args, [ticket["id"]])
+                self.done(ticket)
+                with R._write_guard(self.root) as base:
+                    path, state = R._load_owned(base, self.s["run_id"], self.s["owner_token"])
+                    state.pop(field)
+                    R._atomic(path, state)
 
 
 if __name__ == "__main__":

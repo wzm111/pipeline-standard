@@ -9,6 +9,10 @@
 
 同一角色后续新批次先begin续用，不冷启动替代。幂等重复accepted/complete不增加事件；不允许把closed结果改成另一结论。恢复前后未接受的旧派发先按真实停止情况关闭，再发新请求，不把中断空档算作工作。
 
+实际派发代表主流程进入实现或独立验收时，begin显式传`workflow_phase="implementation"`或`"verification"`；accepted确认宿主接受后，分别切换主run到implementation/execution或verification/testing，并用当下时间记录原history transition。begin本身不切换；创建失败不算进入QA。默认省略用于后台/并行角色，不根据tester等角色名抢写主阶段。请求期间若发生主状态显式更新（包括同值更新）、任务边界、人工等待或仍有前台检查/宿主观察，旧请求不覆盖现场，返回workflow_applied=false；需要切换时由调度员按实际状态显式update。
+
+主会话确实开始等待已接受的角色时调用`wait_for_dispatches(root, run_id, owner_token, [ticket_a['id'], ticket_b['id']])`，只登记本次真正等待的集合。存在人工等待或未闭合前台检查/宿主观察时拒绝；不从角色数量推断等待。所选派发全部经complete确认停止后才把同一主状态的role_wait切到handoff；任一个仍在工作、后台角色单独返回或期间另有主状态/任务变化，都不提前切换。failed/interrupted也只是已返回待处理，handoff不表示QA通过或任务完成。重复登记同一等待和重复accepted/complete不新增transition；只记录真实调用时间，不补历史。原stop、QA与finish门禁仍适用。
+
 需要核对模型是否真正传参时，begin可加`native_parameters={"model": "实际传值", "reasoning_effort": "实际传值", "fork_turns": "none"}`；Claude使用其原生effort字段，省略宿主未传字段。只记录模型/强度/上下文继承方式，不存prompt或凭据。显式请求与提供的原生参数必须相符；旧调用不传该字段仍兼容，但不能据此声称已验证传参。accepted可加`host_executor_id="宿主实际返回的ID"`关联本run短别名，续用保持映射不变。登记是调度员记录，仍需实际原生调用与返回证据，不能将记录本身当宿主证明。
 
 role_dispatch.summary只读输出请求/实际反馈、尝试状态与role_metrics的区间并集。未知实际模型和token保持unknown，不根据API单价或请求推算。finish只对接入本适配器且尚未闭合的派发拒绝收口，不能据此声称所有宿主工具都已被强制拦截。
