@@ -306,8 +306,14 @@ class PipelineCliTests(unittest.TestCase):
         self.assertFalse(any("/qa/" in p for p in state["artifacts"]))
 
     def test_report_then_stopped_direct_finish_preserves_delivery_evidence(self):
-        self.start()
+        started = self.start()
         checked = self.check("unit")
+        # Fast direct work still needs machine acceptance, but no plan, task
+        # segmentation, role dispatch or duplicate check execution.
+        blocked = self.cli("finish", "--receipt", self.receipt, "--direct", "--stopped",
+                           "--stop-evidence", "fixture commands ended", expected=2)
+        self.assertIn("machine-validated QA", blocked["message"])
+        self.assertIsNotNone(R.status(self.root)["active"])
         self.cli("update", "--receipt", self.receipt, "--stage", "acceptance", "--activity", "testing")
         self.cli("report", "--receipt", self.receipt, "--kind", "qa", "--name", "final", "--json",
                  json.dumps({"gate":"PASS", "checks": [checked["report"]], "required_checks":["unit-fixture"]}))
@@ -318,6 +324,11 @@ class PipelineCliTests(unittest.TestCase):
         self.assertTrue(final["delivery_sealed"])
         self.assertTrue(final["coverage_complete"])
         self.assertIsNone(R.status(self.root)["active"])
+        state = R.status(self.root, started["run_id"])["state"]
+        self.assertFalse(state.get("check_plans"))
+        self.assertFalse(state.get("tasks"))
+        self.assertFalse(state.get("role_dispatches"))
+        self.assertEqual((self.root / "counter").read_text(), "1")
 
     def test_legacy_finish_explains_missing_reusable_categories_without_promoting_qa(self):
         # Preserve the old incomplete-delivery diagnostic only for explicit
