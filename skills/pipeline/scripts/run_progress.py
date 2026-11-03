@@ -1,0 +1,134 @@
+"""Bounded read-only progress, never a health probe or acceptance judgment."""
+import hashlib
+import json
+import re
+
+import run_evidence as E
+import run_state as R
+
+LIMIT = 20
+REPORT_LIMIT = 200
+NOTICE = "Registered results only; freshness, host health and acceptance are not revalidated."
+
+
+def snapshot(root, run_id=None):
+    before = R.status(root, run_id)
+    state = before["state"] or {}
+    identity = state.get("run_id", run_id)
+    owner = state.get("owner_token", "")
+
+    def label(value):
+        return value if (isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}", value)
+                         and not (owner and owner in value)) else "unknown"
+
+    def stamp(value):
+        try:
+            return R._timestamp(value).isoformat() if isinstance(value, str) else None
+        except (ValueError, TypeError, OverflowError):
+            return None
+
+    tasks = state.get("tasks", [])
+    task = tasks[-1] if tasks else None
+    start = stamp(task.get("started_at")) if task else stamp(state.get("created_at"))
+    reports, unavailable = [], 0
+    refs = state.get("artifacts", [])
+    for ref in refs[-REPORT_LIMIT:]:
+        if not isinstance(ref, str) or not re.fullmatch(
+                rf"tmp/pipeline/runs/{identity}/artifacts/(check|planned_check|check_plan)/[a-z][a-z0-9_-]{{0,63}}\.json", ref):
+            continue
+        try:
+            report = E.read_report(root, identity, ref)
+            at = stamp(report["recorded_at"])
+            if not at or not isinstance(report["payload"], dict):
+                raise ValueError("invalid progress record")
+            if start and R._timestamp(at) < R._timestamp(start):
+                continue
+            reports.append((ref, report))
+        except (OSError, ValueError, TypeError, KeyError):
+            unavailable += 1
+    by_ref = dict(reports)
+    plans = [(ref, r) for ref, r in reports if r["kind"] == "check_plan" and ref in state.get("check_plans", {})]
+    plan_ref, plan = plans[-1] if plans else (None, None)
+    bindings = {r["payload"].get("check_id"): r["payload"] for _, r in reports
+                if r["kind"] == "planned_check" and r["payload"].get("plan_ref") == plan_ref}
+
+    def check_identity(proof):
+        return json.dumps([proof.get("command"), proof.get("scope"), proof.get("cwd", "."),
+                           proof.get("intent", "test")], sort_keys=True)
+
+    latest = {}
+    last_result_at = None
+    for ref, report in reports:
+        if report["kind"] != "check":
+            continue
+        proof = report["payload"]
+        latest[check_identity(proof)] = ref
+        at = stamp(proof.get("finished_at"))
+        if (at and not proof.get("inherited_from")
+                and (not start or R._timestamp(at) >= R._timestamp(start))
+                and R._timestamp(at) <= R._timestamp(report["recorded_at"])
+                and (last_result_at is None or R._timestamp(at) > R._timestamp(last_result_at))):
+            last_result_at = at
+    completed, remaining = [], []
+    checks = plan["payload"].get("checks", {}) if plan else {}
+    for key in checks:
+        binding = bindings.get(key, {})
+        source = binding.get("result", {}).get("report")
+        report = by_ref.get(source)
+        proof = report["payload"] if report and report["kind"] == "check" else None
+        # A later observation wins even if recorded under a different coverage label.
+        if proof is not None:
+            proof = by_ref[latest[check_identity(proof)]]["payload"]
+        result = "not_observed"
+        if proof is not None:
+            result = ("recorded_failure" if proof.get("exit_code") != 0 else
+                      "recorded_success" if proof.get("inputs_stable") is True else "unconfirmed_inputs")
+        item = {"step": label(key), "result": result,
+                "finished_at": stamp(proof.get("finished_at")) if proof else None}
+        (completed if result == "recorded_success" else remaining).append(item)
+    active_checks = [{"step": label(item.get("name")), "started_at": stamp(item.get("started_at"))}
+                     for item in state.get("running_checks", [])]
+    roles = [{"role": label(item.get("role")), "status": item["status"]}
+             for item in state.get("role_dispatches", []) if item.get("status") in {"working", "dispatching"}]
+    waiting = state.get("continuity_wait", {}).get("status") == "waiting"
+    blockers = (["user_action_required"] if waiting else [])
+    if any(item["result"] == "recorded_failure" for item in remaining):
+        blockers.append("recorded_check_failure")
+    status = state.get("status") if state.get("status") in {"running", *R.FINAL} else "unknown"
+    badge = ("🔴[需你处理]" if waiting else "🟠[修复中]" if blockers else
+             "✅[已完成]" if status == "completed" else "⏳[等待中]" if roles or active_checks else "🔎[待核实]")
+    result = {"run_id": identity, "task_id": label(task.get("task_id")) if task else None,
+              "status": status, "stage": label(state.get("stage")),
+              "activity": state.get("activity") if state.get("activity") in R.ACTIVITIES else "unknown",
+              "badge": badge, "current": {"checks": active_checks[:LIMIT], "roles": roles[:LIMIT]},
+              "completed": completed[:LIMIT], "remaining": remaining[:LIMIT], "blockers": blockers,
+              "counts": {"recorded_success": len(completed), "remaining": len(remaining),
+                         "planned": len(checks) if plan else None},
+              "next": "user_action_then_verify" if waiting else "inspect_remaining" if remaining else
+                      "review_current_qa" if plan and status == "running" else
+                      "none" if status == "completed" else "inspect_host_and_plan",
+              "last_result_at": last_result_at, "state_updated_at": stamp(state.get("updated_at")),
+              "unavailable_records": unavailable,
+              "truncated": len(refs) > REPORT_LIMIT or any(len(items) > LIMIT for items in (completed, remaining, active_checks, roles)),
+              "notice": NOTICE}
+    # Do not manufacture a new milestone from a state timestamp-only refresh.
+    result["milestone_id"] = hashlib.sha256(json.dumps(
+        {k: v for k, v in result.items() if k != "state_updated_at"}, sort_keys=True).encode()).hexdigest()
+    if R.status(root, run_id) != before:
+        raise ValueError("run changed during progress snapshot; recheck progress")
+    return result
+
+
+def render(value):
+    def names(items):
+        return ", ".join(item["step"] for item in items) or "未登记"
+    current = names(value["current"]["checks"])
+    if value["current"]["roles"]:
+        current += "；等待角色反馈：" + ", ".join(item["role"] for item in value["current"]["roles"])
+    next_step = {"user_action_then_verify": "完成原人工动作后验证", "inspect_remaining": "核对剩余步骤及其证据",
+                 "review_current_qa": "复核当前QA和收口条件", "none": "本地任务已登记结束",
+                 "inspect_host_and_plan": "核对宿主反馈和当前计划"}[value["next"]]
+    return (f"{value['badge']} 当前任务：{value['task_id'] or '未分段'}；阶段：{value['stage']}；当前步骤：{current}。\n"
+            f"已记录成功：{names(value['completed'])}；剩余/待核实：{names(value['remaining'])}；"
+            f"阻塞：{', '.join(value['blockers']) or '未登记'}。最近检查结果：{value['last_result_at'] or '未知'}。下一步：{next_step}。\n"
+            "以上为登记记录，未重新核验有效性或宿主健康；无计划时剩余步骤未知，截断时需查看当前计划。")
