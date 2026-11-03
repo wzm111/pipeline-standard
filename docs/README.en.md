@@ -12,6 +12,7 @@ Describe a task in your coding-agent session. Pipeline helps the agent define sc
 - **Bounded scope:** unrelated findings are recorded instead of becoming extra development work.
 - **Visible progress:** see the current action, last meaningful result, remaining steps, and blockers.
 - **Evidence-aware checks:** reuse results only while command, working directory, inputs, environment, logs, and provenance remain valid.
+- **Visual inspection:** UI work follows the existing design and records actual screenshots, viewing, and review. Missing observations remain pending.
 - **Local diagnostics:** preview local run records without an automatic report-upload service.
 
 Use it for feature work, fixes with meaningful acceptance checks, and development-to-release handoffs. For a one-line edit or a simple query, a direct agent request may be sufficient. No fixed speedup or token reduction is promised.
@@ -42,7 +43,7 @@ $pipeline Add search to the list. Verify empty results and clearing the search. 
 
 In Claude Code, use `/pipeline` with the same request.
 
-For a reproducible starting point, follow the [isolated Python walkthrough](TRY-PIPELINE.md#english). It uses synthetic files and the Python standard library, with no external account or production data.
+For a reproducible starting point, follow the [isolated walkthrough](TRY-PIPELINE.md#english), which also includes a synthetic UI task. No business account or production data is required.
 
 Continue naturally:
 
@@ -55,17 +56,66 @@ Continue naturally:
 
 Commit, push, and release permissions are distinct. The workflow does not turn a commit request into permission to deploy or modify another project.
 
+## How development proceeds
+
+The diagram covers development and fixes. Committing or releasing accepted work reuses valid evidence rather than restarting development.
+
+```mermaid
+flowchart TD
+    A["Describe the task"] --> B["Define scope, risk and acceptance"]
+    B --> I{"Choose execution mode"}
+    I -->|Simple| J["Work in the current session"]
+    I -->|Complex| K["Use the necessary roles"]
+    J --> C["Implement and run targeted checks<br/>Critical boundaries first"]
+    K --> C
+    C --> U{"Does this change visible UI?"}
+    U -->|Yes| V["Follow the existing design<br/>Capture, view and review the actual UI"]
+    U -->|No| D{"Required review and full acceptance passed?"}
+    V --> D
+    D -->|Pass| E["Summarize results and valid evidence<br/>Show viewed UI images"]
+    D -->|Fix is in scope and below the limit| G["Fix failed items and affected behavior<br/>Run targeted verification"]
+    G --> U
+    D -->|Blocked, limit reached or decision needed| H["Keep failures and pending checks<br/>Report required conditions or user action"]
+    E --> F["Commit or deliver within authorization"]
+```
+
+Small, low-risk tasks use fast mode in the current session. Standard mode uses only the roles needed for the task; thorough mode covers high-risk work and required human gates. Testing allows at most three rejection rounds per batch; scope review allows two. Reaching a limit stops the loop. A release failure does not automatically authorize development fixes.
+
+UI tasks use an applicable design skill already available in the host, or the built-in design checks. Existing project styles and components remain the baseline. The agent declares the required surfaces, viewports, states, version and complete inputs; it then records actual screenshots, viewing and review. Changes invalidate affected old evidence. Small changes can be self-reviewed; important or substantial changes use proportionate independent review. The final response shows actual viewed images and unverified limitations.
+
+Declared UI requirements participate in managed QA and completion checks. **Tools validate evidence bindings and completeness; aesthetic judgment remains the actual observer's responsibility.** Missing browser access, images or required states remain pending. Builds and DOM checks alone do not establish visual acceptance. See [visual acceptance](../skills/pipeline/references/visual.md).
+
+## How accepted work is released
+
+A commit-only request does not run deployment steps. For releases, reuse valid evidence and perform necessary target-environment checks. The diagram describes projects that separate candidate creation from activation. Monolithic project scripts retain their actual execution boundaries.
+
+```mermaid
+flowchart TD
+    R["Accepted work and release authorization"] --> P["Explicitly carry forward valid evidence<br/>Check the target and actual runner"]
+    P --> S["Freeze source, version and metadata"]
+    S --> B["Reuse a valid build or produce a candidate"]
+    B --> Q{"Candidate and pre-release checks passed?"}
+    Q -->|Pass| A["Deliver and activate the same candidate"]
+    A --> M["Check live version and artifact identity<br/>Run necessary smoke checks"]
+    M --> L{"Engineering acceptance passed?"}
+    L -->|Pass| E["Summarize engineering delivery<br/>Unverified platform outcomes stay pending"]
+    Q -->|Fail| H["Keep the checkpoint and failure<br/>Report the blocker without starting new development"]
+    L -->|Fail| H
+```
+
+Do not change version metadata after final candidate acceptance or silently rebuild during activation. Revalidate affected evidence after changes. After interruptions, check the original execution and activation state before retrying. HTTP success, upload completion and downstream platform acceptance are separate results. Multiple native browser checks can join the same [check plan](../skills/pipeline/references/check-plan.md) through exact observed references without fabricated shell commands or new execution time. See [delivery handoffs](../skills/pipeline/references/delivery.md).
+
 ## What you can verify
 
 The tools validate evidence at integrated entry points and retain failed checks. A rule acknowledgement does not prove that a model understood every instruction. Registered `running` state alone does not prove host health. A successful test does not prove deployment or downstream platform acceptance.
 
-Progress scripts produce read-only summaries; the executing agent must actually use them in the conversation. Long host calls can delay visible updates. Claude hooks and Codex's workflow checks have different enforcement boundaries; neither is described as a complete sandbox.
+Progress scripts produce read-only summaries; the executing agent must actually send them in the conversation. Long host calls can delay visible updates. Read-only monitoring does not replace the executor's progress updates, and there is no per-message send-time validator or automatic correction. Loading the skill or acknowledging a revision does not prove message-format compliance. Claude hooks and Codex's workflow checks have different enforcement boundaries; neither is described as a complete sandbox.
 
 Diagnostics are recorded under the project's ignored `tmp/pipeline/` directory. Preview output is restricted to technical metadata; raw logs and private ownership files are not public reporting artifacts. When an agent displays a preview in chat, that text is handled under the host's data policy. Local diagnostic code does not make the whole host offline.
 
 ## Releases and details
 
-Current release: [v3.13.0 — readiness checks, reuse diagnostics, and truthful progress](releases/v3.13.0.md). The complete Chinese guide covers [project setup](../skills/pipeline/references/interaction.md), [check plans](../skills/pipeline/references/check-plan.md), [delivery](../skills/pipeline/references/delivery.md), and [local records](../skills/pipeline/references/audit.md).
+Release notes: [v3.13.0 — readiness checks, reuse diagnostics, and truthful progress](releases/v3.13.0.md). This guide describes the current checkout; consult a fixed tag's own documentation for its capabilities. The complete Chinese guide covers [project setup](../skills/pipeline/references/interaction.md), [check plans](../skills/pipeline/references/check-plan.md), [delivery](../skills/pipeline/references/delivery.md), and [local records](../skills/pipeline/references/audit.md).
 
 Maintainers run `bash tests/run-all.sh` from the repository root. Local tests and CI are implementation evidence; actual project adoption and performance require separate measurements.
 
