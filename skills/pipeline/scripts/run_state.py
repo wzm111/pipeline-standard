@@ -214,32 +214,50 @@ def _stopped(executors_stopped, stop_evidence):
         raise ValueError("caller must confirm all executors stopped and supply evidence")
 
 
+def _finish_readiness(project_root, state, outcome):
+    """Closeout prerequisites independent of the QA that verify will produce."""
+    if outcome == "completed":
+        import run_policy
+        run_policy.require(project_root, state)
+    if state.get("running_checks"):
+        raise ValueError("close running checks after confirmed stop before finishing")
+    if any(t.get("status") == "running" for t in state.get("observed_checks", {}).values()):
+        raise ValueError("close observed host checks after confirmed stop before finishing")
+    if "tasks" in state:
+        import run_tasks
+        if any(item["status"] == "running" for item in run_tasks._tasks(state)):
+            raise ValueError("end the current task explicitly before finishing the run")
+    if any(item.get("status") in {"dispatching", "working"} for item in state.get("role_dispatches", [])):
+        raise ValueError("close observed role dispatches after host stop before finishing")
+    if outcome == "completed":
+        if state.get("continuity_wait", {}).get("status") == "waiting":
+            raise ValueError("resolve the registered human wait before completing")
+        if state.get("release_plan"):
+            import release_checks
+            release_checks.validate_closeout(project_root, state)
+
+
+def preflight_finish(project_root, run_id, owner_token, *, executors_stopped=False, stop_evidence=None):
+    """Read-only readiness before costly verification; finish rechecks under lock."""
+    _stopped(executors_stopped, stop_evidence)
+    with _write_guard(project_root) as base:
+        _, state = _load_owned(base, run_id, owner_token)
+        _finish_readiness(project_root, state, "completed")
+        return deepcopy(state)
+
+
 def finish(project_root, run_id, owner_token, outcome, *, executors_stopped=False, stop_evidence=None):
     if outcome not in FINAL:
         raise ValueError("outcome must be paused, aborted or completed")
     _stopped(executors_stopped, stop_evidence)
     with _write_guard(project_root) as base:
         path, state = _load_owned(base, run_id, owner_token)
+        _finish_readiness(project_root, state, outcome)
         if outcome == "completed":
-            import run_policy
-            run_policy.require(project_root, state)
             if "run_policy" in state:
                 import managed_qa
                 managed_qa.validate_finish(project_root, state)
-        if any(t.get("status") == "running" for t in state.get("observed_checks", {}).values()):
-            raise ValueError("close observed host checks after confirmed stop before finishing")
-        if "tasks" in state:
-            import run_tasks
-            if any(item["status"] == "running" for item in run_tasks._tasks(state)):
-                raise ValueError("end the current task explicitly before finishing the run")
-        if any(item.get("status") in {"dispatching", "working"} for item in state.get("role_dispatches", [])):
-            raise ValueError("close observed role dispatches after host stop before finishing")
         if outcome == "completed":
-            if state.get("continuity_wait", {}).get("status") == "waiting":
-                raise ValueError("resolve the registered human wait before completing")
-            if state.get("release_plan"):
-                import release_checks
-                release_checks.validate_closeout(project_root, state)
             import delivery
             try:
                 delivery.seal(project_root, base, state)

@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "skills/pipeline/scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -13,6 +14,8 @@ import role_dispatch as D
 import run_evidence as E
 import run_state as R
 import run_tasks as T
+import check_plan as P
+import pipeline_cli as CLI
 
 
 class VerifyCliTests(unittest.TestCase):
@@ -57,6 +60,37 @@ class VerifyCliTests(unittest.TestCase):
         self.assertEqual(result["completion"]["status"], "completed")
         self.assertIsNone(R.status(self.root)["active"])
         self.assertNotIn(self.owner, json.dumps(result))
+        self.assertEqual((self.root / "counter").read_text(), "1")
+
+    def test_valid_existing_evidence_seals_without_another_execution(self):
+        self.verify("first")
+        result = self.verify("seal", *self.finish_args())
+        self.assertTrue(result["results"][0]["reused"])
+        self.assertTrue(result["completion"]["delivery_sealed"])
+        self.assertEqual((self.root / "counter").read_text(), "1")
+
+    def test_drift_after_same_process_qa_still_blocks_finish(self):
+        original = P.verify_plan
+        for kind in ("environment", "input"):
+            with self.subTest(kind=kind), mock.patch.dict(os.environ, self.env, clear=True):
+                def drift(*args, **kwargs):
+                    result = original(*args, **kwargs)
+                    self.assertEqual(result["gate"], "PASS")
+                    if kind == "environment":
+                        os.environ["SHLVL"] = str(int(os.environ.get("SHLVL", "0")) + 1)
+                    else:
+                        (self.root / "input").write_text("changed after QA")
+                    return result
+
+                args = CLI.parser().parse_args(["verify", "--project", str(self.root),
+                       "--receipt", self.receipt, "--plan", self.plan, "--name", "drift-" + kind,
+                       *self.finish_args()])
+                with mock.patch.object(P, "verify_plan", side_effect=drift):
+                    with self.assertRaisesRegex(ValueError, "QA evidence changed"):
+                        CLI.dispatch(args)
+                self.assertEqual(R.status(self.root)["state"]["status"], "running")
+                self.assertIsNotNone(R.status(self.root)["active"])
+                self.assertFalse((self.root / "tmp/pipeline/delivery/latest.json").exists())
 
     def test_default_keeps_run_active_and_valid_evidence_is_not_executed_again(self):
         first = self.verify("first")
@@ -122,7 +156,7 @@ class VerifyCliTests(unittest.TestCase):
                 self.assertFalse((self.root / "counter").exists())
 
     def test_existing_task_role_wait_and_release_guards_remain(self):
-        for kind in ("task", "role", "wait", "release"):
+        for kind in ("task", "role", "wait", "release", "check", "host"):
             with self.subTest(kind=kind):
                 state = R.status(self.root)["state"]
                 path = self.root / "tmp/pipeline/runs" / (self.run + ".json")
@@ -134,17 +168,25 @@ class VerifyCliTests(unittest.TestCase):
                 elif kind == "wait":
                     state["continuity_wait"] = {"status": "waiting"}
                     R._atomic(path, state)
-                else:
+                elif kind == "release":
                     state["release_plan"] = {"closeout": None, "phase": "pending"}
+                    R._atomic(path, state)
+                elif kind == "check":
+                    state["running_checks"] = [{"name": "active", "write_paths": []}]
+                    R._atomic(path, state)
+                else:
+                    state["observed_checks"] = {"host": {"status": "running"}}
                     R._atomic(path, state)
                 args = self.finish_args()
                 if kind == "role":
                     args = tuple(item for item in args if item != "--direct")
                 self.verify("blocked-" + kind, *args, expected=2)
+                self.assertFalse((self.root / "counter").exists())
                 self.assertEqual(R.status(self.root)["state"]["status"], "running")
                 self.assertIsNotNone(R.status(self.root)["active"])
                 current = R.status(self.root)["state"]
-                for key in ("tasks", "role_dispatches", "role_events", "role_execution", "continuity_wait", "release_plan"):
+                for key in ("tasks", "role_dispatches", "role_events", "role_execution", "continuity_wait", "release_plan",
+                            "running_checks", "observed_checks"):
                     if key in original:
                         current[key] = original[key]
                     else:
@@ -158,6 +200,7 @@ class VerifyCliTests(unittest.TestCase):
         result = self.verify("delegated", *self.finish_args(), expected=2)
         self.assertIn("cannot be relabeled direct", result["message"])
         self.assertEqual(R.status(self.root)["state"]["role_execution"], "delegated")
+        self.assertFalse((self.root / "counter").exists())
 
 
 if __name__ == "__main__":
