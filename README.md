@@ -17,11 +17,7 @@ pipeline 是一套由编码智能体执行的 skill 和本地工具。你描述�
 - **视觉自查**：页面任务沿用项目设计，记录实际截图、查看与复核；缺少真实观察时保留待验。
 - **本地诊断**：运行记录可在本地预览，诊断模块不自动上传报告。
 
-先试用：[独立小项目示例](docs/TRY-PIPELINE.md)。目录或平台分发：[安装与分发状态](docs/DISTRIBUTION.md)。
-
-开发分支：[未发布更新：视觉验收、原生检查计划与发布承接](docs/releases/UNRELEASED.md)。尚未创建新版本标签或 Release，真实宿主完整采用仍待验；稳定版继续使用 [v3.13.0](docs/releases/v3.13.0.md)。
-
-本文描述当前检出版本；固定标签的能力以该标签内的文档和发布说明为准。
+[快速试用](docs/TRY-PIPELINE.md) · [更新记录](docs/releases/UNRELEASED.md)
 
 ## 三步开始
 
@@ -232,6 +228,7 @@ Codex 的流程校验不能称为与 Claude 同层级的 hook 硬拦截，Bash h
 | 证据与浏览器验收 | [证据复用](skills/pipeline/references/evidence.md)、[浏览器交接](skills/pipeline/references/browser-handoff.md)、[视觉验收](skills/pipeline/references/visual.md) |
 | 状态与中断恢复 | [运行接口](skills/pipeline/references/operations.md) |
 | 进度与安全摘要 | [进度规范](skills/pipeline/references/progress.md)、[运行记录](skills/pipeline/references/audit.md) |
+| 安装与分发 | [安装与分发说明](docs/DISTRIBUTION.md) |
 | 版本与建设进度 | [发布说明](docs/releases/)、[实施记录](docs/IMPLEMENTATION.md)、[路线图](docs/ROADMAP.md) |
 
 维护者在仓库根目录运行 `bash tests/run-all.sh` 做本地隔离回归。真实模型、业务验收和实际提速需要对应环境的证据，本地测试不能替代。

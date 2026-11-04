@@ -17,6 +17,8 @@ Describe a task in your coding-agent session. Pipeline helps the agent define sc
 
 Use it for feature work, fixes with meaningful acceptance checks, and development-to-release handoffs. For a one-line edit or a simple query, a direct agent request may be sufficient. No fixed speedup or token reduction is promised.
 
+[Quick example](TRY-PIPELINE.md) · [Updates](releases/UNRELEASED.md)
+
 ## Install the complete repository
 
 Requirements: Git, Python 3, and an existing Claude Code or Codex installation. Repository CI runs on Ubuntu and macOS with Python 3.11. The installer uses Bash and symbolic links; native Windows installation is not claimed here.
@@ -121,7 +123,7 @@ Diagnostics are recorded under the project's ignored `tmp/pipeline/` directory. 
 
 ## Releases and details
 
-Main-branch updates: [unreleased — visual acceptance, native check plans, and delivery handoffs](releases/UNRELEASED.md). No new tag or GitHub Release has been created. Complete native-host adoption is still unconfirmed; [v3.13.0](releases/v3.13.0.md) remains the stable release. This guide describes the current checkout; consult a fixed tag's own documentation for its capabilities. The complete Chinese guide covers [project setup](../skills/pipeline/references/interaction.md), [check plans](../skills/pipeline/references/check-plan.md), [delivery](../skills/pipeline/references/delivery.md), and [local records](../skills/pipeline/references/audit.md).
+Version status and known limitations are listed in the [update notes](releases/UNRELEASED.md). The complete Chinese guide covers [project setup](../skills/pipeline/references/interaction.md), [check plans](../skills/pipeline/references/check-plan.md), [delivery](../skills/pipeline/references/delivery.md), and [local records](../skills/pipeline/references/audit.md).
 
 Maintainers run `bash tests/run-all.sh` from the repository root. Local tests and CI are implementation evidence; actual project adoption and performance require separate measurements.
 
