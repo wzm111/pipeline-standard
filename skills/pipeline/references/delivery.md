@@ -104,6 +104,21 @@ python3 <release_runner> closeout --project <root> --receipt <receipt> --json '{
 
 managed run的closeout使用同一release验收重算生成machine_validation.mode=release，继续核对当前task、原源码检查计划及必要类别、源QA未解决结论和当前环境/日志；不能用release标记、候选ID字符串或旧任务PASS替代这些证据。收口与finish都会复核，CLI不另造一条QA捷径。
 
+已完成的激活需要持久保留操作身份时，可显式调用`release_checks.capture_operation_proof(root, run_id, owner_token, name, target_environment={...})`。目标字段必须已作为environment上下文真实用于同一候选的activate和smoke，smoke须实际覆盖release_identity。接口只保存当前run/task最新成功激活、当前环境下有效的线上回读、精确候选与产物指纹及报告hash；目标值只保留hash，不执行发布、刷新缓存或其他写操作。已有激活报告是历史操作事实，不能把其环境拷贝成当前环境来补QA。
+
+`inspect_operation_proof(root, run_id, proof={run_id,path,sha256}, target_environment={...}, readback=可选的新smoke报告引用)`只读诊断，不输出命令、环境值或私有receipt。`historical_mutation_valid`表示历史操作绑定仍可核验，`current_readback_valid`另核对真实当前进程的完整环境；`valid_operation`要求两者同时有效。进程环境变化时只补必要的只读线上身份/关键路径smoke并显式传新引用，保留原激活身份；候选、输入、日志、报告、目标、任务或后续失败变化仍拒绝旧证明。没有项目可靠只读回读命令时报告适配缺口，不重放有副作用的发布/缓存操作。
+
+操作证明始终返回`acceptance_status=CONCERNS`，不作为通用check复用、QA PASS或closeout的替代。即使`valid_operation=true`，仍须通过原检查计划、完整环境及最新失败约束；`next_action=validate_original_strict_qa_contract`明确标出未被本接口解决的验收契约。若现有QA仍要求历史写操作在新本地环境中重新运行，保留CONCERNS并报告该契约缺口，不能自动豁免或反复执行写操作来凑PASS。
+
+薄CLI沿用同一接口；target_environment替换为原activate/smoke已真实使用的上下文，proof替换为capture返回的完整引用：
+
+```sh
+python3 <release_runner> operation-capture --project <root> --receipt <receipt> --json '{"name":"activation-proof","target_environment":{"release_target":"<实际目标>"}}'
+python3 <release_runner> operation-inspect --project <root> --run-id <run> --json '{"proof":{"run_id":"<run>","path":"<capture返回路径>","sha256":"<capture返回摘要>"},"target_environment":{"release_target":"<实际目标>"}}'
+```
+
+capture要求当前owner私有receipt；inspect只读，不要求或输出receipt，可选`readback`为当前run新smoke的`{run_id,path,sha256}`引用。inspect退出码0仅表示`valid_operation=true`，仍为CONCERNS，不是QA PASS；1为绑定/当前回读无效，2为语法、声明或请求错误。它不自动执行线上回读或任何写操作。
+
 项目只有单体部署脚本时，先完成快预检，再经execute_check执行现有脚本一次并保留原门禁；不为套用分阶段接口额外部署一次，不虚构skip-build参数。无法安全复用时说明项目适配器缺口，按当前授权处理；不能自动改项目部署脚本或绕过保护。没有明确缺口时，不为了收尾另起规划/角色、重复整理多份报告或反复全量核对。
 
 ### 远端断连与取消后的恢复

@@ -399,16 +399,140 @@ def public_status(root, run_id, owner_token):
             "attempts": [{k: a[k] for k in ("name", "phase", "status")} for a in plan.get("attempts", [])]}
 
 
+def _operation_check(root, state, reference, target, *, phase, current=False):
+    """Historical identity is not a claim about today's execution environment."""
+    import managed_qa
+    if (not isinstance(reference, dict) or reference.get("run_id") != state["run_id"]
+            or reference.get("path") not in state["artifacts"]):
+        raise ValueError("operation evidence must be registered in this run")
+    payload = D._read_reference(root, reference, "check")
+    report = E.read_report(root, state["run_id"], reference["path"], kind="check")
+    if not managed_qa._current(report, state) or payload.get("inherited_from") or payload.get("reused"):
+        raise ValueError("operation requires actual current-task execution")
+    attempts = [a for a in state["release_plan"]["attempts"] if a["phase"] == phase]
+    if (not attempts or attempts[-1]["status"] != "passed"
+            or attempts[-1]["report"] != reference["path"]
+            or attempts[-1]["candidate_id"] != state["release_plan"]["candidate"]["id"]):
+        raise ValueError("latest registered operation phase is not this successful check")
+    if any(payload.get("environment", {}).get("context:" + key) != value for key, value in target.items()):
+        raise ValueError("explicit target environment does not match observed operation")
+    labels = set(E.coverage_labels(payload.get("coverage")))
+    required = {PHASES[phase]} | ({"release_identity"} if phase == "smoke" else set())
+    if not required <= labels:
+        raise ValueError("operation or live identity coverage missing")
+    # A later matching command or relevant phase observation must never be hidden
+    # by the saved successful reference, even when it used different labels.
+    identity = lambda p: [p.get(k) for k in ("command", "scope", "intent", "cwd")]
+    newer = state["artifacts"][state["artifacts"].index(reference["path"]) + 1:]
+    for path in newer:
+        if "/artifacts/check/" in path:
+            later = E.read_report(root, state["run_id"], path, kind="check")["payload"]
+            if (identity(later) == identity(payload) or PHASES[phase] in later.get("coverage", [])):
+                raise ValueError("later operation observation requires an updated proof")
+    verdict = E.reusable_check(root, state["run_id"], reference["path"], command=payload["command"],
+        environment=payload["environment"], impact_covered=True, coverage=payload["coverage"])
+    if not verdict["reusable"]:
+        raise ValueError("historical operation identity invalid")
+    if current:
+        if not payload.get("argv"):
+            raise ValueError("current readback requires actual runner environment identity")
+        managed_qa._validate_ref(root, state, reference["path"])
+    return payload
+
+
+def _operation_binding(root, state, target, activation, readback, *, current_readback=False):
+    import managed_qa
+    if _recovery_blocked(root, state):
+        raise ValueError("release recovery unresolved")
+    candidate = _candidate(root, state)
+    if not candidate:
+        raise ValueError("current exact candidate is unavailable")
+    mutation = _operation_check(root, state, activation, target, phase="activate")
+    live = _operation_check(root, state, readback, target, phase="smoke", current=current_readback)
+    if (mutation["environment"].get("context:pipeline_release_candidate") != candidate["id"]
+            or live["environment"].get("context:pipeline_release_candidate") != candidate["id"]
+            or R._timestamp(live["started_at"]) < R._timestamp(mutation["finished_at"])):
+        raise ValueError("live readback must follow activation of this exact candidate")
+    return {"schema": 1, "candidate": deepcopy(candidate), "task_started_at": managed_qa.boundary(state),
+            "target_sha256": hashlib.sha256(json.dumps(target, sort_keys=True).encode()).hexdigest(),
+            "activation": deepcopy(activation), "readback": deepcopy(readback)}
+
+
+def capture_operation_proof(root, run_id, owner_token, name, *, target_environment):
+    """Persist explicit historical release identity, without granting QA acceptance.
+
+    Target fields must already be actual context on activation and smoke checks.
+    No deployment command runs here; capture requires a currently valid readback.
+    """
+    root = Path(root).resolve(strict=True)
+    target = E._environment(target_environment)
+    with R._write_guard(root) as base:
+        _, state = _owned(base, run_id, owner_token)
+        references = {}
+        for phase in ("activate", "smoke"):
+            attempts = [a for a in state.get("release_plan", {}).get("attempts", []) if a["phase"] == phase]
+            if not attempts or not attempts[-1].get("report"):
+                raise ValueError("successful activation and live readback required")
+            references[phase] = D._reference(root, run_id, attempts[-1]["report"])
+        binding = _operation_binding(root, state, target, references["activate"], references["smoke"],
+                                     current_readback=True)
+    relative = E.write_report(root, run_id, owner_token, "release_operation", name, binding)
+    return {"proof": D._reference(root, run_id, relative), "acceptance_status": "CONCERNS",
+            "next_action": "validate_original_strict_qa_contract"}
+
+
+def inspect_operation_proof(root, run_id, *, proof, target_environment, readback=None):
+    """Read-only diagnostics; never replay historical environment or mutations.
+
+    A fresh explicit readback can replace the saved observation. Generic QA and
+    its full current-environment requirements remain separate and unchanged.
+    """
+    root = Path(root).resolve(strict=True)
+    before = R.status(root, run_id)
+    state = before["state"]
+    result = {"valid_operation": False, "historical_mutation_valid": False,
+              "current_readback_valid": False, "acceptance_status": "CONCERNS",
+              "next_action": "repair_operation_binding_without_repeating_mutation"}
+    try:
+        target = E._environment(target_environment)
+        if (not state or not isinstance(proof, dict) or proof.get("run_id") != run_id
+                or proof.get("path") not in state["artifacts"]):
+            raise ValueError("registered current-run operation proof required")
+        saved = D._read_reference(root, proof, "release_operation")
+        if not isinstance(saved, dict):
+            raise ValueError("structured operation proof required")
+        # Saved observation remains authenticated, even when a newer live
+        # observation is supplied. Only its phase freshness may be superseded.
+        D._read_reference(root, saved["readback"], "check")
+        selected = readback or saved["readback"]
+        historical = _operation_binding(root, state, target, saved["activation"], selected)
+        if any(saved.get(k) != historical[k] for k in ("schema", "candidate", "task_started_at", "target_sha256", "activation")):
+            raise ValueError("operation candidate, task or target changed")
+        result["historical_mutation_valid"] = True
+        result["next_action"] = "run_current_readonly_live_identity_check"
+        _operation_binding(root, state, target, saved["activation"], selected, current_readback=True)
+        result.update(valid_operation=True, current_readback_valid=True,
+                      next_action="validate_original_strict_qa_contract")
+    except (OSError, ValueError, KeyError, TypeError):
+        pass  # Public diagnostics never include argv, context or private values.
+    if R.status(root, run_id) != before:
+        raise ValueError("run changed during operation inspection; recheck")
+    return result
+
+
 def main(argv=None):
     # Reuse the original receipt ownership/path/permission checks; no second
     # credential format or lifecycle entrypoint.
     from pipeline_cli import _receipt
     parser = argparse.ArgumentParser(description="Invoke existing authorized project release commands.")
     sub = parser.add_subparsers(dest="action", required=True)
-    for action in ("prepare", "execute", "status", "closeout"):
+    for action in ("prepare", "execute", "status", "closeout", "operation-capture", "operation-inspect"):
         command = sub.add_parser(action, allow_abbrev=False)
         command.add_argument("--project", default=".")
-        command.add_argument("--receipt", required=True)
+        if action == "operation-inspect":
+            command.add_argument("--run-id", required=True)
+        else:
+            command.add_argument("--receipt", required=True)
         if action != "status":
             command.add_argument("--json", required=True, dest="declaration")
     args = parser.parse_args(argv)
@@ -417,16 +541,37 @@ def main(argv=None):
         allowed = {"prepare": {"required_before", "required_after"},
                    "execute": {"name", "phase", "argv", "scope", "artifact_paths", "timeout", "cwd",
                                "environment", "coverage", "write_paths", "protected_paths"},
-                   "closeout": {"external_pending"}, "status": set()}[args.action]
+                   "closeout": {"external_pending"}, "status": set(),
+                   "operation-capture": {"name", "target_environment"},
+                   "operation-inspect": {"proof", "target_environment", "readback"}}[args.action]
         if not isinstance(declaration, dict) or set(declaration) - allowed:
             raise ValueError("unknown declaration fields")
         if args.action == "execute" and not {"name", "phase", "argv", "scope"} <= set(declaration):
             raise ValueError("execute requires name, phase, argv and scope")
+        required = {"operation-capture": {"name", "target_environment"},
+                    "operation-inspect": {"proof", "target_environment"}}.get(args.action, set())
+        if not required <= set(declaration):
+            raise ValueError("operation declaration missing required fields")
         root = Path(args.project).resolve(strict=True)
-        receipt = _receipt(root, args.receipt)
-        owned = root, receipt["run_id"], receipt["owner_token"]
+        if args.action != "operation-inspect":
+            receipt = _receipt(root, args.receipt)
+            owned = root, receipt["run_id"], receipt["owner_token"]
         code = 0
-        if args.action == "prepare":
+        if args.action == "operation-inspect":
+            E._environment(declaration["target_environment"])
+            if (not isinstance(declaration["proof"], dict)
+                    or set(declaration["proof"]) != {"run_id", "path", "sha256"}
+                    or any(not isinstance(v, str) or not v for v in declaration["proof"].values())):
+                raise ValueError("structured proof reference required")
+            if "readback" in declaration and (not isinstance(declaration["readback"], dict)
+                    or set(declaration["readback"]) != {"run_id", "path", "sha256"}
+                    or any(not isinstance(v, str) or not v for v in declaration["readback"].values())):
+                raise ValueError("structured readback reference required")
+            result = inspect_operation_proof(root, args.run_id, **declaration)
+            code = 0 if result["valid_operation"] else 1
+        elif args.action == "operation-capture":
+            result = capture_operation_proof(*owned, **declaration)
+        elif args.action == "prepare":
             prepare(*owned, **declaration)
             result = public_status(*owned)
         elif args.action == "execute":
