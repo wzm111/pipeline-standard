@@ -31,3 +31,9 @@ scan最多枚举1000个目录项，按候选状态文件修改时间读取最新
 采集失败只返回固定安全错误类别，不影响原本的执行/停止/QA判定，不清理未知锁；开始快照和原状态仍可说明中断痕迹。摘要不是QA PASS、缓存有效性证明或重试/发布授权；复用和收口继续使用原检查/验收接口。Claude/Codex均需在实际调用点接入，不能宣称拦截了所有宿主操作。
 
 诊断功能仅在本地记录与预览，不上传、不进Git，不保存另一份长报告。清理tmp会删除本地记录；长期归档只复制已确认脱敏的audit摘要，不打包私有receipt或整个运行目录。
+
+## 多聊天共用项目的归属
+
+宿主确实提供当前聊天ID时，执行者可在当前run或当前task起点调用`python3 <skill>/scripts/task_origin.py bind --project <项目> --receipt <本人receipt> --host-id <实际host> --thread-id <实际聊天UUID>`。只保存host与聊天ID的摘要和真实task边界；不保存聊天标题、对话或项目内容，不从旧delivery指针认领当前任务。调用方声明不是宿主证明；缺ID保持unknown，不为归属创建task、读取其他聊天或回填历史。
+
+日后用同一脚本的`inspect --project <项目> --run-id <run> --host-id <host> --thread-id <UUID>`只读核对，或`scan --project <项目> --host-id <host> --thread-id <UUID> --limit 20`有界筛选。scan只返回明确匹配的任务时间边界，不附整份混合run耗时；无归属记录单列unattributed，不当作未使用pipeline。旧task不补写，同一task不允许改认另一聊天。所有记录留本地ignored目录，不上传。
