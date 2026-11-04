@@ -60,6 +60,8 @@ UI检查按实际改动的行为选用例，不仅按测试类型分层：本次
 
 已登记计划可用 `verify --receipt <receipt> --plan <原plan引用> --name verify-r1 --summary '<真实业务结论与未验证项>'` 在同一进程逐项执行/严格复核并记录QA，避免拆成多个宿主命令导致环境漂移。仍有效的原证据经原 `run_planned` 校验后复用；实际环境（包括SHLVL）、输入、日志和最新失败均保留原校验，不回放旧环境。首个命令非零即停止安排后续检查，返回skipped_checks并照常记录缺项与CONCERNS；不能将跳过视为通过。每次使用新name，检查尝试名自动为 `<name>-c<序号>`，连同后缀须满足原64字符标识限制。默认仅生成证据/QA，不结束run。
 
+预检同时比较当前task已经执行或显式复用的检查身份，遗漏时返回`current_task_checks_not_in_plan`和对应引用，在任何新进程前停止；相同coverage不能替代不同命令的义务。补齐计划后仍须按原规则核验有效性，不删除旧失败或回填历史。旧task和baseline/search等非验收观察不因此新增义务。
+
 verify在启动任何检查前统一预检整份计划：当前任务已登记及继承的required coverage须由计划项或仍有效的显式继承证据覆盖；所有检查的cwd、可执行文件、声明资源与当前执行占用、派生attempt名称及已有报告名称须满足原调用约束。仍有效且可复用的检查无需启动进程，不因资源占用或保护声明冲突被阻止；执行时继续严格复核，失效证据不能走该豁免。后置runner缺失或coverage漏项时，前面的耗时检查也不启动，返回全部skipped_checks、预检原因和原QA的CONCERNS/缺项，安全原因同时保存在QA摘要；原失败记录与轮次保留，不产生PASS。QA名称已占用时返回CONCERNS和`report:null`，不执行、不覆盖原报告或伪造新轮次，应换有效新name重试；格式无效的name仍按原规则拒绝。单项run与保存计划保持原接口。
 
 可先用 `plan-preflight --receipt <receipt> --plan <原plan引用> --name verify-r1` 只读查看同一判断：返回ready、required_checks、missing_checks及安全的检查ID/类别/原因，不写盘、不启动进程、不输出命令或环境值。ready仅表示当前静态调用条件可安排，不是API、认证、预览或业务通过；真实就绪仍用项目已有短检查和depends_on表达。它不推断完整语义依赖，也不保证预检后资源不会变化，真实执行与QA继续核验当前状态。计划读取可保留已消失cwd的原声明，以便预检定位缺失项；保存与实际执行仍要求cwd存在。

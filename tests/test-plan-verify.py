@@ -107,6 +107,34 @@ class VerifyCliTests(unittest.TestCase):
         self.assertFalse(third["results"][0]["reused"])
         self.assertEqual((self.root / "counter").read_text(), "2")
 
+    def test_preflight_blocks_omitted_observation_before_any_new_process(self):
+        # Same coverage is insufficient: a different executed command remains
+        # a current-task obligation even when all coverage labels are planned.
+        self.cli("check", "--receipt", self.receipt, "--name", "extra",
+                 "--scope", "input", "--coverage", "unit", "--",
+                 sys.executable, "-B", "-c", "print('existing obligation')")
+        before = R.status(self.root)["state"]
+        preview = self.cli("plan-preflight", "--receipt", self.receipt,
+                           "--plan", self.plan, "--name", "readiness", expected=1)
+        self.assertFalse(preview["ready"])
+        self.assertEqual(len(preview["unplanned_checks"]), 1)
+        self.assertEqual(R.status(self.root)["state"]["artifacts"],
+                         before["artifacts"] + [self.plan])
+        result = self.verify("blocked", expected=1)
+        self.assertEqual(result["results"], [])
+        self.assertEqual(result["gate"], "CONCERNS")
+        self.assertFalse((self.root / "counter").exists())
+
+    def test_preflight_excludes_old_task_observations_without_weakening_current_ones(self):
+        self.cli("check", "--receipt", self.receipt, "--name", "old",
+                 "--scope", "input", "--coverage", "unit", "--",
+                 sys.executable, "-B", "-c", "print('old task only')")
+        T.start(self.root, self.run, self.owner, "next", "next goal", ["unit"])
+        preview = self.cli("plan-preflight", "--receipt", self.receipt,
+                           "--plan", self.plan, "--name", "readiness")
+        self.assertTrue(preview["ready"])
+        self.assertEqual(preview["unplanned_checks"], [])
+
     def test_inline_invalid_payloads_stopping_flags_and_names_never_execute(self):
         for index, payload in enumerate(([], {}, {"checks": {}}, {"checks": {"unit": self.check}, "gate": "PASS"},
                 {"checks": {"unit": self.check}, "required_checks": ["unknown"]},
@@ -347,7 +375,7 @@ class VerifyCliTests(unittest.TestCase):
         heavy = {**self.check, "coverage": ["heavy"], "argv": [sys.executable, "-B", "-c",
                  "from pathlib import Path; Path('heavy-ran').touch()"]}
         self.plan = self.cli("plan", "--receipt", self.receipt, "--name", "failure-plan",
-                             "--json", json.dumps({"checks": {"first": failed, "heavy": heavy}}))["plan"]
+                             "--json", json.dumps({"checks": {"existing": self.check, "first": failed, "heavy": heavy}}))["plan"]
         stopped = self.verify("fail-fast", *self.finish_args(), expected=1)
         self.assertEqual(stopped["skipped_checks"], ["heavy"])
         self.assertEqual(stopped["check_failures"]["heavy"], "not_executed")

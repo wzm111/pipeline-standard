@@ -76,6 +76,21 @@ def _validate_ref(root, state, ref):
     return proof
 
 
+def unplanned_checks(root, state, plan):
+    """Current-task obligations omitted by a plan, without executing checks."""
+    import check_plan as P
+    planned = set()
+    for check in plan["checks"].values():
+        try:
+            planned.add(P.planned_identity(root, state["run_id"], state, check))
+        except (OSError, ValueError, KeyError, TypeError):
+            pass  # Observation validation retains its own failure.
+    applicable, _ = _checks(root, state)
+    return sorted(source for source in applicable
+                  if not _read(root, state, source, "check")["payload"].get("inherited_from")
+                  and P._identity(_read(root, state, source, "check")["payload"]) not in planned)
+
+
 def canonical(root, state, payload):
     import check_plan as P
     import run_policy
@@ -99,15 +114,7 @@ def canonical(root, state, payload):
                             snapshot)
         result = P.inspect_state(root, state["run_id"], state["owner_token"], ref, state,
                                  payload.get("summary", ""), snapshot=snapshot)
-        planned = set()
-        for check in plan["checks"].values():
-            try:
-                planned.add(P.planned_identity(root, state["run_id"], state, check))
-            except (OSError, ValueError, KeyError, TypeError):
-                pass  # inspect_state retains the source failure and missing category.
-        applicable, _ = _checks(root, state)
-        if any(P._identity(_read(root, state, source, "check")["payload"]) not in planned
-               for source in applicable if not _read(root, state, source, "check")["payload"].get("inherited_from")):
+        if unplanned_checks(root, state, plan):
             result["gate"] = "CONCERNS"
             result["check_failures"]["unplanned_checks"] = "current_task_checks_not_in_plan"
         if payload.get("gate") in {"CONCERNS", "FAIL"}:

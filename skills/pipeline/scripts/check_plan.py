@@ -511,8 +511,12 @@ def preflight_plan(root, run_id, owner, plan_ref, name):
     if "run_policy" in state:
         import managed_qa
         requirements = managed_qa.required_for_state(root, state, snapshot)
+        unplanned = managed_qa.unplanned_checks(root, state, plan)
     else:
         requirements = E.coverage_labels(state.get("planned_required_checks"))
+        unplanned = []
+    if unplanned:
+        fail(None, "obligations", "current_task_checks_not_in_plan")
     required = sorted(set(plan["required_checks"]) | set(requirements))
     inherited, _ = _inherited(root, run_id, owner, state, snapshot)
     available = {label for check in plan["checks"].values() for label in check["coverage"]}
@@ -575,6 +579,7 @@ def preflight_plan(root, run_id, owner, plan_ref, name):
         fail(None, "snapshot", "run_changed_during_preflight")
     return {"run_id": run_id, "plan_ref": plan_ref, "ready": not failures,
             "required_checks": required, "missing_checks": missing, "failures": failures,
+            "unplanned_checks": unplanned,
             "notice": "Static readiness only; no process, API, authentication or business acceptance observed."}
 
 
