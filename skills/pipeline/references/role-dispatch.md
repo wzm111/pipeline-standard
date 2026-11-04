@@ -2,6 +2,21 @@
 
 仅在确有收益、已经决定委派时使用；角色模型仍由models.md解析。这个适配器不创建、停止或切换模型，也不代替Claude/Codex的原生工具。不要为满足事件要求额外创建agent。
 
+## 主调度员主动分工
+
+任务开始及已授权范围实质变化时，由现有主调度员判断直做、串行、并行或纯验证，不新增拍板角色。新managed run及CLI新task带待评估标记；已有旧任务不倒填、不重启。完成窄范围定位后、派开发前，用`allocation-decide`记录技术原因与分工。简单任务只记`direct/small_scope`及空分工；1个开发用serial，独立模块用parallel并安排2至3个不同开发。共享文件交给同一负责人；依赖按顺序执行。实际写入仍须遵守项目契约，分工路径不授予写权限。
+
+```sh
+python3 -B <runner> allocation-decide --project <root> --receipt <receipt> \
+  --json '{"mode":"parallel","reason":"independent_work","assignments":[{"id":"module-a","executor_id":"dev-a","write_paths":["src/a"],"depends_on":[]},{"id":"module-b","executor_id":"dev-b","write_paths":["src/b"],"depends_on":[]}]}'
+```
+
+`allocation-status --project <root> [--run-id <id>]`只读展示计划与已登记派发。`allocation-review --receipt <receipt> --change-id <稳定技术ID>`在有明确新增目标/依赖变化时重新标待评估；重复同一ID不重复触发，不把原始用户文本写入ID。重评估只安排剩余工作，保留已派发的归属、检查和成果；插问/心跳不触发。原因使用`small_scope/shared_write_paths/dependency_chain/independent_work/verification_only/capacity_limit/scope_changed`之一，首条/变化简报用自然语言解释具体取舍，不要求用户理解枚举或另填表。
+
+新标记上的developer begin必须关联已决定的`work_item="module-a"`，续用别名须与计划一致；accepted也按该别名登记。未评估、重复派发、依赖未返回或写入归属冲突时拒绝。计划本身不会启动agent；真实调用仍执行下述begin→宿主工具→accepted→complete。旧任务没有标记时保持unknown；直接调用未接入的宿主工具不受此门禁拦截。直接任务的决策是流程要求，此入口不拦截任意文件写入，也不新增QA豁免。
+
+## 记录真实边界
+
 1. 准备实际spawn或新一轮follow-up前，`ticket = role_dispatch.begin(root, run_id, owner_token, role, executor_id=..., requested_model=..., requested_effort=...)`。新创建时省略executor_id；续用时用本run稳定短别名，调度上下文保存其与真实宿主ID的映射。requested值来自实际准备传入的参数；宿主仅续用既有角色且未重新传参时记inherit。begin只记派发尝试，不计成功创建。
 2. 立刻调用原生创建/续用工具，提示只带规则、缓存base引用和本批差量。Codex的collaboration工具必须直接调用，不能放进Python或functions.exec模拟。宿主接受后`accepted(root, run_id, owner_token, ticket['id'], executor_id, actual_model=..., actual_effort=...)`，自动记实际created/reused及working边界。actual仅填写宿主明确返回的实际值，未反馈省略保持unknown；不能复制requested充当actual。
 3. 角色实际等待或开始可观测准备时，仍可用role_metrics.record_role_event记waiting/preparing/working；没有可观察的准备时间保持unknown，不用请求到接受的差值猜模型启动耗时。角色仍在工作时只发差量消息不另开工作episode、不重复记created/reused。

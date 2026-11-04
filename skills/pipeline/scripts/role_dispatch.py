@@ -103,7 +103,7 @@ def _parameters(value, model, effort):
 
 
 def begin(project_root, run_id, owner_token, role, *, executor_id=None, requested_model=None, requested_effort=None,
-          native_parameters=None, workflow_phase=None):
+          native_parameters=None, workflow_phase=None, work_item=None):
     """Before native spawn/follow-up: one compact attempt, no invented creation."""
     M._validate(role, executor_id or "new-executor", "reused" if executor_id else "created")
     model, effort = _model(requested_model), _effort(requested_effort)
@@ -118,10 +118,20 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
         path, state = _owned(base, run_id, owner_token)
         import run_policy
         run_policy.require(project_root, state)
-        if executor_id and any(d["executor_id"] == executor_id and d["status"] in {"dispatching", "working"}
-                               for d in state.get("role_dispatches", [])):
+        binding = {}
+        if role == "developer":
+            import work_allocation
+            binding = work_allocation.require_dispatch(state, work_item=work_item, executor_id=executor_id)
+        elif work_item is not None:
+            raise ValueError("work_item binds developer assignments only")
+        reserved_executor = executor_id or binding.get("planned_executor_id")
+        if reserved_executor and any(reserved_executor in {d.get("executor_id"), d.get("planned_executor_id")}
+                                     and d["status"] in {"dispatching", "working"}
+                                     for d in state.get("role_dispatches", [])):
             raise ValueError("executor already has an outstanding dispatch")
-        actor = M._actors(state.get("role_events", [])).get(executor_id)
+        actor = M._actors(state.get("role_events", [])).get(reserved_executor)
+        if actor and executor_id is None:
+            raise ValueError("planned executor already exists; explicitly request reuse before calling the host")
         if actor and (actor["role"] != role or actor["entries"][-1]["event"] != "stopped"):
             raise ValueError("existing executor must finish its current episode before a new dispatch")
         if role == "developer" and _developer_reservations(state) >= DEVELOPER_LIMIT:
@@ -131,6 +141,7 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
                 "executor_id": executor_id, "requested_model": model, "requested_effort": effort,
                 "actual_model": "unknown", "actual_effort": "unknown", "status": "dispatching",
                 "requested_at": now, "accepted_at": None, "completed_at": None}
+        item.update(binding)
         if parameters is not None:
             item["native_parameters"] = parameters
         if workflow_phase is not None:
@@ -156,6 +167,8 @@ def accepted(project_root, run_id, owner_token, dispatch_id, executor_id, *, act
         path, state = _owned(base, run_id, owner_token)
         item = _ticket(state, dispatch_id)
         M._validate(item["role"], executor_id, "working")
+        if item.get("planned_executor_id") not in {None, executor_id}:
+            raise ValueError("host acceptance must use the planned executor alias")
         if host_executor_id is not None and any(
                 d.get("executor_id") == executor_id and d.get("host_executor_id") not in {None, host_executor_id}
                 for d in state.get("role_dispatches", [])):

@@ -5,6 +5,7 @@ import re
 
 import run_evidence as E
 import run_state as R
+import work_allocation as W
 
 LIMIT = 20
 REPORT_LIMIT = 200
@@ -138,6 +139,7 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
     latest_qa = ({"gate": qa[-1]["payload"].get("gate")
                   if qa[-1]["payload"].get("gate") in {"PASS", "CONCERNS", "FAIL"} else "unknown",
                   "recorded_at": stamp(qa[-1]["recorded_at"]), "acceptance": "not_revalidated"} if qa else None)
+    allocation = W.summary(state)
     roles = [{"role": label(item.get("role")), "status": item["status"]}
              for item in state.get("role_dispatches", []) if item.get("status") in {"working", "dispatching"}]
     waiting = state.get("continuity_wait", {}).get("status") == "waiting"
@@ -164,6 +166,7 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
               "badge": badge, "current": {"checks": active_checks[:LIMIT], "roles": roles[:LIMIT],
                                            "operations": operations[:LIMIT], "observations": observations[:LIMIT]},
               "latest_qa": latest_qa,
+              "allocation": allocation,
               "task_execution": {"status": task_status, "ended_at": ended},
               "delivery": {"status": delivery_status, "acceptance": "not_revalidated"},
               "host_feedback": {"status": observed_host, "ended_at": idle_boundary,
@@ -180,6 +183,7 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
               "unavailable_records": unavailable,
               "truncated": len(refs) > REPORT_LIMIT or any(len(items) > LIMIT for items in
                              (completed, remaining, active_checks, roles, operations, observations))
+                             or allocation.get("truncated", False)
                              or len(state.get("operation_spans", [])) > REPORT_LIMIT
                              or len(state.get("observed_checks", {})) > REPORT_LIMIT,
               "notice": NOTICE}
@@ -207,6 +211,18 @@ def render(value):
     def names(items):
         return ", ".join(item["step"] for item in items) or "未登记"
     current = names(value["current"]["checks"])
+    allocation = value.get("allocation", {})
+    assignment_states = {"planned": "仅计划", "requested": "已请求", "host_accepted": "已登记宿主接受",
+                         "completed": "已返回", "failed": "失败已返回"}
+    allocation_text = ("待主调度员评估分工" if allocation.get("status") == "pending" else
+                       "未登记，不能据此推断未派发" if allocation.get("status") == "unknown" else
+                       f"{allocation.get('mode')} / {allocation.get('reason')}")
+    if allocation.get("items"):
+        allocation_text += "；" + ", ".join(
+            f"{item['work_item']} → {item['executor_id']}：{assignment_states[item['status']]}"
+            for item in allocation["items"])
+    if allocation.get("omitted_items"):
+        allocation_text += f"；另有{allocation['omitted_items']}项省略"
     if value["current"]["roles"]:
         current += "；等待角色反馈：" + ", ".join(item["role"] for item in value["current"]["roles"])
     for key, title in (("operations", "已登记操作"), ("observations", "等待宿主返回")):
@@ -223,6 +239,7 @@ def render(value):
                 "execution_ended_acceptance_pending": "验收/交付待核实", "in_progress": "未收口",
                 "unknown": "未知"}[value["delivery"]["status"]]
     return (f"{value['badge']} 当前任务：{value['task_id'] or '未分段'}；阶段：{value['stage']}；当前步骤：{current}。\n"
+            f"调度：{allocation_text}；计划不代表已启动，宿主接受登记需对应原生返回。\n"
             f"任务执行：{boundary}；交付：{delivery}；验收有效性未重新核验；宿主反馈：{value['host_feedback']['status']}。\n"
             f"已记录成功：{names(value['completed'])}；剩余/待核实：{names(value['remaining'])}；"
             f"阻塞：{', '.join(value['blockers']) or '未登记'}。最近检查结果：{value['last_result_at'] or '未知'}。下一步：{next_step}。\n"

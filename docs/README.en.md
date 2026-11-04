@@ -87,6 +87,8 @@ Small, low-risk tasks use fast mode in the current session. Standard mode uses o
 
 The existing coordinator decides whether to use one, two, or three developers and assigns each write scope. There is no extra approval role and no requirement to fill all slots. Shared files have one owner; dependent work and conflicting resources are queued. Developers run focused checks, then the coordinator combines frozen results, reuses valid evidence, and performs necessary final verification, commits, and releases.
 
+The coordinator reassesses at task start and meaningful scope changes without waiting for a reminder. Progress explains assignments or the reason for serial work, separating plans, requests, recorded host acceptance, and returns. A plan does not prove that a subagent has started.
+
 A run reserves at most three developer dispatch slots, including pending dispatches. A slot is released only after confirmed completion. Independent QA starts when frozen work and host capacity are available. The main session also uses a slot: with four total host slots, three developers leave no room for QA until a developer returns. The dispatch guard covers integrated records; it does not prove host capacity or intercept every native call.
 
 UI tasks use an applicable design skill already available in the host, or the built-in design checks. Existing project styles and components remain the baseline. The agent declares the required surfaces, viewports, states, version and complete inputs; it then records actual screenshots, viewing and review. Changes invalidate affected old evidence. Small changes can be self-reviewed; important or substantial changes use proportionate independent review. The final response shows actual viewed images and unverified limitations.

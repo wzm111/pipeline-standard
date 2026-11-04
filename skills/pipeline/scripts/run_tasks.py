@@ -93,6 +93,9 @@ def start(root, run_id, owner, task_id, goal, acceptance, *, require_managed=Fal
         item = {"task_id": task_id, "goal": goal, "acceptance": deepcopy(acceptance),
                 "started_at": now, "ended_at": None, "status": "running", "report_refs": []}
         state.setdefault("tasks", []).append(item)
+        if require_managed or "work_allocation" in state:
+            import work_allocation
+            work_allocation.initialize(state, task_id)
         state["updated_at"] = now
         R._atomic(path, state)
         return deepcopy(item)

@@ -162,6 +162,8 @@ def start(project_root, initial=None, *, managed=False):
         if managed:
             import run_policy
             state["run_policy"] = run_policy.initialize(project_root)
+            import work_allocation
+            work_allocation.initialize(state, "run-start", reason="run_start")
         state["history"].append(_event(state, "start", now))
         if delivery_from is not None:
             import delivery

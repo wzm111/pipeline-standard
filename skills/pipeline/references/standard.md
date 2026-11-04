@@ -8,6 +8,8 @@
 
 依据已有需求与必要的窄范围定位判断复杂度，不为分类创建agent或新报告；在首条简报或现有state.next里用一句话说明原因及选用角色。文件数量、任务标题、检查命令数量或等待外部结果的时长都不能单独决定复杂度。仅涉及多个文件或少量已知调用点、仍可内聚定向验证的小改动继续直做。
 
+判断不是只在开头做一次：用户新增已授权目标、依赖或共享写入范围实质改变时，主动重评估尚未完成的部分并更新分工。新增的独立模块可交给2至3个开发；共享文件指定单一负责人，有依赖或资源冲突的部分排队。保持原任务、执行者与有效证据，不为换策略重启开发或重复检查。具体记录入口见[角色派发边界](role-dispatch.md)；进度插问、心跳和每条测试不触发重规划。
+
 | 任务特征 | 自动选择 |
 | --- | --- |
 | 范围明确、单个内聚改动、已有定向验收；普通文案/样式/小修复 | 主会话直做，不创建角色 |
@@ -41,6 +43,7 @@ python3 <runner> status --project <root>
 python3 <runner> start --project <root> --stage review
 # 读取本轮适用规则后，使用start返回的policy.revision确认；不是让用户填写。
 python3 <runner> policy-ack --project <root> --receipt <receipt> --revision <policy.revision>
+python3 <runner> allocation-decide --project <root> --receipt <receipt> --json '{"mode":"direct","reason":"small_scope","assignments":[]}'
 python3 <runner> check --project <root> --receipt <receipt> --name feature-r1 --scope src e2e package.json package-lock.json --coverage e2e_feature --impact-covered --timeout 120 -- <实际检查命令及参数>
 python3 <runner> report --project <root> --receipt <receipt> --kind qa --name final --json '{"gate":"PASS","required_checks":["e2e_feature"],"checks":["<check返回的完整report引用>"]}'
 python3 <runner> finish --project <root> --receipt <receipt> --direct --stopped --stop-evidence '<宿主确认本run执行者均停止的实际证据>'

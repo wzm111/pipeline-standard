@@ -19,6 +19,7 @@ import run_checks as C
 import visual_evidence as V
 import pipeline_cli as CLI
 import role_dispatch as D
+import work_allocation as W
 
 
 def png():
@@ -49,6 +50,11 @@ class VisualTests(unittest.TestCase):
 
     def begin(self, name="capture", image_format="jpeg"):
         return V.begin(*self.args, self.requirement, name, image_format=image_format)
+
+    def developer_request(self, alias):
+        W.decide(*self.args, "serial", "shared_write_paths",
+                 [{"id": "fixture-work", "executor_id": alias, "write_paths": [], "depends_on": []}])
+        return D.begin(*self.args, "developer", work_item="fixture-work")
 
     def image(self, ticket, data):
         path = self.root / ticket["image_path"]
@@ -316,7 +322,7 @@ class VisualTests(unittest.TestCase):
             self.judgment("self-is-not-independent", capture, self_view)
         with self.assertRaises(ValueError):
             V.view(*self.args, capture, "fake", viewed=True, reviewer_dispatch="not-a-dispatch")
-        developer = D.begin(*self.args, "developer")
+        developer = self.developer_request("developer")
         D.accepted(*self.args, developer["id"], "developer", host_executor_id="host-dev")
         with self.assertRaises(ValueError):
             V.view(*self.args, capture, "developer-review", viewed=True, reviewer_dispatch=developer["id"])
@@ -349,7 +355,7 @@ class VisualTests(unittest.TestCase):
 
     def test_old_task_developer_can_review_new_task_but_current_implementer_cannot(self):
         T.start(*self.args, "old", "old UI", ["observe"])
-        old = D.begin(*self.args, "developer")
+        old = self.developer_request("old-dev")
         D.accepted(*self.args, old["id"], "old-dev", host_executor_id="host-reused")
         D.complete(*self.args, old["id"], executors_stopped=True, stop_evidence="fixture old task stopped")
         T.end(*self.args, "old")
@@ -360,7 +366,7 @@ class VisualTests(unittest.TestCase):
         D.accepted(*self.args, tester["id"], "current-tester", host_executor_id="host-reused")
         viewed = V.view(*self.args, capture, "current-tester-view", viewed=True, reviewer_dispatch=tester["id"])
         self.judgment("current-review", capture, viewed, reviewer_dispatch=tester["id"])
-        developer = D.begin(*self.args, "developer")
+        developer = self.developer_request("current-dev")
         D.accepted(*self.args, developer["id"], "current-dev", host_executor_id="host-reused")
         with self.assertRaisesRegex(ValueError, "implementation executor"):
             V.view(*self.args, capture, "same-host", viewed=True, reviewer_dispatch=tester["id"])

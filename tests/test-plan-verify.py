@@ -16,6 +16,7 @@ import run_state as R
 import run_tasks as T
 import check_plan as P
 import pipeline_cli as CLI
+import work_allocation as W
 
 
 class VerifyCliTests(unittest.TestCase):
@@ -398,7 +399,7 @@ class VerifyCliTests(unittest.TestCase):
                 if kind == "task":
                     T.start(self.root, self.run, self.owner, "active", "goal", ["observe"])
                 elif kind == "role":
-                    D.begin(self.root, self.run, self.owner, "developer")
+                    self.developer_request()
                 elif kind == "wait":
                     state["continuity_wait"] = {"status": "waiting"}
                     R._atomic(path, state)
@@ -420,7 +421,7 @@ class VerifyCliTests(unittest.TestCase):
                 self.assertIsNotNone(R.status(self.root)["active"])
                 current = R.status(self.root)["state"]
                 for key in ("tasks", "role_dispatches", "role_events", "role_execution", "continuity_wait", "release_plan",
-                            "running_checks", "observed_checks"):
+                            "running_checks", "observed_checks", "work_allocation"):
                     if key in original:
                         current[key] = original[key]
                     else:
@@ -428,13 +429,18 @@ class VerifyCliTests(unittest.TestCase):
                 R._atomic(path, current)
 
     def test_observed_delegation_cannot_use_direct_finish(self):
-        item = D.begin(self.root, self.run, self.owner, "developer")
+        item = self.developer_request()
         D.complete(self.root, self.run, self.owner, item["id"], executors_stopped=True,
                    stop_evidence="host rejected creation", outcome="failed")
         result = self.verify("delegated", *self.finish_args(), expected=2)
         self.assertIn("cannot be relabeled direct", result["message"])
         self.assertEqual(R.status(self.root)["state"]["role_execution"], "delegated")
         self.assertFalse((self.root / "counter").exists())
+
+    def developer_request(self):
+        W.decide(self.root, self.run, self.owner, "serial", "shared_write_paths",
+                 [{"id": "fixture-work", "executor_id": "fixture-dev", "write_paths": [], "depends_on": []}])
+        return D.begin(self.root, self.run, self.owner, "developer", work_item="fixture-work")
 
 
 if __name__ == "__main__":

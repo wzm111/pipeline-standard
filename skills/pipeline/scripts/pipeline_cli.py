@@ -100,6 +100,9 @@ def parser():
     policy = sub.add_parser("policy", help="inspect current rule revision and caller acknowledgement without writes")
     policy.add_argument("--project", default=".")
     policy.add_argument("--run-id")
+    allocation = sub.add_parser("allocation-status", help="read-only coordinator decision and registered dispatch boundaries")
+    allocation.add_argument("--project", default=".")
+    allocation.add_argument("--run-id")
     preflight = sub.add_parser("preflight", help="inspect actual cwd and executable without starting a run or process")
     preflight.add_argument("--project", default=".")
     preflight.add_argument("--cwd")
@@ -120,11 +123,14 @@ def parser():
     visual_status.add_argument("--run-id", required=True)
     visual_status.add_argument("--requirement", required=True)
     owned = {}
-    for name in ("update", "check", "report", "finish", "plan", "plan-preflight", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
+    for name in ("update", "check", "report", "finish", "plan", "plan-preflight", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
     owned["policy-ack"].add_argument("--revision", required=True)
+    owned["allocation-review"].add_argument("--change-id", required=True, help="stable id of a meaningful authorized scope change")
+    owned["allocation-decide"].add_argument("--json", required=True, dest="allocation_payload",
+                                           help="mode, technical reason and developer assignments; records a plan, never spawns")
     for action in ("visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
         owned[action].add_argument("--name", required=True)
     owned["visual-declare"].add_argument("--json", required=True, dest="payload")
@@ -228,6 +234,9 @@ def dispatch(args):
     if args.action == "policy":
         import run_policy
         return run_policy.inspect(root, R.status(root, args.run_id)["state"]), 0
+    if args.action == "allocation-status":
+        import work_allocation as W
+        return W.summary(R.status(root, args.run_id)["state"] or {}), 0
     if args.action == "reuse-preflight":
         argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
         result = C.inspect_reuse(root, args.run_id, argv=argv, scope=args.scope,
@@ -283,6 +292,14 @@ def dispatch(args):
                 "audit": _optional_audit(root, state["run_id"]), **paths()}, 0
     receipt = _receipt(root, args.receipt)
     run_id, owner = receipt["run_id"], receipt["owner_token"]
+    if args.action in {"allocation-review", "allocation-decide"}:
+        import work_allocation as W
+        if args.action == "allocation-review":
+            return W.scope_change(root, run_id, owner, args.change_id), 0
+        payload = json.loads(args.allocation_payload)
+        if not isinstance(payload, dict) or set(payload) != {"mode", "reason", "assignments"}:
+            raise ValueError("allocation decision requires mode, reason and assignments")
+        return W.decide(root, run_id, owner, **payload), 0
     if args.action.startswith("visual-"):
         import visual_evidence as V
         if args.action == "visual-declare":
