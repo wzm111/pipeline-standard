@@ -159,7 +159,7 @@ def _claim_state(root, run_id, state, name, write_paths, *, testing=True):
     if testing and (state["stage"], state.get("activity")) != ("checking", "testing"):
         state.update(stage="checking", activity="testing")
         state["history"].append(R._event(state, "transition", R._now()))
-    claims.append({"name": name, "write_paths": write_paths})
+    claims.append({"name": name, "write_paths": write_paths, "started_at": R._now()})
 
 
 def _release_state(state, name):

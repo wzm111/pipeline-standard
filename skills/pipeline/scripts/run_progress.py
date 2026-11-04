@@ -51,7 +51,7 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
     refs = state.get("artifacts", [])
     for ref in refs[-REPORT_LIMIT:]:
         if not isinstance(ref, str) or not re.fullmatch(
-                rf"tmp/pipeline/runs/{identity}/artifacts/(check|planned_check|check_plan)/[a-z][a-z0-9_-]{{0,63}}\.json", ref):
+                rf"tmp/pipeline/runs/{identity}/artifacts/(check|planned_check|check_plan|qa)/[a-z][a-z0-9_-]{{0,63}}\.json", ref):
             continue
         try:
             report = E.read_report(root, identity, ref)
@@ -116,8 +116,28 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
             proof = by_ref[ref]["payload"]
             if proof.get("intent", "test") in {"test", "check"}:
                 append_result(ref.rsplit("/", 1)[-1][:-5], proof)
+    def within_task(value):
+        at = stamp(value)
+        return bool(at and (not start or R._timestamp(at) >= R._timestamp(start))
+                    and (not ended or R._timestamp(at) <= R._timestamp(ended)))
+
     active_checks = [{"step": label(item.get("name")), "started_at": stamp(item.get("started_at"))}
-                     for item in state.get("running_checks", [])]
+                     for item in state.get("running_checks", [])
+                     if item.get("name") not in state.get("observed_checks", {})
+                     and (within_task(item.get("started_at"))
+                          or (item.get("started_at") is None and not ended))]
+    operations = [{"step": label(item.get("label")), "category": item.get("category")
+                   if item.get("category") in {"read", "write", "locate", "handoff", "git", "network", "verify", "other"}
+                   else "unknown", "started_at": stamp(item.get("start"))}
+                  for item in state.get("operation_spans", [])[-REPORT_LIMIT:]
+                  if item.get("status") == "pending" and within_task(item.get("start"))]
+    observations = [{"step": label(item.get("observation_id")), "started_at": stamp(item.get("started_at"))}
+                    for item in list(state.get("observed_checks", {}).values())[-REPORT_LIMIT:]
+                    if item.get("status") == "running" and within_task(item.get("started_at"))]
+    qa = [report for _, report in reports if report["kind"] == "qa"]
+    latest_qa = ({"gate": qa[-1]["payload"].get("gate")
+                  if qa[-1]["payload"].get("gate") in {"PASS", "CONCERNS", "FAIL"} else "unknown",
+                  "recorded_at": stamp(qa[-1]["recorded_at"]), "acceptance": "not_revalidated"} if qa else None)
     roles = [{"role": label(item.get("role")), "status": item["status"]}
              for item in state.get("role_dispatches", []) if item.get("status") in {"working", "dispatching"}]
     waiting = state.get("continuity_wait", {}).get("status") == "waiting"
@@ -125,7 +145,7 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
     blockers = (["user_action_required"] if waiting else [])
     if declared_wait and not waiting:
         blockers.append("human_wait_action_unrecorded")
-    if observed_host == "idle" and (roles or active_checks):
+    if observed_host == "idle" and (roles or active_checks or operations or observations):
         blockers.append("host_idle_with_registered_work")
     if any(item["result"] == "recorded_failure" for item in remaining):
         blockers.append("recorded_check_failure")
@@ -134,14 +154,16 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
     badge = ("🔴[需你处理]" if waiting else "🔎[待核实]" if conflicts else
              "🟠[修复中]" if blockers else "✅[已完成]" if status == "completed" else
              "🔎[待核实]" if ended or observed_host in {"idle", "stale"} else
-             "⏳[等待中]" if roles or active_checks else "🔎[待核实]")
+             "⏳[等待中]" if roles or active_checks or operations or observations else "🔎[待核实]")
     delivery_status = ("unknown" if not state else "external_action_pending" if waiting or declared_wait else
                        "run_completed_recorded" if status == "completed" else
                        "execution_ended_acceptance_pending" if ended else "in_progress")
     result = {"run_id": identity, "task_id": label(task.get("task_id")) if task else None,
               "status": status, "stage": label(state.get("stage")),
               "activity": state.get("activity") if state.get("activity") in R.ACTIVITIES else "unknown",
-              "badge": badge, "current": {"checks": active_checks[:LIMIT], "roles": roles[:LIMIT]},
+              "badge": badge, "current": {"checks": active_checks[:LIMIT], "roles": roles[:LIMIT],
+                                           "operations": operations[:LIMIT], "observations": observations[:LIMIT]},
+              "latest_qa": latest_qa,
               "task_execution": {"status": task_status, "ended_at": ended},
               "delivery": {"status": delivery_status, "acceptance": "not_revalidated"},
               "host_feedback": {"status": observed_host, "ended_at": idle_boundary,
@@ -156,7 +178,10 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
                       "none" if status == "completed" else "inspect_host_and_plan",
               "last_result_at": last_result_at, "state_updated_at": stamp(state.get("updated_at")),
               "unavailable_records": unavailable,
-              "truncated": len(refs) > REPORT_LIMIT or any(len(items) > LIMIT for items in (completed, remaining, active_checks, roles)),
+              "truncated": len(refs) > REPORT_LIMIT or any(len(items) > LIMIT for items in
+                             (completed, remaining, active_checks, roles, operations, observations))
+                             or len(state.get("operation_spans", [])) > REPORT_LIMIT
+                             or len(state.get("observed_checks", {})) > REPORT_LIMIT,
               "notice": NOTICE}
     # Do not manufacture a new milestone from a state timestamp-only refresh.
     result["milestone_id"] = hashlib.sha256(json.dumps(
@@ -166,12 +191,27 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
     return result
 
 
+def delta(value, after_milestone=None):
+    """Caller-held cursor; no file, timer, log read or repeated full report."""
+    if after_milestone is not None and (not isinstance(after_milestone, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", after_milestone)):
+        raise ValueError("after milestone must be the returned milestone identity")
+    if after_milestone == value["milestone_id"]:
+        return {"changed": False, "milestone_id": value["milestone_id"], "notice": NOTICE}
+    return {"changed": True, **value}
+
+
 def render(value):
+    if value.get("changed") is False:
+        return "无新的已登记里程碑；未重新核验宿主健康或验收。"
     def names(items):
         return ", ".join(item["step"] for item in items) or "未登记"
     current = names(value["current"]["checks"])
     if value["current"]["roles"]:
         current += "；等待角色反馈：" + ", ".join(item["role"] for item in value["current"]["roles"])
+    for key, title in (("operations", "已登记操作"), ("observations", "等待宿主返回")):
+        if value["current"].get(key):
+            current += "；" + title + "：" + names(value["current"][key])
     next_step = {"user_action_then_verify": "完成原人工动作后验证", "inspect_remaining": "核对剩余步骤及其证据",
                  "reconcile_host_and_records": "核对宿主反馈与登记状态，不自动重启或清锁",
                  "review_task_acceptance": "核对当前任务验收及待交付项，执行结束不代表验收通过",

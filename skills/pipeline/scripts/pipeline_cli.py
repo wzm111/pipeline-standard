@@ -85,6 +85,7 @@ def parser():
     progress.add_argument("--format", choices=["json", "text"], default="json")
     progress.add_argument("--host-status", choices=["unknown", "running", "idle"], default="unknown")
     progress.add_argument("--host-ended-at", help="actual native idle time; never inferred from registration")
+    progress.add_argument("--after-milestone", help="last returned milestone_id; unchanged returns a compact delta")
     task_status = sub.add_parser("task-status", help="read-only execution task records, not acceptance")
     task_status.add_argument("--project", default=".")
     task_status.add_argument("--run-id")
@@ -221,6 +222,8 @@ def dispatch(args):
     if args.action == "progress":
         import run_progress as G
         value = G.snapshot(root, args.run_id, host_status=args.host_status, host_ended_at=args.host_ended_at)
+        if args.after_milestone is not None:
+            value = G.delta(value, args.after_milestone)
         return G.render(value) if args.format == "text" else value, 0
     if args.action == "policy":
         import run_policy

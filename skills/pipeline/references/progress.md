@@ -36,6 +36,8 @@
 
 已取得原生宿主反馈时，可用progress的`--host-status running|idle`及idle时的`--host-ended-at <真实停止时间>`，只读注明依据；没有反馈保持unknown，不为此启动探活。过早的idle反馈标stale；idle与仍登记的角色/检查冲突时标待核实，不能自动取消、重启或清锁。查询不发送聊天消息，执行者仍须在实际里程碑和长操作返回时按本页反馈。
 
+一次`progress`同时返回当前task的检查、待返回宿主观察、未结束操作与最近QA登记结论，不读日志正文；QA字段只代表已登记，不重新验收。连续查询可传`--after-milestone <上次milestone_id>`，无变化仅返回紧凑delta，调用方继续保持安静，不再逐条tail旧日志。脚本不创建轮询或自动发送消息。
+
 执行者可在阶段或重要结果变化后调用 `pipeline_cli.py progress --project <项目> --run-id <当前run> --format text`，直接取得固定标识及当前任务、登记成功步骤、当前检查/角色、剩余项和阻塞；默认JSON还返回`milestone_id`供按实质内容去重。主会话结合实际宿主反馈转成简短中文步骤，不能仅粘贴内部ID代替说明。该查询只读当前任务的有界元数据，不读日志/凭据、不重新哈希源码、不启动检查或定时器。`recorded_success`只表示记录时成功，当前有效性仍由原QA核验；`last_result_at`只来自实际检查结束时间，和`state_updated_at`分开。无计划、未采集或截断项保持未知。脚本不会自行发送聊天消息，长工具调用未返回时仍受宿主反馈能力限制。
 
 复用当前上下文、现有state/当前task、running_checks、operation_spans和角色最近反馈。必要时只读`pipeline_cli.py status --project <项目> --run-id <已知ID> --recovery`取紧凑指针，再只看当前步骤需要的记录；它不是进程探活或验收证明。进度查询不启动run、不清锁，也不因查看而修改updated_at。
