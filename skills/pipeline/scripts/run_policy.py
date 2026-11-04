@@ -5,6 +5,7 @@ understanding. Legacy runs remain untracked until their owner explicitly opts in
 """
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import run_evidence as E
@@ -66,12 +67,31 @@ def inspect(project_root, state):
     except (OSError, ValueError):
         return {"mode": "managed", "managed": True, "current": False,
                 "caller_acknowledged": False, "stale": True, "revision": None, "pending_ack": True}
-    matches = policy.get("mode") == "managed" and policy.get("revision") == current["revision"]
-    acknowledged = (matches and policy.get("caller_acknowledged") is True
-                    and policy.get("acknowledged_revision") == current["revision"])
+    sources = policy.get("sources")
+    optional = {"project:AGENTS.md", "project:CLAUDE.md"}
+    valid_sources = (isinstance(sources, dict) and sources.keys() == current["sources"].keys()
+                     and all(isinstance(v, str) and (bool(re.fullmatch(r"[0-9a-f]{64}", v))
+                                 or (k in optional and v == "missing")) for k, v in sources.items()))
+    coherent = (valid_sources and policy.get("revision") == _digest(sources)
+                and policy.get("source_revision") == _digest({k: v for k, v in sources.items()
+                                                                if k.startswith("skill:")}))
+    if not coherent:
+        return {"mode": "managed", "managed": True, "current": False,
+                "caller_acknowledged": False, "stale": True, "revision": current["revision"], "pending_ack": True}
+    recorded_ack = (policy.get("mode") == "managed" and policy.get("caller_acknowledged") is True
+                    and policy.get("acknowledged_revision") == policy.get("revision"))
+    project = {k: v for k, v in current["sources"].items() if k.startswith("project:")}
+    saved_project = {k: v for k, v in sources.items() if k.startswith("project:")}
+    latest = policy.get("revision") == current["revision"]
+    # Shared guidance updates do not interrupt an acknowledged in-flight task.
+    # Project contracts remain immediate; a new task must adopt the new rules.
+    matches = policy.get("mode") == "managed" and (latest or (recorded_ack and project == saved_project))
+    acknowledged = matches and recorded_ack
     return {"mode": "managed", "managed": True, "current": matches,
             "caller_acknowledged": acknowledged, "stale": not matches,
-            "revision": current["revision"], "pending_ack": not acknowledged}
+            "revision": current["revision"], "effective_revision": policy.get("revision"),
+            "update_available": not latest, "adoption_boundary": "next_task",
+            "pending_ack": not acknowledged}
 
 
 def require(project_root, state):
@@ -86,6 +106,12 @@ def require_owned(project_root, run_id, owner):
     root, base = R._paths(project_root)
     _, state = R._load_owned(base, run_id, owner)
     require(root, state)
+
+
+def require_new_task(project_root, state):
+    require(project_root, state)
+    if "run_policy" in state and inspect(project_root, state).get("update_available"):
+        raise ValueError("policy update available: acknowledge current rules before a new task; keep valid existing checks")
 
 
 def acknowledge(project_root, run_id, owner, revision):

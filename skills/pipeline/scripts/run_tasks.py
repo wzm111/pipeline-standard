@@ -86,7 +86,7 @@ def start(root, run_id, owner, task_id, goal, acceptance, *, require_managed=Fal
             return deepcopy(existing)
         if require_managed and "run_policy" not in state:
             raise ValueError("new CLI tasks require managed adoption; inspect policy then policy-ack --receipt <current receipt> --revision <current revision>")
-        run_policy.require(root, state)
+        run_policy.require_new_task(root, state)
         if any(item["status"] == "running" for item in tasks):
             raise ValueError("end the current task explicitly before starting another")
         now = _clock(state)

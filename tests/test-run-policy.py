@@ -179,15 +179,18 @@ class PolicyTests(unittest.TestCase):
             rule = skill / "references/evidence.md"
             original = rule.read_bytes()
             rule.write_bytes(original + b"\nfixture rule change")
-            with self.assertRaisesRegex(ValueError, "policy"):
-                C.execute_check(*args, "blocked", argv=self.argv, scope=["input"])
+            view = V.inspect(self.root, R.status(self.root)["state"])
+            self.assertTrue(view["update_available"])
+            self.assertTrue(view["caller_acknowledged"])
+            self.assertFalse(view["stale"])
+            C.execute_check(*args, "continued", argv=self.argv, scope=["input"])
             rule.unlink()
             with self.assertRaisesRegex(ValueError, "policy"):
                 V.acknowledge(*args, state["run_policy"]["revision"])
             rule.symlink_to(skill / "SKILL.md")
             with self.assertRaisesRegex(ValueError, "policy"):
                 V.snapshot(self.root)
-        self.assertFalse((self.root / "marker").exists())
+        self.assertTrue((self.root / "marker").exists())
 
     def test_missing_required_project_rule_and_managed_completed_guard(self):
         (self.root / "PIPELINE.md").unlink()
@@ -203,7 +206,42 @@ class PolicyTests(unittest.TestCase):
         final = R.finish(*self.args, "completed", executors_stopped=True, stop_evidence="fixture stopped")
         self.assertEqual(final["status"], "completed")
 
-    def test_actual_visual_rule_change_requires_refresh_without_proving_reading(self):
+    def test_finish_keeps_acknowledged_policy_after_shared_guidance_update(self):
+        skill = self.root / "fixture-skill"
+        for relative in V.RULES:
+            dest = skill / relative
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(V.SKILL_ROOT / relative, dest)
+        with patch.object(V, "SKILL_ROOT", skill):
+            state = R.start(self.root, managed=True)
+            args = self.root, state["run_id"], state["owner_token"]
+            V.acknowledge(*args, V.snapshot(self.root)["revision"])
+            check = C.execute_check(*args, "unit", argv=self.argv, scope=["input"], coverage=["unit"])
+            import run_evidence as E
+            E.write_report(*args, "qa", "final", {"gate": "PASS", "required_checks": ["unit"], "checks": [check["report"]]})
+            rule = skill / "references/progress.md"
+            rule.write_bytes(rule.read_bytes() + b"\nshared guidance update")
+            D.confirm_direct(*args)
+            result = R.finish(*args, "completed", executors_stopped=True, stop_evidence="fixture stopped")
+            self.assertEqual(result["status"], "completed")
+
+    def test_pinned_policy_requires_complete_coherent_saved_snapshot(self):
+        self.start(acknowledge=True)
+        state = self.state()
+        for change in ("missing-skill", "bad-revision", "bad-source-revision"):
+            bad = json.loads(json.dumps(state))
+            policy = bad["run_policy"]
+            if change == "missing-skill":
+                policy["sources"] = {k: v for k, v in policy["sources"].items() if k.startswith("project:")}
+            elif change == "bad-revision":
+                policy["revision"] = policy["acknowledged_revision"] = "malformed"
+            else:
+                policy["source_revision"] = "0" * 64
+            self.assertFalse(V.inspect(self.root, bad)["caller_acknowledged"])
+            with self.assertRaisesRegex(ValueError, "policy"):
+                V.require(self.root, bad)
+
+    def test_visual_rule_update_is_deferred_to_next_task_without_restarting_checks(self):
         skill = self.root / "fixture-skill"
         for relative in V.RULES:
             destination = skill / relative
@@ -215,11 +253,20 @@ class PolicyTests(unittest.TestCase):
             V.acknowledge(*args, V.snapshot(self.root)["revision"])
             rule = skill / "references/visual.md"
             rule.write_bytes(rule.read_bytes() + b"\nfixture visual requirement changed\n")
-            self.assertTrue(V.inspect(self.root, R.status(self.root)["state"])["stale"])
+            view = V.inspect(self.root, R.status(self.root)["state"])
+            self.assertFalse(view["stale"])
+            self.assertTrue(view["update_available"])
+            first = C.execute_check(*args, "current", argv=self.argv, scope=["input"])
+            (self.root / "marker").unlink()
             with self.assertRaisesRegex(ValueError, "policy"):
-                C.execute_check(*args, "blocked", argv=self.argv, scope=["input"])
+                T.start(*args, "next-task", "goal", ["unit"])
+            reused = C.execute_check(*args, "reused", argv=self.argv, scope=["input"],
+                                     reuse_from=first["report"], impact_covered=True)
+            self.assertTrue(reused["reused"])
             refreshed = V.acknowledge(*args, V.snapshot(self.root)["revision"])
             self.assertTrue(refreshed["caller_acknowledged"])
+            self.assertFalse(refreshed["update_available"])
+            T.start(*args, "next-task", "goal", ["unit"])
             self.assertNotIn("read_confirmed", refreshed)
             self.assertFalse((self.root / "marker").exists())
 

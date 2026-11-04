@@ -52,7 +52,7 @@ managed运行的QA PASS必须由入口核验，不接受只有gate、执行名�
 
 多个验收项或开发/QA交接改用[检查计划](check-plan.md)的plan/run/qa，共享稳定类别，不手工抄写两份列表；采用计划后，CLI缺少QA PASS会保留活动run并提示先验收，不能跑完命令就直接finish。子包检查可传`check --cwd <真实子目录>`；目录或运行器不确定时先用只读preflight，scope仍从项目根计算。成功finish自动置done，并返回未封存交付的具体原因；开发、测试和等待的实际切换仍及时update，不在收尾推算旧阶段耗时。
 
-新CLI start默认管理规则版本，内容摘要只覆盖固定关键规则和项目PIPELINE.md、AGENTS.md、CLAUDE.md的存在/缺失，不扫描业务文件。首次确认后可继续使用；关键规则变化时，检查/计划/新宿主观察/派发/任务启动及完成入口会拒绝。用`policy --project <root> --run-id <run-id>`只读查看当前revision，补读变化规则后`policy-ack`即可沿用原run，不重跑仍有效的检查。查询、记录已开始宿主的真实返回、人工等待和暂停/中止不因规则过期被封死。
+新CLI start默认管理规则版本，内容摘要只覆盖固定关键规则和项目PIPELINE.md、AGENTS.md、CLAUDE.md的存在/缺失，不扫描业务文件。首次确认后可继续使用；已确认的当前任务沿用记录的共享skill规则版本；共享指导更新只标记`update_available`，不打断检查、构建或完成。`effective_revision`是当前采用版，`revision`是可更新版；`current`表示当前任务采用仍有效，不代表已读取最新版。新task开始前须刷新确认；项目PIPELINE.md/AGENTS.md/CLAUDE.md变化、规则缺失/不安全或快照损坏仍立即阻断。补读变化规则后`policy-ack`沿用原run，仍有效检查不重跑。查询、记录已开始宿主的真实返回、人工等待和暂停/中止不因规则过期被封死。
 
 `caller_acknowledged`仅记录调用方声明已采用该版本，不能证明模型阅读理解或每次进度格式合规。旧run及旧Python默认start保持`legacy_untracked`，不得称已采用；旧run经CLI开启此前不存在的新task时必须先policy-ack，同值旧task重试和既有工作收尾不追溯改写。己方活动run可显式确认升级并沿用同run，不回填历史。新Python调用必须使用`run_state.start(..., managed=True)`接同一门禁，不得为绕过规则选择legacy默认路径；legacy仅保留旧调用兼容，不能作为本轮采用合规证明。只约束这些已接入入口，不能拦截任意shell或替代原生聊天输出。
 
