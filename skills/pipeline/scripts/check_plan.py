@@ -399,7 +399,7 @@ def _valid(root, run_id, owner, state, plan_ref, check_id, check, snapshot=None)
 
 
 def _environment(root, owner, check):
-    child_env = C.child_environment(owner, check.get("environment"))
+    child_env = C.child_environment(owner, check.get("environment"), project_root=root)
     cwd = E._local(Path(root).resolve(strict=True), check.get("cwd", "."))
     return C._environment(cwd, check["argv"], child_env, check.get("environment"),
                           project_root=Path(root).resolve(strict=True))
@@ -468,7 +468,7 @@ def inspect_state(root, run_id, owner, plan_ref, state, summary="", *, snapshot=
                     proof = _report(root, run_id, binding["result"]["report"], "check", snapshot)
                     observed = snapshot["observations"].get(_identity(proof), binding["result"]["report"])
                     latest = _report(root, run_id, observed, "check", snapshot)
-                    child_env = C.child_environment(owner, check.get("environment"))
+                    child_env = C.child_environment(owner, check.get("environment"), project_root=root)
                     diagnostics[check_id] = C.environment_changes(
                         latest.get("observed_environment_diagnostics"), C.environment_diagnostics(child_env))
     covered = {label for key, check in plan["checks"].items() if key not in failures for label in check["coverage"]}

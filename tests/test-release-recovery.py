@@ -127,10 +127,10 @@ class ReleaseRecoveryTests(unittest.TestCase):
         self.assertEqual(self.attempt("exception")["status"], "failed")
         self.reconcile("exception", "safe-exception")
         original = F.E.fingerprint
-        def unavailable(root, paths):
+        def unavailable(root, paths, environment=None):
             if paths == ["artifact"]:
                 raise OSError("artifact observation unavailable")
-            return original(root, paths)
+            return original(root, paths, environment)
         with patch.object(F.E, "fingerprint", side_effect=unavailable):
             with self.assertRaises(OSError):
                 self.execute("post-exception", "build")

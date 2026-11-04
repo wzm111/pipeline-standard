@@ -39,6 +39,10 @@ environment补充本次实际使用的运行时、工具版本和必要外部状
 
 本地子进程检查可显式在environment中声明`pipeline_execution_profile="stable_host"`：只在启动真实子进程之前移除宿主本次工具调用标识`CODEX_TOOL_CALL_ID`，环境hash及差异诊断使用同一份实际子进程环境。这是对命令执行环境的约束，命令若依赖该标识就不能选用；不是回放旧环境或仅在hash中忽略字段。默认仍严格保留该字段；PATH、NODE/PYTHON配置、SHLVL及所有其他未知变量均保留并参与匹配。profile本身也参与证据身份，旧的默认检查不能升级为stable_host证据；其他profile值直接拒绝。公共宿主工具观察不适用此子进程profile。
 
+Python子进程检查可另外显式声明`pipeline_input_profile="python_source"`，实际子进程固定`PYTHONDONTWRITEBYTECODE=1`，同时将`PYTHONPYCACHEPREFIX`指向系统临时目录内按项目路径确定的、必须不存在的隔离路径，防止读取已忽略的旧缓存；工具不创建或删除该路径，执行前后及复用时发现其存在或为软链接即拒绝。要求Python解释器遵守这些环境变量，`-E`、`-I`及其组合参数拒绝；不得用于清除/改写Python环境或自定义读取缓存的包装命令。执行前后、复用及证据引用均使用同一源码指纹。仅扫描声明的源码目录时，忽略其内部`__pycache__`中存在同目录对应`.py`源码的标准`模块.cpython-NNN[.opt-1或.opt-2].pyc`；仅含这些缓存的目录本身也不参与指纹。显式声明的缓存目录或pyc仍严格扫描；孤立缓存、未知文件、源码、配置和锁文件均保留，软链接拒绝，不依据.gitignore或依赖/构建目录名称跳过。默认仍全量严格扫描，profile身份阻止旧严格证据升级；命令若依赖缓存内容则不得选择此profile。
+
+为防止`-X pycache_prefix=...`覆盖隔离环境，python_source也保守拒绝全部`-X`解释器选项；需要这些参数时沿用严格默认指纹。
+
 规则采用版本由新CLI start记录；按[standard](standard.md)读取适用规则并policy-ack后才开始新检查。版本门禁拒绝时先刷新规则，保留原run与已有结果，不把刷新当成测试失效或另起流水线。旧API调用只有显式使用managed=True或确认升级后才受此门禁，历史采用未知；登记确认不等于真实执行已合规。
 
 必须通过浏览器等专用工具执行时，使用`observed_checks.begin/finish`包住原宿主调用；它只记录观察，不启动工具。begin声明本次唯一observation_id、真实command/scope/environment/coverage和write_paths，保存开始指纹并占用共用检查资源、进入testing；finish仅在宿主已返回或已确认停止后，传真实exit_code、已有脱敏log_path、host_stopped=True及stop_evidence，保存起止/耗时/分类并释放资源、恢复原阶段。环境只存整体摘要；未知宿主环境不宣称机器核验。

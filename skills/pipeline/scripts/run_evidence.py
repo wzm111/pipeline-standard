@@ -110,7 +110,15 @@ def read_report(project_root, run_id, relative, *, kind=None):
     return report
 
 
-def fingerprint(project_root, scope):
+def input_profile(environment=None):
+    environment = environment or {}
+    profile = environment.get("context:pipeline_input_profile", environment.get("pipeline_input_profile"))
+    if profile not in (None, "python_source"):
+        raise ValueError("unsupported pipeline input profile")
+    return profile
+
+
+def fingerprint(project_root, scope, environment=None):
     """Hash declared files/directories, including additions and missing paths.
 
     Callers choose the affected code/config/dependency scope. This helper cannot
@@ -118,7 +126,7 @@ def fingerprint(project_root, scope):
     """
     if not isinstance(scope, list) or not scope:
         raise ValueError("nonempty scope required")
-    return _input_fingerprint(project_root, scope, narrow=True)
+    return _input_fingerprint(project_root, scope, narrow=True, profile=input_profile(environment))
 
 
 def _environment(environment):
@@ -139,7 +147,7 @@ def record_check(project_root, run_id, owner_token, name, *, command, scope,
     coverage = coverage_labels(coverage)
     root = Path(project_root).resolve(strict=True)
     log = _local(root, log_path)
-    current = fingerprint(root, scope)
+    current = fingerprint(root, scope, environment)
     if not isinstance(started_fingerprint, str) or current != started_fingerprint:
         raise ValueError("inputs changed during check or pre-check fingerprint missing")
     payload = {"command": command, "scope": deepcopy(scope),
@@ -174,7 +182,7 @@ def reusable_check(project_root, run_id, relative, *, command, environment, impa
             return {"reusable": False, "reason": "check_not_passed"}
         if payload["command"] != command or payload["environment"] != _environment(environment):
             return {"reusable": False, "reason": "command_or_environment_changed"}
-        if fingerprint(project_root, payload["scope"]) != payload["fingerprint"]:
+        if fingerprint(project_root, payload["scope"], payload["environment"]) != payload["fingerprint"]:
             return {"reusable": False, "reason": "inputs_changed"}
         root = Path(project_root).resolve(strict=True)
         log = _local(root, payload["log_path"])

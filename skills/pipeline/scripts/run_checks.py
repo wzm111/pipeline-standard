@@ -10,6 +10,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
 
 import run_evidence as E
@@ -24,7 +25,17 @@ _OPERATIONAL_KEYS = {"PWD", "SHLVL", "_", "PATH", "NODE_ENV", "NODE_OPTIONS", "P
                      "LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MESSAGES", "LC_MONETARY", "LC_NUMERIC", "LC_TIME"}
 
 
-def child_environment(owner, context=None):
+def _python_cache_prefix(project_root):
+    if project_root is None:
+        raise ValueError("python_source requires project root")
+    identity = hashlib.sha256(str(Path(project_root).resolve(strict=True)).encode()).hexdigest()
+    prefix = Path(tempfile.gettempdir()) / ("pipeline-python-source-" + identity)
+    if prefix.exists() or prefix.is_symlink():
+        raise ValueError("python_source bytecode isolation prefix must not exist")
+    return str(prefix)
+
+
+def child_environment(owner, context=None, *, project_root=None):
     """Build the actual child environment; never replay a recorded environment.
 
     stable_host removes only the documented per-invocation host tool-call ID.
@@ -38,6 +49,9 @@ def child_environment(owner, context=None):
              if k != "PIPELINE_OWNER_TOKEN" and (not owner or owner not in v)}
     if profile == "stable_host":
         child.pop("CODEX_TOOL_CALL_ID", None)
+    if E.input_profile(context) == "python_source":
+        child["PYTHONDONTWRITEBYTECODE"] = "1"
+        child["PYTHONPYCACHEPREFIX"] = _python_cache_prefix(project_root)
     return child
 
 
@@ -108,13 +122,21 @@ def inspect_runner(project_root, argv, *, cwd=None, write_paths=None, protected_
     directory = _workdir(root, cwd)
     if not isinstance(argv, list) or not argv or any(not isinstance(a, str) or not a or "\0" in a for a in argv):
         raise ValueError("argv must be a nonempty list of arguments")
-    env = _environment(directory, argv, child_environment(None, environment), environment, project_root=root)
+    env = _environment(directory, argv, child_environment(None, environment, project_root=root), environment, project_root=root)
     return {"cwd": directory.relative_to(root).as_posix(), "executable": env["executable"],
             "available": env["executable_sha256"] != "unavailable",
             "resources": inspect_resources(root, write_paths, protected_paths)}
 
 
 def _environment(root, argv, child_env, context, *, project_root=None):
+    if E.input_profile(context) == "python_source":
+        if child_env.get("PYTHONPYCACHEPREFIX") != _python_cache_prefix(project_root):
+            raise ValueError("python_source bytecode isolation environment mismatch")
+        for argument in argv[1:]:
+            if argument in {"-c", "-m", "--"} or not argument.startswith("-"):
+                break
+            if argument.startswith("--") or any(flag in argument[1:] for flag in "EIX"):
+                raise ValueError("python_source requires Python flags that honor its environment")
     # PATH entries (including the empty entry) are relative to the child's cwd.
     search_path = os.pathsep.join(str(root / part) if not Path(part).is_absolute() else part
                                   for part in child_env.get("PATH", os.defpath).split(os.pathsep))
@@ -265,8 +287,8 @@ def inspect_reuse(project_root, run_id, *, argv, scope, intent="test", environme
     if owner in command:
         raise ValueError("owner token cannot be passed to a command")
     coverage = E.coverage_labels(coverage)
-    E.fingerprint(root, scope)
-    child_env = child_environment(owner, environment)
+    E.fingerprint(root, scope, environment)
+    child_env = child_environment(owner, environment, project_root=root)
     env = _environment(directory, argv, child_env, environment, project_root=root)
     reusable, _, decision = _reuse_decision(root, run_id, owner, command=command, scope=scope,
         intent=intent, directory=directory, env=env, diagnostics=environment_diagnostics(child_env),
@@ -319,8 +341,8 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
         raise ValueError("timeout must be a finite positive duration")
     # Check declared paths before any process starts, even without competing checks.
     inspect_resources(root, write_paths, protected_paths)
-    before = E.fingerprint(root, scope)
-    child_env = child_environment(owner_token, environment)
+    before = E.fingerprint(root, scope, environment)
+    child_env = child_environment(owner_token, environment, project_root=root)
     env = _environment(directory, argv, child_env, environment, project_root=root)
     diagnostics = environment_diagnostics(child_env)
     command = shlex.join(argv)
@@ -365,7 +387,7 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
                 exit_code, error, interrupted = -1, "interrupted", exc
         seconds, finished_at = time.monotonic() - start, R._now()
         try:
-            stable = (env["executable_sha256"] != "unavailable" and E.fingerprint(root, scope) == before
+            stable = (env["executable_sha256"] != "unavailable" and E.fingerprint(root, scope, environment) == before
                       and _workdir(root, cwd) == directory
                       and _environment(directory, argv, child_env, environment, project_root=root) == env)
         except (OSError, ValueError):
