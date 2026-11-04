@@ -37,6 +37,8 @@ argv是原有获授权检查的参数列表，脚本不做shell展开或新增�
 
 environment补充本次实际使用的运行时、工具版本和必要外部状态标识，不含凭据。scope取自命令真实依赖范围；目录指纹包含新增/删除文件及可执行权限。两个证据接口共用input_fingerprint.py扫描与读取一致性校验，保留原有digest编码。`impact_covered=True`只能在确认当前变更及外部依赖均被记录范围覆盖时提供；脚本不会推断语义影响。未覆盖的服务数据、浏览器状态或未知环境变化均需补测。检查过程中输入或工具变化会标inputs_stable=false，不能在稍后恢复原文件后重新认领该PASS。
 
+本地子进程检查可显式在environment中声明`pipeline_execution_profile="stable_host"`：只在启动真实子进程之前移除宿主本次工具调用标识`CODEX_TOOL_CALL_ID`，环境hash及差异诊断使用同一份实际子进程环境。这是对命令执行环境的约束，命令若依赖该标识就不能选用；不是回放旧环境或仅在hash中忽略字段。默认仍严格保留该字段；PATH、NODE/PYTHON配置、SHLVL及所有其他未知变量均保留并参与匹配。profile本身也参与证据身份，旧的默认检查不能升级为stable_host证据；其他profile值直接拒绝。公共宿主工具观察不适用此子进程profile。
+
 规则采用版本由新CLI start记录；按[standard](standard.md)读取适用规则并policy-ack后才开始新检查。版本门禁拒绝时先刷新规则，保留原run与已有结果，不把刷新当成测试失效或另起流水线。旧API调用只有显式使用managed=True或确认升级后才受此门禁，历史采用未知；登记确认不等于真实执行已合规。
 
 必须通过浏览器等专用工具执行时，使用`observed_checks.begin/finish`包住原宿主调用；它只记录观察，不启动工具。begin声明本次唯一observation_id、真实command/scope/environment/coverage和write_paths，保存开始指纹并占用共用检查资源、进入testing；finish仅在宿主已返回或已确认停止后，传真实exit_code、已有脱敏log_path、host_stopped=True及stop_evidence，保存起止/耗时/分类并释放资源、恢复原阶段。环境只存整体摘要；未知宿主环境不宣称机器核验。

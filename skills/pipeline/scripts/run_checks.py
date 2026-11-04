@@ -24,6 +24,23 @@ _OPERATIONAL_KEYS = {"PWD", "SHLVL", "_", "PATH", "NODE_ENV", "NODE_OPTIONS", "P
                      "LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MESSAGES", "LC_MONETARY", "LC_NUMERIC", "LC_TIME"}
 
 
+def child_environment(owner, context=None):
+    """Build the actual child environment; never replay a recorded environment.
+
+    stable_host removes only the documented per-invocation host tool-call ID.
+    The profile remains in the evidence context, so strict proofs cannot upgrade.
+    """
+    context = E._environment(context or {"scope": "local"})
+    profile = context.get("pipeline_execution_profile")
+    if profile is not None and profile != "stable_host":
+        raise ValueError("unsupported pipeline execution profile")
+    child = {k: v for k, v in os.environ.items()
+             if k != "PIPELINE_OWNER_TOKEN" and (not owner or owner not in v)}
+    if profile == "stable_host":
+        child.pop("CODEX_TOOL_CALL_ID", None)
+    return child
+
+
 def environment_diagnostics(child_env):
     """Private-value diagnostics, separate from the strict full environment identity."""
     def digest(value):
@@ -84,13 +101,14 @@ def inspect_resources(project_root, write_paths=None, protected_paths=None):
             "safe_to_execute": status not in {"unknown_writes", "conflict"}}
 
 
-def inspect_runner(project_root, argv, *, cwd=None, write_paths=None, protected_paths=None):
+def inspect_runner(project_root, argv, *, cwd=None, write_paths=None, protected_paths=None,
+                   environment=None):
     """Read-only executable/cwd preflight, no process and no environment dump."""
     root = Path(project_root).resolve(strict=True)
     directory = _workdir(root, cwd)
     if not isinstance(argv, list) or not argv or any(not isinstance(a, str) or not a or "\0" in a for a in argv):
         raise ValueError("argv must be a nonempty list of arguments")
-    env = _environment(directory, argv, dict(os.environ), None, project_root=root)
+    env = _environment(directory, argv, child_environment(None, environment), environment, project_root=root)
     return {"cwd": directory.relative_to(root).as_posix(), "executable": env["executable"],
             "available": env["executable_sha256"] != "unavailable",
             "resources": inspect_resources(root, write_paths, protected_paths)}
@@ -248,7 +266,7 @@ def inspect_reuse(project_root, run_id, *, argv, scope, intent="test", environme
         raise ValueError("owner token cannot be passed to a command")
     coverage = E.coverage_labels(coverage)
     E.fingerprint(root, scope)
-    child_env = {k: v for k, v in os.environ.items() if k != "PIPELINE_OWNER_TOKEN" and owner not in v}
+    child_env = child_environment(owner, environment)
     env = _environment(directory, argv, child_env, environment, project_root=root)
     reusable, _, decision = _reuse_decision(root, run_id, owner, command=command, scope=scope,
         intent=intent, directory=directory, env=env, diagnostics=environment_diagnostics(child_env),
@@ -302,7 +320,7 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
     # Check declared paths before any process starts, even without competing checks.
     inspect_resources(root, write_paths, protected_paths)
     before = E.fingerprint(root, scope)
-    child_env = {k: v for k, v in os.environ.items() if k != "PIPELINE_OWNER_TOKEN" and owner_token not in v}
+    child_env = child_environment(owner_token, environment)
     env = _environment(directory, argv, child_env, environment, project_root=root)
     diagnostics = environment_diagnostics(child_env)
     command = shlex.join(argv)
