@@ -8,6 +8,16 @@ import run_state as R
 
 EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "inherit", "unknown"}
 WORKFLOW_PHASES = {"implementation": "execution", "verification": "testing"}
+DEVELOPER_LIMIT = 3
+
+
+def _developer_reservations(state):
+    pending = [d for d in state.get("role_dispatches", [])
+               if d["role"] == "developer" and d["status"] in {"dispatching", "working"}]
+    executors = {d["executor_id"] for d in pending if d["executor_id"] is not None}
+    executors.update(key for key, actor in M._actors(state.get("role_events", [])).items()
+                     if actor["role"] == "developer" and actor["entries"][-1]["event"] != "stopped")
+    return len(executors) + sum(d["executor_id"] is None for d in pending)
 
 
 def _progress(state):
@@ -114,6 +124,8 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
         actor = M._actors(state.get("role_events", [])).get(executor_id)
         if actor and (actor["role"] != role or actor["entries"][-1]["event"] != "stopped"):
             raise ValueError("existing executor must finish its current episode before a new dispatch")
+        if role == "developer" and _developer_reservations(state) >= DEVELOPER_LIMIT:
+            raise ValueError("developer concurrency limit reached (3); wait for confirmed completion before dispatch")
         now = R._now()
         item = {"id": uuid.uuid4().hex, "role": role, "mode": "reuse" if executor_id else "create",
                 "executor_id": executor_id, "requested_model": model, "requested_effort": effort,

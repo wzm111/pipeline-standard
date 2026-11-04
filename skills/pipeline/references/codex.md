@@ -20,7 +20,7 @@
 
 有Python时base优先按[上下文缓存](context.md)传不可变reference：已加载的角色只收差量，新接收者显式load一次；未变来源不反复读取或重写摘要。旧base.md路径作为兼容输入，不再额外复制相同正文。
 
-复杂任务自动创建所需子agent，简单任务不为模型配置或摘要创建角色。打回、复测、后续批次使用follow-up保留上下文；standard选择最小必要角色集，thorough创建完整角色集。不转发完整对话。调度员负责轮次、闸口、CONCERNS和用户进度。
+复杂任务自动创建所需子agent，简单任务不为模型配置或摘要创建角色。独立模块可由主调度员决定使用1至3个developer，至多3个并行；主会话也占宿主名额，独立QA在有空闲名额且产物已冻结时启动。主调度员统一合并、提交与发布，不新增调度审批角色，不让不同开发重复修改共享文件或重复全量测试。打回、复测、后续批次使用follow-up保留上下文；standard选择最小必要角色集，thorough创建完整角色集。不转发完整对话。调度员负责轮次、闸口、CONCERNS和用户进度。
 
 实际工具调用点按[角色派发边界](role-dispatch.md)记录：begin后直接调用collaboration.spawn_agent/followup_task，宿主接受才accepted，收到真实结束结果并确认停止才complete。失败尝试和实际created/reused分开；未反馈的实际model/effort保持unknown。调用计时脚本不代替实际工具调用。当前会话直做只在收口confirm_direct，不造agent事件。
 

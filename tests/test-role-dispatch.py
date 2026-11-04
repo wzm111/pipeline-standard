@@ -3,6 +3,8 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills/pipeline/scripts"))
@@ -46,6 +48,54 @@ class RoleDispatchTests(unittest.TestCase):
         self.done(second)
         counts = D.summary(self.root)["metrics"]["roles"]["tester"]
         self.assertEqual((counts["created_count"], counts["reused_count"]), (1, 1))
+
+    def test_three_developer_reservations_block_fourth_without_affecting_other_roles(self):
+        tickets = [D.begin(*self.args, "developer") for _ in range(3)]
+        state = R.status(self.root)["state"]
+        with self.assertRaisesRegex(ValueError, "concurrency limit"):
+            D.begin(*self.args, "developer")
+        self.assertEqual(state, R.status(self.root)["state"])
+        D.begin(*self.args, "tester")  # Host capacity is a separate constraint.
+        self.done(tickets[0], "failed")
+        D.begin(*self.args, "developer")
+
+    def test_confirmed_completion_releases_one_slot_for_reuse(self):
+        tickets = []
+        for i in range(3):
+            ticket = D.begin(*self.args, "developer")
+            D.accepted(*self.args, ticket["id"], f"dev-{i}")
+            tickets.append(ticket)
+        with self.assertRaisesRegex(ValueError, "concurrency limit"):
+            D.begin(*self.args, "developer")
+        self.done(tickets[0])
+        reused = D.begin(*self.args, "developer", executor_id="dev-0", requested_model="inherit")
+        D.accepted(*self.args, reused["id"], "dev-0")
+        self.assertEqual(D._developer_reservations(R.status(self.root)["state"]), 3)
+        with self.assertRaisesRegex(ValueError, "concurrency limit"):
+            D.begin(*self.args, "developer")
+
+    def test_parallel_dispatch_attempts_reserve_only_three_slots(self):
+        def attempt(_):
+            for _ in range(1000):
+                try:
+                    return D.begin(*self.args, "developer")["id"]
+                except FileExistsError:
+                    Event().wait(0.001)  # Existing owned-write lock serializes mutations.
+                except ValueError as error:
+                    self.assertIn("concurrency limit", str(error))
+                    return None
+            self.fail("fixture writers did not release the owned lock")
+        with ThreadPoolExecutor(max_workers=5) as workers:
+            results = list(workers.map(attempt, range(5)))
+        self.assertEqual(sum(value is not None for value in results), 3)
+        self.assertEqual(len(R.status(self.root)["state"]["role_dispatches"]), 3)
+
+    def test_legacy_working_developers_also_reserve_capacity(self):
+        for i in range(3):
+            D.M.record_role_event(*self.args, "developer", f"legacy-{i}", "created")
+            D.M.record_role_event(*self.args, "developer", f"legacy-{i}", "working")
+        with self.assertRaisesRegex(ValueError, "concurrency limit"):
+            D.begin(*self.args, "developer")
 
     def test_native_parameters_and_host_mapping_do_not_infer_actual_model(self):
         parameters = {"model": "gpt-6.1-sol", "reasoning_effort": "medium", "fork_turns": "none"}

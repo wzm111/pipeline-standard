@@ -7,6 +7,8 @@
 3. 角色实际等待或开始可观测准备时，仍可用role_metrics.record_role_event记waiting/preparing/working；没有可观察的准备时间保持unknown，不用请求到接受的差值猜模型启动耗时。角色仍在工作时只发差量消息不另开工作episode、不重复记created/reused。
 4. 宿主确认本轮角色已完成后，`complete(root, run_id, owner_token, ticket['id'], executors_stopped=True, stop_evidence=...)`，自动闭合stopped。拒绝/创建失败须确认没有遗留执行者，再以outcome='failed'关闭尝试；超时/失联不能当停止证据。complete只记录状态，不会取消或销毁角色。
 
+同一run最多保留3个developer派发名额：尚未接受的dispatching、working和已有未停止developer事件都占位；第4个begin在写入前拒绝，只有真实停止并complete后才释放，不自动取消或增加名额。该门禁只覆盖已接入派发记录，不证明宿主实际容量或拦截所有原生调用；主调度员另按宿主可用名额和写入冲突决定派发顺序。
+
 同一角色后续新批次先begin续用，不冷启动替代。幂等重复accepted/complete不增加事件；不允许把closed结果改成另一结论。恢复前后未接受的旧派发先按真实停止情况关闭，再发新请求，不把中断空档算作工作。
 
 实际派发代表主流程进入实现或独立验收时，begin显式传`workflow_phase="implementation"`或`"verification"`；accepted确认宿主接受后，分别切换主run到implementation/execution或verification/testing，并用当下时间记录原history transition。begin本身不切换；创建失败不算进入QA。默认省略用于后台/并行角色，不根据tester等角色名抢写主阶段。请求期间若发生主状态显式更新（包括同值更新）、任务边界、人工等待或仍有前台检查/宿主观察，旧请求不覆盖现场，返回workflow_applied=false；需要切换时由调度员按实际状态显式update。

@@ -65,7 +65,7 @@ flowchart TD
     A["Describe the task"] --> B["Define scope, risk and acceptance"]
     B --> I{"Choose execution mode"}
     I -->|Simple| J["Work in the current session"]
-    I -->|Complex| K["Use the necessary roles"]
+    I -->|Complex| K["Coordinator assigns 1–3 developers to independent modules<br/>Queue dependencies and conflicting resources"]
     J --> C["Implement and run targeted checks<br/>Critical boundaries first"]
     K --> C
     C --> U{"Does this change visible UI?"}
@@ -80,6 +80,12 @@ flowchart TD
 ```
 
 Small, low-risk tasks use fast mode in the current session. Standard mode uses only the roles needed for the task; thorough mode covers high-risk work and required human gates. Testing allows at most three rejection rounds per batch; scope review allows two. Reaching a limit stops the loop. A release failure does not automatically authorize development fixes.
+
+### Up to three parallel developers
+
+The existing coordinator decides whether to use one, two, or three developers and assigns each write scope. There is no extra approval role and no requirement to fill all slots. Shared files have one owner; dependent work and conflicting resources are queued. Developers run focused checks, then the coordinator combines frozen results, reuses valid evidence, and performs necessary final verification, commits, and releases.
+
+A run reserves at most three developer dispatch slots, including pending dispatches. A slot is released only after confirmed completion. Independent QA starts when frozen work and host capacity are available. The main session also uses a slot: with four total host slots, three developers leave no room for QA until a developer returns. The dispatch guard covers integrated records; it does not prove host capacity or intercept every native call.
 
 UI tasks use an applicable design skill already available in the host, or the built-in design checks. Existing project styles and components remain the baseline. The agent declares the required surfaces, viewports, states, version and complete inputs; it then records actual screenshots, viewing and review. Changes invalidate affected old evidence. Small changes can be self-reviewed; important or substantial changes use proportionate independent review. The final response shows actual viewed images and unverified limitations.
 
