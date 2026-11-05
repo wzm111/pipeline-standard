@@ -97,6 +97,7 @@ def parser():
     start.add_argument("--project", default=".")
     start.add_argument("--stage", default="execution")
     start.add_argument("--delivery-from", choices=["latest"])
+    start.add_argument("--compact", action="store_true", help="short success response; full artifacts and error diagnostics remain unchanged")
     policy = sub.add_parser("policy", help="inspect current rule revision and caller acknowledgement without writes")
     policy.add_argument("--project", default=".")
     policy.add_argument("--run-id")
@@ -212,6 +213,8 @@ def parser():
     finish.add_argument("--stopped", action="store_true", help="only after host confirms all run executors stopped")
     finish.add_argument("--stop-evidence", required=True)
     finish.add_argument("--direct", action="store_true", help="confirm no actual role delegation occurred")
+    for command in (verify, finish):
+        command.add_argument("--compact", action="store_true", help="short success response; full artifacts and error diagnostics remain unchanged")
     return cli
 
 
@@ -486,12 +489,40 @@ def _finish(root, run_id, owner, *, outcome="completed", stopped=False, stop_evi
     return result, 0
 
 
+def _compact_response(action, value, code):
+    """Project successful output only, after all original execution and writes."""
+    if code != 0 or not isinstance(value, dict) or "error" in value:
+        return value
+    if "gate" in value and value["gate"] != "PASS":
+        return value
+    if action == "start":
+        return {key: value[key] for key in
+                ("run_id", "status", "stage", "activity", "receipt", "policy", "next_action")}
+    if action == "finish":
+        return {key: item for key, item in value.items() if key != "audit"}
+    if action == "verify":
+        result = {key: item for key, item in value.items() if key not in {"results", "skipped_checks", "completion"}}
+        checks = value["results"]
+        result["counts"] = {
+            "executed": sum(not check["reused"] for check in checks),
+            "reused": sum(bool(check["reused"]) for check in checks),
+            "failed": sum(check["exit_code"] != 0 for check in checks),
+            "skipped": len(value["skipped_checks"]),
+        }
+        if "completion" in value:
+            result["completion"] = _compact_response("finish", value["completion"], code)
+        return result
+    return value
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
         value, code = dispatch(args)
     except (OSError, ValueError, KeyError, TypeError) as error:
         value, code = {"error": type(error).__name__, "message": str(error)}, 2
+    if getattr(args, "compact", False):
+        value = _compact_response(args.action, value, code)
     print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, allow_nan=False))
     return code
 
