@@ -126,6 +126,67 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(audit["checks"]["by_raw_result_class"]["test_failure"], 1)
         self.assertEqual(audit["checks"]["by_result_class"]["environment_failure"], 1)
 
+    def test_task_end_saves_scoped_qa_release_and_dispatch_diagnostics(self):
+        import audit_preview as V
+        import release_checks as F
+        import role_dispatch as D
+
+        state = R.start(self.root)
+        run, owner = state["run_id"], state["owner_token"]
+        args = self.root, run, owner
+        T.start(*args, "first", "SECRET first goal", ["SECRET criteria"])
+        E.write_report(*args, "check", "fixture-first", {"result_class": "success"})
+        T.end(*args, "first")
+        T.start(*args, "second", "SECRET second goal", ["SECRET criteria"])
+        start = R.status(self.root, run)["state"]["tasks"][-1]["started_at"]
+        E.write_report(*args, "check", "fixture-activation", {
+            "started_at": start, "coverage": ["release_activation"], "result_class": "test_failure",
+            "reuse_decision": {"reason": "inputs_changed", "source": "SECRET source"}})
+        F.prepare(*args)
+        E.write_report(*args, "qa", "fixture-early", {"gate": "PASS", "summary": "SECRET summary"})
+        dispatch = D.begin(*args, "tester", requested_model="fixture-requested-model")
+        D.accepted(*args, dispatch["id"], "fixture-tester", actual_model="fixture-observed-model")
+        D.complete(*args, dispatch["id"], executors_stopped=True, stop_evidence="SECRET observed return")
+        E.write_report(*args, "qa", "fixture-final", {"gate": "PASS", "summary": "SECRET independent result"})
+        T.end(*args, "second")
+
+        result = A.audit(self.root, run)
+        self.assertEqual(result["status"], "current")
+        first, second = result["audit"]["task_details"]
+        self.assertEqual(first["by_result_class"], {"success": 1})
+        self.assertEqual(second["by_result_class"], {"test_failure": 1})
+        self.assertEqual(second["reuse_reasons"], {"inputs_changed": 1})
+        self.assertEqual(second["qa_gates"], {"PASS": 2})
+        self.assertEqual(second["qa_pass_before_tester_return"], 1)
+        self.assertEqual(second["dispatches"], {"tester": {"completed": 1}})
+        self.assertEqual(second["host_model_feedback"], 1)
+        self.assertTrue(second["release_plan_prepared"])
+        self.assertFalse(second["release_plan_before_checks"])
+        self.assertFalse(second["release_closeout"])
+        preview = V.preview(self.root, run)
+        self.assertEqual(preview["task_details"], [first, second])
+        for private in ("SECRET", owner, "fixture-observed-model", "fixture-tester", str(self.root)):
+            self.assertNotIn(private, json.dumps(preview))
+        result["audit"]["task_details"][1]["dispatches"]["tester"]["completed"] = owner
+        self.target(state).write_text(json.dumps(result["audit"]))
+        self.assertEqual(A.audit(self.root, run)["error"], "invalid_audit")
+
+    def test_monolithic_release_plan_is_visible_without_running_a_deployment(self):
+        import check_plan as P
+
+        state = R.start(self.root)
+        args = self.root, state["run_id"], state["owner_token"]
+        (self.root / "fixture.txt").write_text("fixture")
+        P.save_plan(*args, "release-plan", {"activation": {
+            "argv": [sys.executable, "-c", "raise SystemExit('must not run')"],
+            "scope": ["fixture.txt"], "coverage": ["release_activation"]}})
+        started = R._now()
+        E.write_report(*args, "check", "activation", {
+            "started_at": started, "result_class": "success", "coverage": ["release_activation"]})
+        detail, = A.audit(self.root, state["run_id"], live=True)["live"]["task_details"]
+        self.assertTrue(detail["release_plan_before_checks"])
+        self.assertIsNone(detail["release_closeout"])
+
     def test_missing_and_bad_reports_are_partial_not_fabricated_success(self):
         state = R.start(self.root)
         ref = E.write_report(self.root, state["run_id"], state["owner_token"], "check", "bad", {})

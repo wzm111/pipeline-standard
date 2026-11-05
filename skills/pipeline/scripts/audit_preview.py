@@ -67,6 +67,8 @@ def preview(project_root, run_id=None, *, live=False):
     timing, checks = _dict(document.get("timing")), _dict(document.get("checks"))
     adoption, coverage = _dict(document.get("adoption")), _dict(document.get("coverage"))
     tasks, latency = _dict(document.get("tasks")), _dict(document.get("latency"))
+    details = document.get("task_details")
+    # Stored details pass the closed schema in audit(); live details come from its builder.
     samples = []
     for item in latency.get("samples", [])[:20]:
         item = _dict(item)
@@ -100,7 +102,7 @@ def preview(project_root, run_id=None, *, live=False):
         "latency": {"coverage": _enum(latency.get("coverage"), {"unknown", "partial", "recorded_only"}),
                     "truncated": latency.get("truncated") if type(latency.get("truncated")) is bool else None,
                     "samples": samples},
-        "actual_model": None, "tokens": None, "notice": NOTICE}
+        "task_details": details, "actual_model": None, "tokens": None, "notice": NOTICE}
 
 
 def render(value):
@@ -121,6 +123,14 @@ def render(value):
               f"证据覆盖登记：{show(value['evidence_coverage']['complete'])}；缺项数：{show(value['evidence_coverage']['missing_count'])}（不代替业务验收）"]
     for sample in value["latency"]["samples"]:
         lines.append(f"任务段 {show(sample['index'])}：墙钟 {show(sample['wall_seconds'])} 秒；检查并集 {show(sample['check_union_seconds'])} 秒；等待/交接并集 {show(sample['wait_union_seconds'])} 秒；未归因 {show(sample['unattributed_seconds'])} 秒")
+    for sample in value.get("task_details") or []:
+        roles = sum(sum(bucket.values()) for bucket in sample["dispatches"].values())
+        lines.append(f"任务段 {sample['index']} 明细：实跑 {sample['executed']}，复用 {sample['reused']}，继承 {sample['inherited']}，宿主观察 {sample['host_observation_records']}；派发记录 {roles}，已结束角色并集 {show(sample['role_union_seconds'])} 秒，专家尝试 {sample['expert_attempts']}。")
+        if sample["qa_gates"]:
+            gates = "，".join(f"{gate} {count}" for gate, count in sorted(sample["qa_gates"].items()))
+            lines.append(f"  QA 登记：{gates}；机器校验记录 {sample['machine_qa_records']}，早于 tester 返回的 PASS {sample['qa_pass_before_tester_return']}，任务边界不符 {sample['qa_boundary_mismatch']}。")
+        if sample["release_checks"] or sample["release_phases"] or sample["release_closeout"] is not None:
+            lines.append(f"  发布登记：检查 {sample['release_checks']}，计划前置 {show(sample['release_plan_before_checks'])}，收口引用 {show(sample['release_closeout'])}。")
     if value["selection_truncated"] or value["latency"]["truncated"]:
         lines.append("候选扫描或任务摘要有截断；当前预览不代表全部历史。")
     lines.append("仅本地预览，不写入或上传。未知项不估算；未归因时间不等于浪费。登记不证明业务验收、宿主健康或证据可复用；规则确认不证明全部规范已执行。实际模型和 token 未采集。")

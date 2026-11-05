@@ -121,6 +121,8 @@ def prepare(root, run_id, owner_token, *, required_before=None, required_after=N
         plan = {**previous, "required_before": sorted(set(before) | set(previous.get("required_before", []))),
                 "required_after": sorted(set(after) | set(previous.get("required_after", []))),
                 "attempts": previous.get("attempts", [])}
+        if not previous:
+            plan["prepared_at"] = R._now()
         if plan != previous:
             state["release_plan"] = plan
             state["updated_at"] = R._now()
@@ -264,6 +266,7 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
             raise ValueError("release attempt name already exists")
         attempts.append(attempt)
         current["release_plan"].pop("closeout", None)
+        current["updated_at"] = attempt["started_at"]
         R._atomic(path, current)
     result, accepted, completed_normally = None, False, False
     try:

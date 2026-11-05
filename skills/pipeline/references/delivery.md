@@ -17,7 +17,8 @@
 1. 同一活动run内继续阶段，直接复用已读范围和有效检查；当前执行者仍可用时续用，不为“提交”“发布”再冷启动一套角色。
 2. 原run已完成，用户要求提交/发布该成果时，用`run_state.start(root, {"stage": "release", "delivery_from": "latest"})`开启后续执行段。这是对同一交付的承接，不启动一轮新需求规划。其他新需求不传delivery_from。
 3. 查看返回state.delivery_status：adopted=true时先用继承检查及已校验的原验收脚本/样本路径。前台验证必须先经run_checks.execute_check；范围明确时传impact_covered=True，它自动查找本run已登记结果（含继承结果），命中则跳过执行，无需手工查日志或再传reuse_from。
-4. QA收口用run_evidence.write_report保存kind=qa、payload.gate=PASS及必要的未验证项。run_state.finish(completed)在原归属锁内自动封存交付，无需另写一份长报告。缺QA通过、失败/变动证据或旧报告归属不明时不会产生有效交付凭证。
+4. 实际部署时，在首次发布检查、构建或激活前确定工程验收入口。分阶段入口先调用下文的`release_runner prepare`，用同一计划执行并收口。单体脚本沿用[检查计划](check-plan.md)，先登记可执行的必要检查及带`release_activation`类别的原部署命令，做计划快检。必要的原生线上回读先确定验收条件，实际返回后再将`observed_ref`纳入收口计划，保留原检查定义和有效引用。把目标提交和部署候选绑定到本次检查。若用户同时要求推送，先核对待推送提交范围，分别报告 Git 远端提交和实际线上版本。
+5. 按已选入口完成 QA 收口。`run_state.finish(completed)`在原归属锁内自动封存交付。缺 QA 通过、证据失败或变动、旧报告归属不明时不会产生有效交付凭证。发布脚本结果、线上回读和凭证封存分别记录。线上已切换而凭证未封存时，保留现场与现有证据，明确缺项；先核对现状，再补可安全执行的缺项。
 
 首次委派或旧角色续用时，把本次证据入口和增量验收范围直接放入短交接，不转发整段历史，不要求角色重读所有PASS报告。普通提交与摘要由当前调度员完成；实际需要独立部署判断或用户指定角色时，才使用/续用releaser。thorough保留完整角色链与必要闸口，后续阶段沿用已有角色与结论。
 
@@ -122,6 +123,8 @@ python3 <release_runner> operation-inspect --project <root> --run-id <run> --jso
 capture要求当前owner私有receipt；inspect只读，不要求或输出receipt，可选`readback`为当前run新smoke的`{run_id,path,sha256}`引用。inspect退出码0仅表示`valid_operation=true`，仍为CONCERNS，不是QA PASS；1为绑定/当前回读无效，2为语法、声明或请求错误。它不自动执行线上回读或任何写操作。
 
 项目只有单体部署脚本时，先完成快预检，再经execute_check执行现有脚本一次并保留原门禁；不为套用分阶段接口额外部署一次，不虚构skip-build参数。无法安全复用时说明项目适配器缺口，按当前授权处理；不能自动改项目部署脚本或绕过保护。没有明确缺口时，不为了收尾另起规划/角色、重复整理多份报告或反复全量核对。
+
+单体脚本已执行后，使用计划的`qa`核验现有证据。含部署命令的计划不交给会自动执行缺项的`verify`收口。证据缺失或过期时先核对原发布结果及线上版本，再决定可补的只读观察。
 
 ### 远端断连与取消后的恢复
 

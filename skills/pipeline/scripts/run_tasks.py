@@ -126,6 +126,7 @@ def end(root, run_id, owner, task_id, *, outcome="execution_ended", report_refs=
         item.update(status=outcome, ended_at=now, report_refs=deepcopy(refs))
         state["updated_at"] = now
         R._atomic(path, state)
+        R._capture_audit(root, state)
         return deepcopy(item)
 
 

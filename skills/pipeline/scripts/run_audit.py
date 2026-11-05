@@ -1,5 +1,6 @@
 """Lifecycle-only, privacy-filtered run snapshots. Never acceptance or reuse evidence."""
 import argparse
+from bisect import bisect_right
 import hashlib
 import json
 import math
@@ -13,6 +14,19 @@ RESULTS = {"success", "search_no_match", "path_lookup_failure", "reproduction_no
            "test_failure", "command_failure", "command_unavailable", "timeout", "interrupted",
            "environment_failure", "fixture_failure", "regression_failure", "unclassified"}
 KINDS = {"check", "check_reuse", "check_review"}
+QA_GATES = {"PASS", "FAIL", "CONCERNS"}
+ROLE_NAMES = {"planner", "scope_guardian", "developer", "tester", "releaser"}
+DISPATCH_STATES = {"dispatching", "working", "completed", "failed", "interrupted"}
+REUSE_REASONS = {
+    "impact_not_confirmed", "no_matching_check", "unconfirmed_evidence",
+    "executable_unconfirmed", "scope_or_intent_changed", "superseded_observation",
+    "command_or_environment_changed", "inputs_changed", "inputs_changed_during_check",
+    "log_changed", "coverage_changed", "same_run_inputs_environment_and_log",
+    "unregistered_evidence", "baseline_not_acceptance", "visual_not_acceptance",
+    "working_directory_unavailable", "check_not_passed", "unknown",
+}
+RELEASE_LABELS = {"release_preflight", "runner_compatibility", "release_activation",
+                  "release_smoke", "release_identity"}
 NOTICE = "collection_only_not_acceptance_or_reuse_evidence"
 
 
@@ -145,7 +159,7 @@ def _checks(root, state, telemetry=None):
         return result
     for ref in dict.fromkeys(item for item in refs if isinstance(item, str)):
         # Only registered, current-run check JSON envelopes; no arbitrary refs.
-        match = re.fullmatch(r"tmp/pipeline/runs/([0-9a-f]{32})/artifacts/(check|check_reuse|check_review)/[a-z][a-z0-9_-]{0,63}\.json", ref)
+        match = re.fullmatch(r"tmp/pipeline/runs/([0-9a-f]{32})/artifacts/(check|check_reuse|check_review|qa|check_plan)/[a-z][a-z0-9_-]{0,63}\.json", ref)
         if not match:
             if re.search(r"/artifacts/(?:check|check_reuse|check_review)/", ref):
                 result["unavailable"] += 1
@@ -160,13 +174,39 @@ def _checks(root, state, telemetry=None):
                 raise AuditError("invalid_report")
             payload = report["payload"]
             kind = match[2]
+            if kind == "check_plan":
+                declared = payload.get("checks")
+                if (telemetry is not None and ref in state.get("check_plans", {}) and isinstance(declared, dict)
+                        and any(isinstance(check, dict) and isinstance(check.get("coverage"), list)
+                                and "release_activation" in check["coverage"] for check in declared.values())):
+                    telemetry.append({"kind": kind, "recorded_at": report["recorded_at"]})
+                continue
+            if kind == "qa":
+                if telemetry is not None:
+                    validation = payload.get("machine_validation")
+                    telemetry.append({"kind": kind, "recorded_at": report["recorded_at"], "ref": ref,
+                                      "gate": payload.get("gate") if isinstance(payload.get("gate"), str) else None,
+                                      "machine": isinstance(validation, dict) and type(validation.get("schema")) is int
+                                      and validation["schema"] == 1,
+                                      "task_started_at": _stamp(validation.get("task_started_at"))
+                                      if isinstance(validation, dict) else None})
+                continue
             if telemetry is not None and kind in {"check", "check_reuse"}:
-                changes = payload.get("reuse_decision", {}).get("environment_changes", {})
-                telemetry.append({"kind": kind, "recorded_at": report["recorded_at"],
+                decision = payload.get("reuse_decision")
+                decision = decision if isinstance(decision, dict) else {}
+                changes = decision.get("environment_changes")
+                changes = changes if isinstance(changes, dict) else {}
+                category, reason = payload.get("result_class"), decision.get("reason")
+                coverage = payload.get("coverage")
+                telemetry.append({"kind": kind, "recorded_at": report["recorded_at"], "ref": ref,
                     "inherited": bool(payload.get("inherited_from")),
                     "started_at": _stamp(payload.get("started_at")),
                     "finished_at": _stamp(payload.get("finished_at")),
-                    "failure": payload.get("result_class") in RESULTS - {"success", "search_no_match", "reproduction_nonzero", "unclassified"},
+                    "failure": isinstance(category, str) and category in RESULTS - {"success", "search_no_match", "reproduction_nonzero", "unclassified"},
+                    "result_class": category if isinstance(category, str) else None,
+                    "reuse_reason": reason if isinstance(reason, str) else None,
+                    "host": payload.get("observation_kind") == "host_tool",
+                    "release": isinstance(coverage, list) and any(label in coverage for label in RELEASE_LABELS),
                     "environment_mismatch": changes.get("status") == "known" and bool(
                         changes.get("changed_keys") or changes.get("other_environment_changed"))})
             if kind == "check":
@@ -192,15 +232,164 @@ def _checks(root, state, telemetry=None):
                 result["inherited"] += 1
             else:
                 category = payload.get("result_class")
-                checks[ref] = category if category in RESULTS else "unclassified"
+                checks[ref] = category if isinstance(category, str) and category in RESULTS else "unclassified"
         except (OSError, ValueError, TypeError, AttributeError):
-            result["unavailable"] += 1
+            if match[2] in KINDS:
+                result["unavailable"] += 1
     result["executed"] = len(checks)
     for ref, category in checks.items():
         result["by_raw_result_class"][category] += 1
         result["by_result_class"][reviews.get(ref, category)] += 1
+    for record in telemetry or ():
+        if record["kind"] == "check" and record["ref"] in reviews:
+            record["result_class"] = reviews[record["ref"]]
     result["coverage"] = "partial" if result["unavailable"] else "recorded_only"
     return result
+
+
+def _task_details(state, records):
+    """Attribute observed events to recorded windows without exporting identities."""
+    from workflow_metrics import interval_seconds
+
+    def at(value):
+        stamp = _stamp(value)
+        return R._timestamp(stamp).timestamp() if stamp else None
+
+    created, boundary = at(state.get("created_at")), at(state.get("updated_at"))
+    if created is None or boundary is None or created > boundary:
+        return None
+    tasks = state.get("tasks") or []
+    windows = [(i, at(task.get("started_at")), at(task.get("ended_at") or state["updated_at"]))
+               for i, task in enumerate(tasks, 1)] if tasks else [(0, created, boundary)]
+    if any(a is None or b is None or not created <= a <= b <= boundary for _, a, b in windows):
+        return None
+    if any(left[2] > right[1] for left, right in zip(windows, windows[1:])):
+        return None
+    windows = windows[-20:]
+    starts = [a for _, a, _ in windows]
+    samples = [{"index": i, "executed": 0, "reused": 0, "inherited": 0, "host_observation_records": 0,
+                "by_result_class": {}, "reuse_reasons": {}, "dispatches": {}, "expert_attempts": 0,
+                "expert_prepared": 0, "host_model_feedback": 0, "host_effort_feedback": 0,
+                "role_union_seconds": None, "qa_gates": {}, "machine_qa_records": 0,
+                "qa_pass_before_tester_return": 0, "qa_boundary_mismatch": 0,
+                "release_checks": 0, "release_phases": {}, "release_plan_prepared": None,
+                "release_plan_before_checks": None,
+                "release_closeout": None}
+               for i, _, _ in windows]
+
+    def slot(value):
+        time = at(value)
+        if time is None:
+            return None
+        index = bisect_right(starts, time) - 1
+        return index if index >= 0 and time <= windows[index][2] else None
+
+    def count(bucket, key):
+        bucket[key] = bucket.get(key, 0) + 1
+
+    testers = [[] for _ in windows]
+    first_release = [None for _ in windows]
+    check_plans = [None for _ in windows]
+    plan = state.get("release_plan") or {}
+    closeout_ref = (plan.get("closeout") or {}).get("path")
+    closeout_index = None
+    spans = []
+    # The existing case scope ties preparation to a task even when no dispatch followed.
+    scope_indexes = {task.get("task_id"): i for i, task in enumerate(tasks, 1)} if tasks else {state["run_id"]: 0}
+    sample_by_index = {sample["index"]: sample for sample in samples}
+    for case in state.get("expert_advice_cases", []):
+        scope = case.get("scope") or {}
+        sample = sample_by_index.get(scope_indexes.get(scope.get("id")))
+        if sample is not None and scope.get("kind") == ("task" if tasks else "run"):
+            sample["expert_prepared"] += 1
+    for dispatch in state.get("role_dispatches", []):
+        index = slot(dispatch.get("requested_at"))
+        role, status = dispatch.get("role"), dispatch.get("status")
+        accepted, finished = at(dispatch.get("accepted_at")), at(dispatch.get("completed_at"))
+        if accepted is not None and finished is not None and created <= accepted <= finished <= boundary:
+            spans.append((accepted, finished))
+        if index is None or role not in ROLE_NAMES or status not in DISPATCH_STATES:
+            continue
+        sample = samples[index]
+        count(sample["dispatches"].setdefault(role, {}), status)
+        sample["expert_attempts"] += int(bool(dispatch.get("advice_case_id")))
+        if accepted is not None and accepted <= boundary:
+            sample["host_model_feedback"] += int(dispatch.get("actual_model") not in (None, "", "unknown"))
+            sample["host_effort_feedback"] += int(dispatch.get("actual_effort") not in (None, "", "unknown"))
+        if role == "tester" and status == "completed" and finished is not None and finished <= boundary:
+            testers[index].append(finished)
+
+    for sample, (_, left, right) in zip(samples, windows):
+        intervals = [(max(a, left), min(b, right)) for a, b in spans if max(a, left) < min(b, right)]
+        if intervals:
+            sample["role_union_seconds"] = interval_seconds(intervals)
+
+    for record in records:
+        kind = record["kind"]
+        # Inheritance and reuse are registration events, never new execution.
+        started = record.get("started_at") if kind == "check" and not record["inherited"] else None
+        index = slot(started or record["recorded_at"])
+        if index is None:
+            continue
+        sample = samples[index]
+        if kind == "check_plan":
+            time = at(record["recorded_at"])
+            if check_plans[index] is None or time < check_plans[index]:
+                check_plans[index] = time
+        elif kind == "qa":
+            if record["ref"] == closeout_ref:
+                closeout_index = index
+            if record["gate"] in QA_GATES:
+                count(sample["qa_gates"], record["gate"])
+            sample["machine_qa_records"] += int(record["machine"])
+            sample["qa_boundary_mismatch"] += int(
+                bool(tasks) and record["machine"] and at(record["task_started_at"]) != windows[index][1])
+            if record["gate"] == "PASS" and any(at(record["recorded_at"]) < end for end in testers[index]):
+                sample["qa_pass_before_tester_return"] += 1
+        elif kind == "check" and record["inherited"]:
+            sample["inherited"] += 1
+        elif kind in {"check", "check_reuse"}:
+            sample["release_checks"] += int(record["release"])
+            if record["release"] and started:
+                time = at(started)
+                if first_release[index] is None or time < first_release[index]:
+                    first_release[index] = time
+            if kind == "check_reuse":
+                sample["reused"] += 1
+            else:
+                sample["executed"] += 1
+                sample["host_observation_records"] += int(record["host"])
+                category = record["result_class"]
+                count(sample["by_result_class"], category if category in RESULTS else "unclassified")
+            reason = record["reuse_reason"]
+            if reason is not None:
+                count(sample["reuse_reasons"], reason if reason in REUSE_REASONS else "unknown")
+
+    adapter_prepared = at(plan.get("prepared_at"))
+    for attempt in plan.get("attempts", []):
+        index = slot(attempt.get("started_at"))
+        phase, status = attempt.get("phase"), attempt.get("status")
+        if index is None or phase not in RELEASE_PHASES or status not in RELEASE_STATES:
+            continue
+        count(samples[index]["release_phases"].setdefault(phase, {}), status)
+        time = at(attempt["started_at"])
+        if first_release[index] is None or time < first_release[index]:
+            first_release[index] = time
+    for index, sample in enumerate(samples):
+        prepared_times = [time for time in (check_plans[index], adapter_prepared) if time is not None]
+        prepared = min(prepared_times, default=None)
+        if sample["release_checks"] or sample["release_phases"] or index == closeout_index or check_plans[index] is not None:
+            if prepared is not None:
+                sample["release_plan_prepared"] = prepared <= windows[index][2]
+            elif not plan or sample["release_phases"]:
+                sample["release_plan_prepared"] = bool(plan)
+            if first_release[index] is not None and (prepared is not None or not plan):
+                sample["release_plan_before_checks"] = prepared is not None and prepared <= first_release[index]
+            if not closeout_ref and (plan or not prepared_times):
+                sample["release_closeout"] = False
+            elif closeout_index is not None:
+                sample["release_closeout"] = index == closeout_index
+    return samples
 
 
 def _build(root, state):
@@ -231,6 +420,7 @@ def _build(root, state):
             "roles": _counts(state, "role_events", "event", {"created", "reused", "stopped"}),
             "checks": checks,
             "latency": latency,
+            "task_details": _task_details(state, telemetry),
             "adoption": run_policy.audit_summary(root, state),
             "coverage": {"missing_count": len(missing) if isinstance(missing, list) else None,
                          "complete": coverage.get("complete") if type(coverage.get("complete")) is bool else None},
@@ -282,6 +472,14 @@ KEYS = {"schema_version", "run_id", "notice", "source_state_hash", "implementati
         *R.ACTIVITIES, *R.FINAL, *RESULTS}
 import run_latency as L
 KEYS |= {"latency", "samples", "truncated", *L.SAMPLE_KEYS}
+DETAIL_COUNTS = {"index", "executed", "reused", "inherited", "host_observation_records",
+                 "expert_attempts", "expert_prepared", "host_model_feedback", "host_effort_feedback",
+                 "machine_qa_records", "qa_pass_before_tester_return",
+                 "qa_boundary_mismatch", "release_checks"}
+DETAIL_FLAGS = {"release_plan_prepared", "release_plan_before_checks", "release_closeout"}
+DETAIL_BUCKETS = {"by_result_class": RESULTS, "reuse_reasons": REUSE_REASONS, "qa_gates": QA_GATES}
+RELEASE_PHASES = {"preflight", "compatibility", "build", "activate", "smoke"}
+RELEASE_STATES = {"running", "passed", "failed"}
 WORDS = {NOTICE, "partial", "recorded_only", "unknown", "complete", "running", "execution_ended", "managed", "legacy_untracked", *R.FINAL}
 WORDS |= L.CANDIDATES
 
@@ -311,16 +509,21 @@ def _validate(value, key=None):
 
 
 def _validate_document(document):
-    _validate(document)
+    if not isinstance(document, dict):
+        raise AuditError("invalid_audit")
+    _validate({k: v for k, v in document.items() if k != "task_details"})
     required = {"schema_version", "run_id", "notice", "source_state_hash", "implementation_hash",
                 "created_at", "snapshot_at", "status", "completeness", "timing", "tasks", "roles",
                 "checks", "coverage", "actual_model", "tokens"}
-    if (not isinstance(document, dict) or not required <= set(document) or set(document) - required - {"adoption", "latency"}
+    if (not required <= set(document)
+            or set(document) - required - {"adoption", "latency", "task_details"}
             or type(document["schema_version"]) is not int or document["schema_version"] != 1
             or document["notice"] != NOTICE or document["actual_model"] is not None or document["tokens"] is not None
             or document["status"] not in R.FINAL | {"running", "unknown"}
             or document["completeness"] not in {"partial", "recorded_only"}):
         raise AuditError("invalid_audit")
+    if document.get("task_details") is not None:
+        _validate_details(document["task_details"])
     if "latency" in document:
         try:
             L.validate(document["latency"])
@@ -342,6 +545,29 @@ def _validate_document(document):
     for key in ("created_at", "snapshot_at"):
         if document[key] is not None and not isinstance(document[key], str):
             raise AuditError("invalid_audit")
+
+
+def _validate_details(details):
+    def counts(value, keys):
+        return isinstance(value, dict) and value.keys() <= keys and all(type(n) is int and n >= 0 for n in value.values())
+
+    if not isinstance(details, list) or len(details) > 20:
+        raise AuditError("invalid_audit")
+    expected = DETAIL_COUNTS | DETAIL_FLAGS | DETAIL_BUCKETS.keys() | {"dispatches", "release_phases", "role_union_seconds"}
+    for sample in details:
+        if not isinstance(sample, dict) or sample.keys() != expected:
+            raise AuditError("invalid_audit")
+        seconds = sample["role_union_seconds"]
+        if (not counts({k: sample[k] for k in DETAIL_COUNTS}, DETAIL_COUNTS)
+                or any(sample[k] is not None and type(sample[k]) is not bool for k in DETAIL_FLAGS)
+                or any(not counts(sample[k], keys) for k, keys in DETAIL_BUCKETS.items())
+                or (seconds is not None and (type(seconds) not in {int, float} or not math.isfinite(seconds) or seconds < 0))):
+            raise AuditError("invalid_audit")
+        for key, groups, statuses in (("dispatches", ROLE_NAMES, DISPATCH_STATES),
+                                      ("release_phases", RELEASE_PHASES, RELEASE_STATES)):
+            if (not isinstance(sample[key], dict) or sample[key].keys() - groups
+                    or any(not counts(value, statuses) for value in sample[key].values())):
+                raise AuditError("invalid_audit")
 
 
 def audit(project_root, run_id, *, live=False):
