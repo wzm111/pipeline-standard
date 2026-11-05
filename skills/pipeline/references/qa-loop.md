@@ -10,6 +10,8 @@ standard/thorough 共用；单批打回最多 3 轮。
 
 多项验收交接共享[检查计划](check-plan.md)引用；不把final-round等执行名复制为required_checks。QA仍审查业务断言与覆盖是否完整，计划生成PASS不替代独立判断。
 
+脚本模式以实际plan/qa/check引用为唯一检查清单与证据，不再把同一内容抄成下方手写索引；独立QA先核对冻结版本的覆盖、未决问题和差量，再补真正缺少的验证。一次命令非零先定位和分类，不自动等同一次完整业务QA打回；已经形成的QA FAIL/CONCERNS仍按原规则保留和处理，不重置上限或自动放行。
+
 ## Artifact
 
 - `tmp/pipeline/qa/index.md`：每批一行 `batch | gate | round | report | final-items`。
@@ -24,5 +26,5 @@ standard/thorough 共用；单批打回最多 3 轮。
 4. `FAIL`：qa直接把失败编号、复现、实际/预期发给developer；修复后先复测失败项、影响面和受影响快速命令，未受影响的检查须核对输入/环境/日志指纹后复用。命令非零先分类，已给出的QA FAIL不因分类或改批次名重置打回上限。
    同根因经定向修复和复测仍失败，或开发与QA对根因存在具体冲突时，在仍允许继续的范围内按[专家短诊断](expert-advice.md)做一次指导；无触发条件不增加角色，建议仍交原开发执行、原QA核验。已到三轮或人工等待不借此自动续跑。
 5. `CONCERNS`：暂停并读取 `operations.md` 的裁决规则；用户决定修复或豁免后再继续。
-6. `PASS`：更新 index 并封版。每批只向用户发一行；表格快照仅用于等待、预算预警和异常。
-7. 全部批次结束后，qa 只读 index 与 final-items，运行终验层一次写 final.md；不重读全部 PASS 批次正文。
+6. `PASS`：保存当前验收并封版；脚本模式沿用原QA报告，手写模式更新index。每批只向用户发一行；表格快照仅用于等待、预算预警和异常。
+7. 全部批次结束后，qa只核未决项与尚未覆盖的终验；脚本模式沿用原plan/qa引用，手写模式只读index与final-items并写final.md，不重读全部PASS正文或重跑有效检查。

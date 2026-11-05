@@ -60,7 +60,7 @@ Commit, push, and release permissions are distinct. The workflow does not turn a
 
 ## How development proceeds
 
-The diagram covers development and fixes. Committing or releasing accepted work reuses valid evidence rather than restarting development.
+Choose an entry for the current goal: implement and verify a simple task directly, delegate independent work when needed, or deliver already accepted work. The diagram covers development and fixes; phase changes do not repeat planning or review, and delivery retains its required gates.
 
 ```mermaid
 flowchart TD
@@ -82,6 +82,8 @@ flowchart TD
 ```
 
 Small, low-risk tasks use fast mode in the current session. Standard mode uses only the roles needed for the task; thorough mode covers high-risk work and required human gates. Testing allows at most three rejection rounds per batch; scope review allows two. Reaching a limit stops the loop. A release failure does not automatically authorize development fixes.
+
+Routine successful responses can be compact while complete evidence stays in local reports. Failures and blockers remain fully visible. Required independent QA is retained, and valid checks and reviews of the same inputs are reused.
 
 ### Up to three parallel developers
 

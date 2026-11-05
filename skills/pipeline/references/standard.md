@@ -6,6 +6,8 @@
 
 ## 先选择执行方式
 
+默认保持一个内聚反馈循环：完成最小可验证改动，观察真实检查结果，再处理失败项与影响面。只有需要独立实现或判断时才跨角色交接；阶段名变化、文件数量和生成摘要本身不构成派发理由。纯提交/发布直接走delivery.md，不再经过本节开发路由。
+
 依据已有需求与必要的窄范围定位判断复杂度，不为分类创建agent或新报告；在首条简报或现有state.next里用一句话说明原因及选用角色。文件数量、任务标题、检查命令数量或等待外部结果的时长都不能单独决定复杂度。仅涉及多个文件或少量已知调用点、仍可内聚定向验证的小改动继续直做。
 
 判断不是只在开头做一次：用户新增已授权目标、依赖或共享写入范围实质改变时，主动重评估尚未完成的部分并更新分工。新增的独立模块可交给2至3个开发；共享文件指定单一负责人，有依赖或资源冲突的部分排队。保持原任务、执行者与有效证据，不为换策略重启开发或重复检查。具体记录入口见[角色派发边界](role-dispatch.md)；进度插问、心跳和每条测试不触发重规划。
@@ -40,7 +42,7 @@ runner为本skill实际目录的`scripts/pipeline_cli.py`；`paths --project <ro
 ```sh
 python3 <runner> paths --project <root>
 python3 <runner> status --project <root>
-python3 <runner> start --project <root> --stage review
+python3 <runner> start --project <root> --stage review --compact
 # 读取本轮适用规则后，使用start返回的policy.revision确认；不是让用户填写。
 python3 <runner> policy-ack --project <root> --receipt <receipt> --revision <policy.revision>
 python3 <runner> allocation-decide --project <root> --receipt <receipt> --json '{"mode":"direct","reason":"small_scope","assignments":[]}'
@@ -50,6 +52,8 @@ python3 <runner> finish --project <root> --receipt <receipt> --direct --stopped 
 ```
 
 scope包含命令真实依赖的源码、用例、工具/配置与依赖身份；例中路径不是所有项目的固定范围。name区分批次/轮次，coverage使用不随重试变化的语义类别；局部用例不能冒充全量门禁。impact-covered仅在影响面确已覆盖时传入。report的PASS由实际验收决定，CLI不会自动将命令成功转为业务通过。finish不代替终止执行者；实际委派时省略direct并先关闭角色派发。update可调整stage/activity，--help按需查参数；高级恢复、浏览器等继续用既有接口。
+
+智能体常规调用start/verify/finish可加`--compact`，成功时只返回下一步需要的身份、证据引用、状态与计数；完整报告、审计和所有门禁仍保留。非零、CONCERNS及失败诊断返回完整信息，旧默认输出和Python API不变。只在确需定位角色/模板资源时调用paths；不为拿固定路径反复输出整份发现结果。compact减少输出体积，不证明实际token或耗时降低。
 
 managed运行的QA PASS必须由入口核验，不接受只有gate、执行名列表或无required_checks的手写PASS。简单单项使用上例：checks是同run已登记的完整check.report引用，required_checks是稳定覆盖类别；入口核对当前输入、实际环境、日志及最新失败。多项检查或覆盖类别走plan/qa/verify；不能少列某个检查或换task名称来绕过。task-end仍只表示执行结束，不代替验收。
 
@@ -72,7 +76,7 @@ CLI不生成Python字节码缓存，避免自身导入改动被计入源码输�
 ## 开发、QA 与收口
 
 1. 复杂开发由现有主调度员按独立模块安排1至3个持久developer，最多3个并行，不默认开满，也不新增专门拍板的角色。调度员先划定写入归属与接口依赖：共享文件指定一人负责，有依赖或输出/浏览器冲突的部分排队；各开发只做本批定向验证，合并冻结后统一完成必要终验并复用有效证据。首批可测产物冻结后读 `qa-loop.md`，按宿主剩余名额安排独立qa；宿主总容量包括主会话，容量不足先等开发实际返回，不取消仍工作的角色来腾位。纯审查沿用已选审查角色，不机械补开发链。仅确有独立、可完成的验收准备工作时提前创建QA；后续批次只用 follow-up 发送 context 差量。并行前核对生成目录及其他共享资源，冲突则顺序执行或显式隔离。
-2. qa 完成所有批次后只读 `qa/index.md`，运行终验层一次并写 `qa/final.md`。若已有 guardian，唤醒它只读 plan、qa/index.md、qa/final.md 做最终范围检查；否则调度员据这三份精简 artifact 收口。
+2. qa 完成所有批次后核对未决项与当前证据，完成尚未覆盖的必要终验。脚本模式沿用实际plan/qa引用，不另抄一套qa/index.md和qa/final.md；旧手写模式保留原索引。已有guardian的同版审查仍有效时直接复用，只有影响其结论的新变更或未解决发现才续用补差量，不因进入“终验/提交”再完整审一轮。最终QA与所有必验类别仍须通过。
 3. 人工上线模式由调度员直接输出摘要和待办；普通自动提交也由调度员执行，不重复创建releaser或长篇release-notes。已有releaser可续用，需要隔离部署判断时才委派，遵守契约④与本次用户授权。
-4. 把既有数据写入简短 retro，state 置 done，追加 metrics.tsv，展示 qa/final.md 中的人工确认项并清理 `.active`。
+4. 汇总结果、有效证据及人工待办，按原finish核验、封存并清理本人标记；只追加已有真实metrics数据。只有用户要求或本轮确有需要记录的流程问题时写简短retro，不为正常PASS再制造一份长复盘。
 5. 终验失败、预算预警、CONCERNS 或异常时读 `operations.md`；正常 PASS 不加载。
