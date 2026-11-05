@@ -103,6 +103,9 @@ def parser():
     allocation = sub.add_parser("allocation-status", help="read-only coordinator decision and registered dispatch boundaries")
     allocation.add_argument("--project", default=".")
     allocation.add_argument("--run-id")
+    expert = sub.add_parser("expert-status", help="read-only current-task advisory budget; no model call")
+    expert.add_argument("--project", default=".")
+    expert.add_argument("--run-id")
     preflight = sub.add_parser("preflight", help="inspect actual cwd and executable without starting a run or process")
     preflight.add_argument("--project", default=".")
     preflight.add_argument("--cwd")
@@ -123,7 +126,7 @@ def parser():
     visual_status.add_argument("--run-id", required=True)
     visual_status.add_argument("--requirement", required=True)
     owned = {}
-    for name in ("update", "check", "report", "finish", "plan", "plan-preflight", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
+    for name in ("update", "check", "report", "finish", "plan", "plan-preflight", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "expert-prepare", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
@@ -131,6 +134,8 @@ def parser():
     owned["allocation-review"].add_argument("--change-id", required=True, help="stable id of a meaningful authorized scope change")
     owned["allocation-decide"].add_argument("--json", required=True, dest="allocation_payload",
                                            help="mode, technical reason and developer assignments; records a plan, never spawns")
+    owned["expert-prepare"].add_argument("--json", required=True, dest="expert_payload",
+                                       help="case_id, trigger, evidence refs, brief and optional local_fix_attempted; no model call")
     for action in ("visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
         owned[action].add_argument("--name", required=True)
     owned["visual-declare"].add_argument("--json", required=True, dest="payload")
@@ -237,6 +242,9 @@ def dispatch(args):
     if args.action == "allocation-status":
         import work_allocation as W
         return W.summary(R.status(root, args.run_id)["state"] or {}), 0
+    if args.action == "expert-status":
+        import expert_advice as X
+        return X.summary(R.status(root, args.run_id)["state"] or {}), 0
     if args.action == "reuse-preflight":
         argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
         result = C.inspect_reuse(root, args.run_id, argv=argv, scope=args.scope,
@@ -292,6 +300,14 @@ def dispatch(args):
                 "audit": _optional_audit(root, state["run_id"]), **paths()}, 0
     receipt = _receipt(root, args.receipt)
     run_id, owner = receipt["run_id"], receipt["owner_token"]
+    if args.action == "expert-prepare":
+        import expert_advice as X
+        payload = json.loads(args.expert_payload)
+        required = {"case_id", "trigger", "evidence", "brief"}
+        if not isinstance(payload, dict) or not required <= payload.keys() or payload.keys() - (required | {"local_fix_attempted"}):
+            raise ValueError("expert preparation requires case_id, trigger, evidence and brief")
+        value = X.prepare(root, run_id, owner, **payload)
+        return value, 0 if value["eligible"] else 1
     if args.action in {"allocation-review", "allocation-decide"}:
         import work_allocation as W
         if args.action == "allocation-review":

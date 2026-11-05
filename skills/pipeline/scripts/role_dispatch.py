@@ -103,7 +103,7 @@ def _parameters(value, model, effort):
 
 
 def begin(project_root, run_id, owner_token, role, *, executor_id=None, requested_model=None, requested_effort=None,
-          native_parameters=None, workflow_phase=None, work_item=None):
+          native_parameters=None, workflow_phase=None, work_item=None, advice_case=None):
     """Before native spawn/follow-up: one compact attempt, no invented creation."""
     M._validate(role, executor_id or "new-executor", "reused" if executor_id else "created")
     model, effort = _model(requested_model), _effort(requested_effort)
@@ -119,6 +119,9 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
         import run_policy
         run_policy.require(project_root, state)
         binding = {}
+        if advice_case is not None:
+            import expert_advice
+            binding.update(expert_advice.require_dispatch(project_root, state, advice_case, role, parameters))
         if role == "developer":
             import work_allocation
             binding = work_allocation.require_dispatch(state, work_item=work_item, executor_id=executor_id)

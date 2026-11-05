@@ -89,6 +89,8 @@ The existing coordinator decides whether to use one, two, or three developers an
 
 The coordinator reassesses at task start and meaningful scope changes without waiting for a reminder. Progress explains assignments or the reason for serial work, separating plans, requests, recorded host acceptance, and returns. A plan does not prove that a subagent has started.
 
+For a recurring blocker, an existing expert role can provide a short diagnosis after a focused repair still fails, or when developers and QA disagree on the cause. Advice is limited to once per cause and twice per task with compact context; it adds no permanent observer and does not change acceptance limits.
+
 A run reserves at most three developer dispatch slots, including pending dispatches. A slot is released only after confirmed completion. Independent QA starts when frozen work and host capacity are available. The main session also uses a slot: with four total host slots, three developers leave no room for QA until a developer returns. The dispatch guard covers integrated records; it does not prove host capacity or intercept every native call.
 
 UI tasks use an applicable design skill already available in the host, or the built-in design checks. Existing project styles and components remain the baseline. The agent declares the required surfaces, viewports, states, version and complete inputs; it then records actual screenshots, viewing and review. Changes invalidate affected old evidence. Small changes can be self-reviewed; important or substantial changes use proportionate independent review. The final response shows actual viewed images and unverified limitations.

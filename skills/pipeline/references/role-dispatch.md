@@ -17,6 +17,8 @@ python3 -B <runner> allocation-decide --project <root> --receipt <receipt> \
 
 ## 记录真实边界
 
+按需专家指导须先按[专家短诊断](expert-advice.md)准备当前case，再给planner/scope_guardian的begin传`advice_case=<case_id>`。它在同一归属锁内检查同根因一次、本任务两次的占位上限；prepare不等于请求，begin不等于宿主已启动。没有该参数的旧派发保持兼容，不能据此宣称所有高阶调用都被机器拦截。
+
 1. 准备实际spawn或新一轮follow-up前，`ticket = role_dispatch.begin(root, run_id, owner_token, role, executor_id=..., requested_model=..., requested_effort=...)`。新创建时省略executor_id；续用时用本run稳定短别名，调度上下文保存其与真实宿主ID的映射。requested值来自实际准备传入的参数；宿主仅续用既有角色且未重新传参时记inherit。begin只记派发尝试，不计成功创建。
 2. 立刻调用原生创建/续用工具，提示只带规则、缓存base引用和本批差量。Codex的collaboration工具必须直接调用，不能放进Python或functions.exec模拟。宿主接受后`accepted(root, run_id, owner_token, ticket['id'], executor_id, actual_model=..., actual_effort=...)`，自动记实际created/reused及working边界。actual仅填写宿主明确返回的实际值，未反馈省略保持unknown；不能复制requested充当actual。
 3. 角色实际等待或开始可观测准备时，仍可用role_metrics.record_role_event记waiting/preparing/working；没有可观察的准备时间保持unknown，不用请求到接受的差值猜模型启动耗时。角色仍在工作时只发差量消息不另开工作episode、不重复记created/reused。
