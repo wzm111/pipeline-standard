@@ -47,5 +47,17 @@ class FeedbackTests(unittest.TestCase):
         self.assertEqual(r.returncode,2)
         self.assertNotIn('PRIVATE',r.stdout+r.stderr)
 
+    def test_draft_cli_outputs_a_valid_message_and_rejects_malformed_labels(self):
+        command = [sys.executable, '-B', str(SCRIPTS/'progress_feedback.py'), '--draft']
+        draft = {'status': '等待中', 'step': '独立验收', 'body': '本地检查已通过，等待 tester 返回。'}
+        result = subprocess.run(command, input=json.dumps(draft), text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), '⏳ **[等待中｜独立验收]** 本地检查已通过，等待 tester 返回。')
+        self.assertTrue(F.inspect_feedback([{'text': result.stdout}])['format_valid'])
+        result = subprocess.run(command, input=json.dumps({**draft, 'step': 'PRIVATE]'}),
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn('PRIVATE', result.stdout + result.stderr)
+
 
 if __name__ == '__main__': unittest.main()

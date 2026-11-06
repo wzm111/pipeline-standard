@@ -129,6 +129,18 @@ def render(value):
         if sample["qa_gates"]:
             gates = "，".join(f"{gate} {count}" for gate, count in sorted(sample["qa_gates"].items()))
             lines.append(f"  QA 登记：{gates}；机器校验记录 {sample['machine_qa_records']}，早于 tester 返回的 PASS {sample['qa_pass_before_tester_return']}，任务边界不符 {sample['qa_boundary_mismatch']}。")
+        handoff = sample.get("qa_handoff", {})
+        milestones = [("最近检查通过", "last_check_success_seconds"),
+                      ("tester 完成登记", "last_tester_return_seconds"),
+                      ("QA 报告", "last_qa_seconds"), ("最终验收报告", "last_acceptance_seconds")]
+        if any(handoff.get(key) is not None for _, key in milestones):
+            offsets = "，".join(f"{label} {show(handoff[key])}" for label, key in milestones)
+            lines.append(f"  交接时间（任务起点后秒数）：{offsets}。最终验收引用同任务 QA {handoff['linked_acceptances']} 次。")
+        host = sample.get("host_diagnostics", {})
+        if host.get("failures_by_operation") or host.get("recovery_successes") or host.get("recovery_failures"):
+            operations = "，".join(f"{key}={count}" for key, count in sorted(host["failures_by_operation"].items())) or "无"
+            causes = "，".join(f"{key}={count}" for key, count in sorted(host["failure_causes"].items())) or "无"
+            lines.append(f"  宿主失败：{operations}。登记原因：{causes}。关联恢复通过 {host['recovery_successes']}，未通过 {host['recovery_failures']}。")
         if sample["release_checks"] or sample["release_phases"] or sample["release_closeout"] is not None:
             lines.append(f"  发布登记：检查 {sample['release_checks']}，计划前置 {show(sample['release_plan_before_checks'])}，收口引用 {show(sample['release_closeout'])}。")
     if value["selection_truncated"] or value["latency"]["truncated"]:

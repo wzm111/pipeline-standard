@@ -95,8 +95,13 @@ def _begin_result(ticket, created, event_view):
     return deepcopy(ticket)
 
 
+OPERATIONS = {"navigate", "readback", "configure", "export", "import", "verify"}
+FAILURE_CAUSES = {"environment", "fixture", "regression", "target_state", "permission", "tool_limit"}
+
+
 def finish(project_root, run_id, owner_token, observation_id, *, exit_code, log_path,
-           host_stopped=False, stop_evidence=None, error=None):
+           host_stopped=False, stop_evidence=None, error=None,
+           operation=None, failure_cause=None, recovery_of=None):
     """Record a real return/stop, restore progress, and return its immutable report.
 
     Invalid logs/inputs leave the ticket held so the caller can explicitly close
@@ -107,6 +112,13 @@ def finish(project_root, run_id, owner_token, observation_id, *, exit_code, log_
     root = Path(project_root).resolve(strict=True)
     E._label(observation_id)
     R._stopped(host_stopped, stop_evidence)
+    if operation is not None and (not isinstance(operation, str) or operation not in OPERATIONS):
+        raise ValueError("unsupported observed operation")
+    if failure_cause is not None and (not isinstance(failure_cause, str)
+                                     or failure_cause not in FAILURE_CAUSES or exit_code == 0):
+        raise ValueError("failure cause requires a supported cause and nonzero exit")
+    if recovery_of is not None:
+        E._label(recovery_of)
     _safe({"log_path": log_path, "stop_evidence": stop_evidence}, owner_token)
     with R._write_guard(root) as base:
         state_path, state = R._load_owned(base, run_id, owner_token)
@@ -131,6 +143,23 @@ def finish(project_root, run_id, owner_token, observation_id, *, exit_code, log_
                         "log_path": log_path, "log_sha256": log_hash,
                         "inputs_stable": current == declaration["fingerprint"],
                         "finished_fingerprint": current, "stop_evidence": stop_evidence}, owner_token)
+        if recovery_of is not None:
+            prior = state["observed_checks"].get(recovery_of, {})
+            prior_ref = prior.get("report")
+            if (recovery_of == observation_id or prior.get("status") != "completed"
+                    or prior_ref not in state["artifacts"]):
+                raise ValueError("recovery requires an earlier registered failed observation")
+            previous = E.read_report(root, run_id, prior_ref, kind="check")["payload"]
+            if (previous.get("observation_kind") != "host_tool" or previous.get("observation_id") != recovery_of
+                    or type(previous.get("exit_code")) is not int
+                    or previous["exit_code"] == 0
+                    or _observed_time(previous["finished_at"]) > _observed_time(ticket["started_at"])):
+                raise ValueError("recovery requires an earlier registered failed observation")
+        diagnostics = {key: value for key, value in (
+            ("operation", operation), ("failure_cause", failure_cause), ("recovery_of", recovery_of))
+            if value is not None}
+        if diagnostics:
+            result["host_diagnostics"] = _safe(diagnostics, owner_token)
         relative = f"tmp/pipeline/runs/{run_id}/artifacts/check/{observation_id}.json"
         report_path = E._local(root, relative)
         payload = {**declaration, **result, "observation_id": observation_id,

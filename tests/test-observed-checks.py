@@ -138,6 +138,28 @@ class Observations(unittest.TestCase):
             self.finish("recovered")
         self.assertEqual(self.state()["observed_checks"]["recovered"]["status"], "closed")
 
+    def test_recovery_links_only_a_real_earlier_failed_observation(self):
+        import audit_preview as V
+
+        self.begin("private-first")
+        original = self.finish("private-first", exit_code=1, operation="export", failure_cause="tool_limit")
+        self.begin("recovery")
+        with self.assertRaisesRegex(ValueError, "earlier registered failed observation"):
+            self.finish("recovery", recovery_of="missing")
+        with self.assertRaisesRegex(ValueError, "nonzero exit"):
+            self.finish("recovery", failure_cause="fixture")
+        recovered = self.finish("recovery", operation="export", recovery_of="private-first")
+        self.assertEqual(self.finish("recovery", operation="export", recovery_of="private-first"), recovered)
+        self.assertEqual(E.read_report(self.root, self.args[1], original)["payload"]["exit_code"], 1)
+        self.begin("later")
+        with self.assertRaisesRegex(ValueError, "earlier registered failed observation"):
+            self.finish("later", recovery_of="recovery")
+        preview = V.preview(self.root, self.args[1], live=True)
+        self.assertEqual(preview["task_details"][0]["host_diagnostics"], {
+            "failures_by_operation": {"export": 1}, "failure_causes": {"tool_limit": 1},
+            "recovery_successes": 1, "recovery_failures": 0})
+        self.assertNotIn("private-first", json.dumps(preview))
+
     def test_owner_paths_symlinks_and_secrets(self):
         with self.assertRaises(ValueError):
             H.begin(self.root, self.args[1], "wrong", "host", command="fixture", scope=["input"], environment={"host": "fixture"})

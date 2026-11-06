@@ -69,6 +69,8 @@ python3 <runner> observe-finish --project <root> --receipt <receipt> --id browse
 
 `created`在登记的同一锁内决定；重复或并发同ID只有首次为true，其余成功请求仅取原ticket；并发锁冲突沿用原有拒绝，不自动重试，也不授权再次调用。未知中断先核对原宿主，真实新调用用新ID。失败传实际非零exit-code，可按真实情况加`--error timeout`（另支持`interrupted`、`command_unavailable`）；不能复制示例中的0当验收结果。finish不启动宿主，缺停止证明或有效日志就拒绝；CLI退出0仅表示登记成功，验收仍看report中的实际exit_code、分类和业务断言。CLI只回短状态/引用，不回环境原值和命令正文；凭据不放进声明、参数或日志。stdout是登记结果，不是聊天推送：执行者仍按[可见进度](progress.md)在commentary转述真实里程碑，不能宣称CLI已自动强制聊天输出。
 
+关键宿主返回可用 `--operation navigate|readback|configure|export|import|verify` 登记操作。非零结果在根因已有证据时加 `--failure-cause environment|fixture|regression|target_state|permission|tool_limit`。真实恢复调用用新 ticket，并以 `--recovery-of <同run内更早的失败ticket>` 关联原失败，保留实际退出结果。原因未知时省略。诊断不改变原检查分类、重试上限或验收规则。
+
 已有`record_check/reusable_check`记录继续兼容，未知旧时间不回填；原日志、来源链和实际业务断言仍须有效。没有Python时按报告头部规则手动核验，不伪称专用工具经由本地进程执行。
 
 复用要求原exit_code=0且命令/环境/输入/日志指纹相同、影响面明确；默认只查本run登记的证据。impact_covered=True时入口自动查找最新匹配结果，无需手动传reuse_from；命中记check_reuse并跳过执行。跨run仅允许按[交付承接](delivery.md)显式继承并验证来源链，不能直接读取别的run报告作为本轮PASS。底层reusable_check仍只读，统计区分继承与实际执行。必要全量门禁在冻结后集中收口；最终业务产物验收保留。

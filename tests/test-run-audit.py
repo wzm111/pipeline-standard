@@ -147,7 +147,8 @@ class AuditTests(unittest.TestCase):
         dispatch = D.begin(*args, "tester", requested_model="fixture-requested-model")
         D.accepted(*args, dispatch["id"], "fixture-tester", actual_model="fixture-observed-model")
         D.complete(*args, dispatch["id"], executors_stopped=True, stop_evidence="SECRET observed return")
-        E.write_report(*args, "qa", "fixture-final", {"gate": "PASS", "summary": "SECRET independent result"})
+        qa_ref = E.write_report(*args, "qa", "fixture-final", {"gate": "PASS", "summary": "SECRET independent result"})
+        E.write_report(*args, "acceptance", "fixture-acceptance", {"gate": "PASS", "qa_ref": qa_ref})
         T.end(*args, "second")
 
         result = A.audit(self.root, run)
@@ -158,6 +159,11 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(second["reuse_reasons"], {"inputs_changed": 1})
         self.assertEqual(second["qa_gates"], {"PASS": 2})
         self.assertEqual(second["qa_pass_before_tester_return"], 1)
+        handoff = second["qa_handoff"]
+        self.assertLessEqual(handoff["last_tester_return_seconds"], handoff["last_qa_seconds"])
+        self.assertLessEqual(handoff["last_qa_seconds"], handoff["last_acceptance_seconds"])
+        self.assertEqual(handoff["acceptance_gates"], {"PASS": 1})
+        self.assertEqual(handoff["linked_acceptances"], 1)
         self.assertEqual(second["dispatches"], {"tester": {"completed": 1}})
         self.assertEqual(second["host_model_feedback"], 1)
         self.assertTrue(second["release_plan_prepared"])
@@ -165,7 +171,7 @@ class AuditTests(unittest.TestCase):
         self.assertFalse(second["release_closeout"])
         preview = V.preview(self.root, run)
         self.assertEqual(preview["task_details"], [first, second])
-        for private in ("SECRET", owner, "fixture-observed-model", "fixture-tester", str(self.root)):
+        for private in ("SECRET", owner, qa_ref, "fixture-observed-model", "fixture-tester", str(self.root)):
             self.assertNotIn(private, json.dumps(preview))
         result["audit"]["task_details"][1]["dispatches"]["tester"]["completed"] = owner
         self.target(state).write_text(json.dumps(result["audit"]))

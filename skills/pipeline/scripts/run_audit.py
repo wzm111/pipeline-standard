@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 
+from observed_checks import FAILURE_CAUSES, OPERATIONS
 import run_state as R
 
 RESULTS = {"success", "search_no_match", "path_lookup_failure", "reproduction_nonzero",
@@ -159,7 +160,7 @@ def _checks(root, state, telemetry=None):
         return result
     for ref in dict.fromkeys(item for item in refs if isinstance(item, str)):
         # Only registered, current-run check JSON envelopes; no arbitrary refs.
-        match = re.fullmatch(r"tmp/pipeline/runs/([0-9a-f]{32})/artifacts/(check|check_reuse|check_review|qa|check_plan)/[a-z][a-z0-9_-]{0,63}\.json", ref)
+        match = re.fullmatch(r"tmp/pipeline/runs/([0-9a-f]{32})/artifacts/(check|check_reuse|check_review|qa|acceptance|check_plan)/[a-z][a-z0-9_-]{0,63}\.json", ref)
         if not match:
             if re.search(r"/artifacts/(?:check|check_reuse|check_review)/", ref):
                 result["unavailable"] += 1
@@ -181,11 +182,12 @@ def _checks(root, state, telemetry=None):
                                 and "release_activation" in check["coverage"] for check in declared.values())):
                     telemetry.append({"kind": kind, "recorded_at": report["recorded_at"]})
                 continue
-            if kind == "qa":
+            if kind in {"qa", "acceptance"}:
                 if telemetry is not None:
                     validation = payload.get("machine_validation")
                     telemetry.append({"kind": kind, "recorded_at": report["recorded_at"], "ref": ref,
                                       "gate": payload.get("gate") if isinstance(payload.get("gate"), str) else None,
+                                      "qa_ref": payload.get("qa_ref"),
                                       "machine": isinstance(validation, dict) and type(validation.get("schema")) is int
                                       and validation["schema"] == 1,
                                       "task_started_at": _stamp(validation.get("task_started_at"))
@@ -198,6 +200,8 @@ def _checks(root, state, telemetry=None):
                 changes = changes if isinstance(changes, dict) else {}
                 category, reason = payload.get("result_class"), decision.get("reason")
                 coverage = payload.get("coverage")
+                diagnostics = payload.get("host_diagnostics")
+                diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
                 telemetry.append({"kind": kind, "recorded_at": report["recorded_at"], "ref": ref,
                     "inherited": bool(payload.get("inherited_from")),
                     "started_at": _stamp(payload.get("started_at")),
@@ -206,6 +210,10 @@ def _checks(root, state, telemetry=None):
                     "result_class": category if isinstance(category, str) else None,
                     "reuse_reason": reason if isinstance(reason, str) else None,
                     "host": payload.get("observation_kind") == "host_tool",
+                    "operation": diagnostics.get("operation"),
+                    "failure_cause": diagnostics.get("failure_cause"),
+                    "recovery": isinstance(diagnostics.get("recovery_of"), str),
+                    "exit_code": payload.get("exit_code"),
                     "release": isinstance(coverage, list) and any(label in coverage for label in RELEASE_LABELS),
                     "environment_mismatch": changes.get("status") == "known" and bool(
                         changes.get("changed_keys") or changes.get("other_environment_changed"))})
@@ -272,6 +280,9 @@ def _task_details(state, records):
                 "expert_prepared": 0, "host_model_feedback": 0, "host_effort_feedback": 0,
                 "role_union_seconds": None, "qa_gates": {}, "machine_qa_records": 0,
                 "qa_pass_before_tester_return": 0, "qa_boundary_mismatch": 0,
+                "qa_handoff": {**dict.fromkeys(QA_HANDOFF_TIMES), "acceptance_gates": {}, "linked_acceptances": 0},
+                "host_diagnostics": {"failures_by_operation": {}, "failure_causes": {},
+                                     "recovery_successes": 0, "recovery_failures": 0},
                 "release_checks": 0, "release_phases": {}, "release_plan_prepared": None,
                 "release_plan_before_checks": None,
                 "release_closeout": None}
@@ -286,6 +297,13 @@ def _task_details(state, records):
 
     def count(bucket, key):
         bucket[key] = bucket.get(key, 0) + 1
+
+    def mark(index, key, instant):
+        _, left, right = windows[index]
+        if instant is not None and left <= instant <= right:
+            handoff = samples[index]["qa_handoff"]
+            offset = instant - left
+            handoff[key] = max(handoff[key] or 0, offset)
 
     testers = [[] for _ in windows]
     first_release = [None for _ in windows]
@@ -318,12 +336,14 @@ def _task_details(state, records):
             sample["host_effort_feedback"] += int(dispatch.get("actual_effort") not in (None, "", "unknown"))
         if role == "tester" and status == "completed" and finished is not None and finished <= boundary:
             testers[index].append(finished)
+            mark(index, "last_tester_return_seconds", finished)
 
     for sample, (_, left, right) in zip(samples, windows):
         intervals = [(max(a, left), min(b, right)) for a, b in spans if max(a, left) < min(b, right)]
         if intervals:
             sample["role_union_seconds"] = interval_seconds(intervals)
 
+    qa_records = {record["ref"]: record for record in records if record["kind"] == "qa"}
     for record in records:
         kind = record["kind"]
         # Inheritance and reuse are registration events, never new execution.
@@ -346,6 +366,17 @@ def _task_details(state, records):
                 bool(tasks) and record["machine"] and at(record["task_started_at"]) != windows[index][1])
             if record["gate"] == "PASS" and any(at(record["recorded_at"]) < end for end in testers[index]):
                 sample["qa_pass_before_tester_return"] += 1
+            mark(index, "last_qa_seconds", at(record["recorded_at"]))
+        elif kind == "acceptance":
+            handoff = sample["qa_handoff"]
+            when = at(record["recorded_at"])
+            if record["gate"] in QA_GATES:
+                count(handoff["acceptance_gates"], record["gate"])
+            mark(index, "last_acceptance_seconds", when)
+            ref = record.get("qa_ref")
+            linked = qa_records.get(ref) if isinstance(ref, str) else None
+            if linked and slot(linked["recorded_at"]) == index and at(linked["recorded_at"]) <= when:
+                handoff["linked_acceptances"] += 1
         elif kind == "check" and record["inherited"]:
             sample["inherited"] += 1
         elif kind in {"check", "check_reuse"}:
@@ -361,6 +392,16 @@ def _task_details(state, records):
                 sample["host_observation_records"] += int(record["host"])
                 category = record["result_class"]
                 count(sample["by_result_class"], category if category in RESULTS else "unclassified")
+                if record["exit_code"] == 0:
+                    mark(index, "last_check_success_seconds", at(record["finished_at"]))
+                if record["host"] and type(record["exit_code"]) is int:
+                    host = sample["host_diagnostics"]
+                    if record["exit_code"] != 0:
+                        operation, cause = record["operation"], record["failure_cause"]
+                        count(host["failures_by_operation"], operation if isinstance(operation, str) and operation in OPERATIONS else "unknown")
+                        count(host["failure_causes"], cause if isinstance(cause, str) and cause in FAILURE_CAUSES else "unknown")
+                    if record["recovery"]:
+                        count(host, "recovery_successes" if record["exit_code"] == 0 else "recovery_failures")
             reason = record["reuse_reason"]
             if reason is not None:
                 count(sample["reuse_reasons"], reason if reason in REUSE_REASONS else "unknown")
@@ -478,6 +519,8 @@ DETAIL_COUNTS = {"index", "executed", "reused", "inherited", "host_observation_r
                  "qa_boundary_mismatch", "release_checks"}
 DETAIL_FLAGS = {"release_plan_prepared", "release_plan_before_checks", "release_closeout"}
 DETAIL_BUCKETS = {"by_result_class": RESULTS, "reuse_reasons": REUSE_REASONS, "qa_gates": QA_GATES}
+QA_HANDOFF_TIMES = {"last_check_success_seconds", "last_tester_return_seconds",
+                    "last_qa_seconds", "last_acceptance_seconds"}
 RELEASE_PHASES = {"preflight", "compatibility", "build", "activate", "smoke"}
 RELEASE_STATES = {"running", "passed", "failed"}
 WORDS = {NOTICE, "partial", "recorded_only", "unknown", "complete", "running", "execution_ended", "managed", "legacy_untracked", *R.FINAL}
@@ -555,7 +598,8 @@ def _validate_details(details):
         raise AuditError("invalid_audit")
     expected = DETAIL_COUNTS | DETAIL_FLAGS | DETAIL_BUCKETS.keys() | {"dispatches", "release_phases", "role_union_seconds"}
     for sample in details:
-        if not isinstance(sample, dict) or sample.keys() != expected:
+        if (not isinstance(sample, dict) or not expected <= sample.keys()
+                or sample.keys() - expected - {"qa_handoff", "host_diagnostics"}):
             raise AuditError("invalid_audit")
         seconds = sample["role_union_seconds"]
         if (not counts({k: sample[k] for k in DETAIL_COUNTS}, DETAIL_COUNTS)
@@ -567,6 +611,22 @@ def _validate_details(details):
                                       ("release_phases", RELEASE_PHASES, RELEASE_STATES)):
             if (not isinstance(sample[key], dict) or sample[key].keys() - groups
                     or any(not counts(value, statuses) for value in sample[key].values())):
+                raise AuditError("invalid_audit")
+        if "qa_handoff" in sample:
+            handoff = sample["qa_handoff"]
+            if (not isinstance(handoff, dict) or handoff.keys() != QA_HANDOFF_TIMES | {"acceptance_gates", "linked_acceptances"}
+                    or not counts(handoff["acceptance_gates"], QA_GATES)
+                    or not counts({"linked_acceptances": handoff["linked_acceptances"]}, {"linked_acceptances"})
+                    or any(value is not None and (type(value) not in {int, float} or not math.isfinite(value) or value < 0)
+                           for value in (handoff[key] for key in QA_HANDOFF_TIMES))):
+                raise AuditError("invalid_audit")
+        if "host_diagnostics" in sample:
+            host = sample["host_diagnostics"]
+            outcomes = {"recovery_successes", "recovery_failures"}
+            if (not isinstance(host, dict) or host.keys() != outcomes | {"failures_by_operation", "failure_causes"}
+                    or not counts({key: host[key] for key in outcomes}, outcomes)
+                    or not counts(host["failures_by_operation"], OPERATIONS | {"unknown"})
+                    or not counts(host["failure_causes"], FAILURE_CAUSES | {"unknown"})):
                 raise AuditError("invalid_audit")
 
 

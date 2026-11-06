@@ -58,16 +58,39 @@ def inspect_feedback(messages):
             'notice': 'Format and supplied time gaps only; no proof of truthful content, health or full compliance. No text stored or sent.'}
 
 
+def draft_feedback(value):
+    """Render one ready-to-send update from caller-supplied facts."""
+    if not isinstance(value, dict) or set(value) - {'status', 'step', 'body'}:
+        raise ValueError('invalid feedback draft')
+    status, step, body = value.get('status'), value.get('step', ''), value.get('body')
+    if (not isinstance(status, str) or status not in ICONS
+            or not isinstance(step, str) or (step and not re.fullmatch(r'[^\[\]*｜|\s](?:[^\[\]*｜|\r\n]{0,39})', step))
+            or not isinstance(body, str) or not body.strip()):
+        raise ValueError('invalid feedback draft')
+    label = f'{status}｜{step}' if step else status
+    message = f'{ICONS[status]} **[{label}]** {body.strip()}'
+    if not inspect_feedback([{'text': message}])['format_valid']:
+        raise ValueError('invalid feedback draft')
+    return message
+
+
 def main(argv=None):
     p = _Parser(description=__doc__)
-    p.add_argument('--stdin', action='store_true', required=True,
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--stdin', action='store_true',
                    help='JSON array of actual visible messages: text and optional trustworthy sent_at')
+    mode.add_argument('--draft', action='store_true',
+                      help='read a JSON object with status, optional step and body from stdin')
     try:
-        p.parse_args(argv)
+        args = p.parse_args(argv)
         raw = sys.stdin.buffer.read(MAX_BYTES + 1)
         if len(raw) > MAX_BYTES:
             raise ValueError('oversized input')
-        result = inspect_feedback(json.loads(raw))
+        value = json.loads(raw)
+        if args.draft:
+            print(draft_feedback(value))
+            return 0
+        result = inspect_feedback(value)
         code = 0 if result['format_valid'] is True else 1
     except (ValueError, TypeError, OSError):
         result, code = {'error': 'invalid_feedback_input', 'notice': 'No input text stored or echoed.'}, 2

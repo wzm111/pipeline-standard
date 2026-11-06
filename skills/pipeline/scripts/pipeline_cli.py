@@ -162,6 +162,9 @@ def parser():
     observe_finish.add_argument("--host-stopped", action="store_true")
     observe_finish.add_argument("--stop-evidence", required=True)
     observe_finish.add_argument("--error")
+    observe_finish.add_argument("--operation")
+    observe_finish.add_argument("--failure-cause")
+    observe_finish.add_argument("--recovery-of")
     update = owned["update"]
     update.add_argument("--stage")
     update.add_argument("--activity", choices=sorted(R.ACTIVITIES))
@@ -422,7 +425,8 @@ def dispatch(args):
             raise ValueError("observe-finish requires a supported execution error")
         report = H.finish(root, run_id, owner, args.observation_id, exit_code=exit_code,
                           log_path=args.log_path, host_stopped=args.host_stopped,
-                          stop_evidence=args.stop_evidence, error=args.error)
+                          stop_evidence=args.stop_evidence, error=args.error, operation=args.operation,
+                          failure_cause=args.failure_cause, recovery_of=args.recovery_of)
         return {"observation_id": args.observation_id, "status": "completed", "report": report}, 0
     if args.action == "check":
         argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
