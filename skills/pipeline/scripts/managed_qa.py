@@ -146,7 +146,7 @@ def canonical(root, state, payload):
         mode = "single"
     result["machine_validation"] = {"schema": 1, "mode": mode, "task_started_at": boundary(state)}
     import visual_evidence
-    return visual_evidence.apply(root, state, result)
+    return _apply_expert_reviews(root, state, visual_evidence.apply(root, state, result))
 
 
 def validate_finish(root, state):
@@ -154,7 +154,7 @@ def validate_finish(root, state):
     qa_refs = [ref for ref in state["artifacts"] if "/artifacts/qa/" in ref]
     exploration_only = all(any(f"/artifacts/{kind}/" in ref for kind in ("check", "check_reuse", "check_review"))
                            for ref in state["artifacts"])
-    if not current and not qa_refs and not _plans(root, state) and exploration_only:
+    if not current and not qa_refs and not _plans(root, state) and exploration_only and not _review_reports(root, state, "dual_review"):
         return  # An empty run is not a delivered or accepted product.
     if not qa_refs:
         raise ValueError("current machine-validated QA is required before completing")
@@ -175,6 +175,7 @@ def release_requirements(root, state):
     import check_plan as P
     required = set(required_for_state(root, state))
     source_qa = {}
+    latest = None
     for ref in state["artifacts"]:
         if "/artifacts/qa/" not in ref:
             continue
@@ -182,9 +183,12 @@ def release_requirements(root, state):
         payload = report["payload"]
         if (_current(report, state) and isinstance(payload, dict)
                 and payload.get("scope") != "engineering_release; pending external outcomes are not passed"):
-            source_qa[payload.get("plan_ref", "single")] = payload
+            source_qa[payload.get("plan_ref", "single")] = latest = payload
     if any(payload.get("gate") != "PASS" for payload in source_qa.values()):
         raise ValueError("current source QA has unresolved concerns or failure")
+    if _review_reports(root, state, "dual_review"):
+        if not latest or not latest.get("expert_reviews") or canonical(root, state, latest) != latest:
+            raise ValueError("current dual expert QA is required before release acceptance")
     plans = _plans(root, state)
     snapshot = P._snapshot(root, state["run_id"], state)
     definitions = {ref: P._read_plan(root, state["run_id"], state["owner_token"], ref, state, snapshot) for ref in plans}
@@ -211,3 +215,71 @@ def validate_release_sources(root, state, coverage):
             raise ValueError("release acceptance needs current-task observation or explicit reuse")
         for ref in sources:
             _validate_ref(root, state, ref)
+
+
+def _review_reports(root, state, kind):
+    reports = [(ref, _read(root, state, ref, kind)) for ref in state["artifacts"]
+               if f"/artifacts/{kind}/" in ref]
+    return [(ref, report) for ref, report in reports if _current(report, state)]
+
+
+def _review_executor(state, reports, role, earliest):
+    _, report = reports[-1]
+    payload = report["payload"]
+    if not isinstance(payload, dict) or payload.get("gate") != "PASS":
+        return None
+    lower_bound = R._timestamp(earliest)
+    for _, prior in reports[:-1]:
+        judgment = prior["payload"]
+        if isinstance(judgment, dict) and judgment.get("gate") in {"FAIL", "CONCERNS"}:
+            lower_bound = max(lower_bound, R._timestamp(prior["recorded_at"]))
+    for dispatch in state.get("role_dispatches", []):
+        if (dispatch["id"] == payload.get("dispatch_id") and dispatch["role"] == role
+                and dispatch["status"] == "completed" and dispatch.get("accepted_at")
+                and lower_bound <= R._timestamp(dispatch["accepted_at"])
+                <= R._timestamp(dispatch["completed_at"]) <= R._timestamp(report["recorded_at"])):
+            return dispatch
+    return None
+
+
+def _executor_ids(dispatch):
+    return {dispatch.get("host_executor_id"), dispatch["executor_id"]} - {None}
+
+
+def _apply_expert_reviews(root, state, result):
+    requirements = _review_reports(root, state, "dual_review")
+    if not requirements:
+        return result
+    start = boundary(state)
+    developers = {
+        identity for dispatch in state.get("role_dispatches", [])
+        if dispatch["role"] == "developer" and dispatch.get("accepted_at")
+        and (start is None or R._timestamp(dispatch["accepted_at"]) >= R._timestamp(start))
+        for identity in _executor_ids(dispatch)
+    }
+    failure = "missing_solution_review"
+    requirement_ref, requirement = requirements[-1]
+    solutions = _review_reports(root, state, "solution_review")
+    verifications = _review_reports(root, state, "verification_review")
+    if solutions:
+        solution_ref, solution = solutions[-1]
+        planner = _review_executor(state, solutions, "scope_guardian", requirement["recorded_at"])
+        plan_ref = result.get("plan_ref")
+        if (planner and not _executor_ids(planner) & developers and plan_ref and solution["payload"].get("requirement_ref") == requirement_ref
+                and solution["payload"].get("plan_ref") == plan_ref):
+            failure = "missing_current_independent_verification"
+            if verifications:
+                verification_ref, verification = verifications[-1]
+                checks = result["checks"]
+                tester = _review_executor(state, verifications, "tester", solution["recorded_at"])
+                if (tester and not _executor_ids(tester) & (_executor_ids(planner) | developers)
+                        and verification["payload"].get("solution_ref") == solution_ref
+                        and verification["payload"].get("checks") == checks
+                        and all(R._timestamp(_read(root, state, ref, "check")["recorded_at"])
+                                <= R._timestamp(tester["completed_at"]) for ref in checks)):
+                    result["expert_reviews"] = [requirement_ref, solution_ref, verification_ref]
+                    return result
+    if result["gate"] == "PASS":
+        result["gate"] = "CONCERNS"
+    result.setdefault("check_failures", {})["dual_review"] = failure
+    return result

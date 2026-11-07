@@ -11,6 +11,7 @@ from unittest.mock import patch
 SCRIPTS = Path(__file__).resolve().parents[1] / "skills/pipeline/scripts"
 sys.path.insert(0, str(SCRIPTS))
 import check_plan as P
+import role_dispatch as D
 import run_checks as C
 import run_evidence as E
 import run_policy as V
@@ -190,6 +191,42 @@ class ManagedQaTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.finish()
         self.assertEqual(self.finish()["status"], "completed")
+
+    def test_declared_dual_review_needs_independent_current_returns(self):
+        def report(kind, name, payload):
+            return E.write_report(*self.args, kind, name, payload)
+
+        def complete(role, executor, host_id):
+            dispatch = D.begin(*self.args, role)["id"]
+            D.accepted(*self.args, dispatch, executor, host_executor_id=host_id)
+            D.complete(*self.args, dispatch, executors_stopped=True, stop_evidence="fixture returned")
+            return dispatch
+
+        requirement = report("dual_review", "required", {})
+        with self.assertRaises(ValueError):
+            self.finish()
+        plan = P.save_plan(*self.args, "plan", {"unit": self.spec})
+        solution = report("solution_review", "scope", {
+            "gate": "PASS", "dispatch_id": complete("scope_guardian", "reviewer", "host-reviewer"),
+            "requirement_ref": requirement, "plan_ref": plan,
+        })
+        P.run_planned(*self.args, plan, "unit", "unit")
+        pending = self.payload(P.qa_from_plan(*self.args, plan, "pending"))
+        self.assertEqual(pending["gate"], "CONCERNS")
+        verification = {"gate": "PASS", "solution_ref": solution, "checks": pending["checks"]}
+        report("verification_review", "shared-host", verification | {
+            "dispatch_id": complete("tester", "alias", "host-reviewer"),
+        })
+        self.assertEqual(self.payload(P.qa_from_plan(*self.args, plan, "alias"))["gate"], "CONCERNS")
+        report("verification_review", "independent", verification | {
+            "dispatch_id": complete("tester", "verifier", "host-verifier"),
+        })
+        final = self.payload(P.qa_from_plan(*self.args, plan, "verified"))
+        self.assertEqual(final["gate"], "PASS")
+        self.assertEqual(len(final["expert_reviews"]), 3)
+        report("verification_review", "new-failure", {"gate": "FAIL"})
+        with self.assertRaises(ValueError):
+            self.finish()
 
     def test_plan_canonicalizes_forged_pass_and_keeps_required_union(self):
         other = self.spec | {"coverage": ["other"], "argv": [sys.executable, "-B", "-c", "print('other')"]}
