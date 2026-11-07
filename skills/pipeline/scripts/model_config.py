@@ -14,6 +14,7 @@ TASK_KINDS = {
     "routine_review": {"scope_guardian"},
     "scoped_fix": {"developer"},
     "ui_validation": {"tester"},
+    "high_risk_verification": {"tester"},
     "release_summary": {"releaser"},
 }
 
@@ -154,9 +155,11 @@ def select_task_route(role, preference, *, task_kind=None, risk="unknown", compl
     applied = False
     if task_kind is None:
         reason = "task_kind_missing"
-    elif risk != "low":
+    elif task_kind == "high_risk_verification" and risk != "high":
+        reason = "risk_not_high"
+    elif task_kind != "high_risk_verification" and risk != "low":
         reason = "risk_not_low"
-    elif complexity != "simple":
+    elif task_kind != "high_risk_verification" and complexity != "simple":
         reason = "complexity_not_simple"
     elif task_kind not in routes:
         reason = "route_not_configured"

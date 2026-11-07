@@ -29,7 +29,8 @@ class TaskRoutingTests(unittest.TestCase):
 
     def test_all_role_task_pairs_and_cross_role_config_rejection(self):
         expected = {"routine_planning": {"planner"}, "routine_review": {"scope_guardian"},
-                    "scoped_fix": {"developer"}, "ui_validation": {"tester"}, "release_summary": {"releaser"}}
+                    "scoped_fix": {"developer"}, "ui_validation": {"tester"},
+                    "high_risk_verification": {"tester"}, "release_summary": {"releaser"}}
         self.assertEqual(MODELS.TASK_KINDS, expected)
         for task_kind, roles in expected.items():
             role = next(iter(roles))
@@ -38,13 +39,28 @@ class TaskRoutingTests(unittest.TestCase):
                 document = {"schema_version": 1, "runtimes": {"codex": {other_role: config}}}
                 if other_role == role:
                     MODELS.validate_document(document)
-                    result = MODELS.select_task_route(role, config, task_kind=task_kind, risk="low", complexity="simple")
+                    risk = "high" if task_kind == "high_risk_verification" else "low"
+                    result = MODELS.select_task_route(role, config, task_kind=task_kind, risk=risk, complexity="simple")
                     self.assertEqual(result["preference"], {"model": "light"})
                 else:
                     with self.assertRaises(ValueError):
                         MODELS.validate_document(document)
                     with self.assertRaises(ValueError):
                         MODELS.select_task_route(other_role, {"model": "base"}, task_kind=task_kind, risk="low", complexity="simple")
+
+    def test_verification_route_only_applies_to_high_risk(self):
+        preference = {
+            "model": "sol", "effort": "medium",
+            "task_routes": {"high_risk_verification": {"model": "sol", "effort": "high"}},
+        }
+        for risk in ("low", "medium", "high", "unknown"):
+            with self.subTest(risk=risk):
+                result = MODELS.select_task_route(
+                    "tester", preference, task_kind="high_risk_verification",
+                    risk=risk, complexity="complex",
+                )
+                self.assertEqual(result["routing"]["applied"], risk == "high")
+                self.assertEqual(result["preference"]["effort"], "high" if risk == "high" else "medium")
 
     def test_unknown_medium_high_and_complex_tasks_keep_base(self):
         for risk in ("low", "medium", "high", "unknown"):

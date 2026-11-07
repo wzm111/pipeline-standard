@@ -6,7 +6,7 @@
 
 model/effort仍为角色基础方案，可选task_routes表示用户允许的分流。先按“本次 > 项目 > 本机 > 模板”选中整个角色，再在该角色内选择路线。项目固定角色没有task_routes时，不继承本机路由；明确inherit同样屏蔽低层方案。
 
-仅risk=low、complexity=simple、类型匹配且配置路线时应用。medium/high/unknown风险或moderate/complex/unknown复杂度均保留基础模型。类型不认识、跨角色或配置非法时报错；未传任务上下文的旧调用保持原结果。
+常规路线仅在 risk=low、complexity=simple 时应用。独立验证专家使用 tester 的 high_risk_verification 路线，仅在明确 risk=high 且配置该路线时应用。其余分类沿用基础模型。类型不认识、跨角色或配置非法时报错；未传任务上下文的旧调用保持原结果。
 
 | 角色 | 内部任务类型 | 明确低风险简单任务 | 基础方案 |
 | --- | --- | --- | --- |
@@ -16,7 +16,7 @@ model/effort仍为角色基础方案，可选task_routes表示用户允许的分
 | tester | ui_validation | Terra中：截图及界面操作验收 | Sol中 |
 | releaser | release_summary | Terra低：已验证事实的摘要整理 | 保留原Sol方案 |
 
-具体型号是本次用户选择，保存在本机/项目配置，不写入通用安装模板。Claude可独立配置宿主支持的型号，不套用Codex型号；未配置路线保持旧行为。这是选择策略，不是模型质量或提速已验证的结论。
+高风险方案专家沿用 scope_guardian 的基础配置。本仓库将验证专家配置为 GPT-6.1 Sol 高强度，普通 tester 继续用原配置。项目和本机可各自配置，通用安装模板保留 inherit。Claude可独立配置宿主支持的型号，不套用Codex型号；未配置路线保持旧行为。这是选择策略，不是模型质量或提速已验证的结论。
 
 ## 分类边界
 
