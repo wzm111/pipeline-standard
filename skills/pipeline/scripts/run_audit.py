@@ -200,6 +200,7 @@ def _checks(root, state, telemetry=None):
                 changes = changes if isinstance(changes, dict) else {}
                 category, reason = payload.get("result_class"), decision.get("reason")
                 coverage = payload.get("coverage")
+                release_labels = [label for label in RELEASE_LABELS if isinstance(coverage, list) and label in coverage]
                 diagnostics = payload.get("host_diagnostics")
                 diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
                 telemetry.append({"kind": kind, "recorded_at": report["recorded_at"], "ref": ref,
@@ -214,7 +215,7 @@ def _checks(root, state, telemetry=None):
                     "failure_cause": diagnostics.get("failure_cause"),
                     "recovery": isinstance(diagnostics.get("recovery_of"), str),
                     "exit_code": payload.get("exit_code"),
-                    "release": isinstance(coverage, list) and any(label in coverage for label in RELEASE_LABELS),
+                    "release": bool(release_labels), "release_labels": release_labels,
                     "environment_mismatch": changes.get("status") == "known" and bool(
                         changes.get("changed_keys") or changes.get("other_environment_changed"))})
             if kind == "check":
@@ -307,6 +308,7 @@ def _task_details(state, records):
 
     testers = [[] for _ in windows]
     first_release = [None for _ in windows]
+    release_intervals = [{} for _ in windows]
     check_plans = [None for _ in windows]
     plan = state.get("release_plan") or {}
     closeout_ref = (plan.get("closeout") or {}).get("path")
@@ -385,6 +387,11 @@ def _task_details(state, records):
                 time = at(started)
                 if first_release[index] is None or time < first_release[index]:
                     first_release[index] = time
+                finished = at(record["finished_at"])
+                if finished is not None and time <= finished <= at(record["recorded_at"]):
+                    end = min(finished, windows[index][2])
+                    for label in record["release_labels"]:
+                        release_intervals[index].setdefault(label, []).append((time, end))
             if kind == "check_reuse":
                 sample["reused"] += 1
             else:
@@ -417,6 +424,9 @@ def _task_details(state, records):
         if first_release[index] is None or time < first_release[index]:
             first_release[index] = time
     for index, sample in enumerate(samples):
+        if release_intervals[index]:
+            sample["release_command_seconds"] = {
+                label: interval_seconds(intervals) for label, intervals in sorted(release_intervals[index].items())}
         prepared_times = [time for time in (check_plans[index], adapter_prepared) if time is not None]
         prepared = min(prepared_times, default=None)
         if sample["release_checks"] or sample["release_phases"] or index == closeout_index or check_plans[index] is not None:
@@ -599,7 +609,7 @@ def _validate_details(details):
     expected = DETAIL_COUNTS | DETAIL_FLAGS | DETAIL_BUCKETS.keys() | {"dispatches", "release_phases", "role_union_seconds"}
     for sample in details:
         if (not isinstance(sample, dict) or not expected <= sample.keys()
-                or sample.keys() - expected - {"qa_handoff", "host_diagnostics"}):
+                or sample.keys() - expected - {"qa_handoff", "host_diagnostics", "release_command_seconds"}):
             raise AuditError("invalid_audit")
         seconds = sample["role_union_seconds"]
         if (not counts({k: sample[k] for k in DETAIL_COUNTS}, DETAIL_COUNTS)
@@ -627,6 +637,12 @@ def _validate_details(details):
                     or not counts({key: host[key] for key in outcomes}, outcomes)
                     or not counts(host["failures_by_operation"], OPERATIONS | {"unknown"})
                     or not counts(host["failure_causes"], FAILURE_CAUSES | {"unknown"})):
+                raise AuditError("invalid_audit")
+        if "release_command_seconds" in sample:
+            durations = sample["release_command_seconds"]
+            if (not isinstance(durations, dict) or durations.keys() - RELEASE_LABELS
+                    or any(type(value) not in {int, float} or not math.isfinite(value) or value < 0
+                           for value in durations.values())):
                 raise AuditError("invalid_audit")
 
 
@@ -663,7 +679,7 @@ def audit(project_root, run_id, *, live=False):
                 "status": "error", "error": _error(error)}
 
 
-def scan(project_root, limit=20):
+def scan(project_root, limit=20, *, live=False):
     if type(limit) is not int or not 1 <= limit <= 100:
         return {"status": "error", "error": "invalid_limit"}
     try:
@@ -682,7 +698,7 @@ def scan(project_root, limit=20):
                     if re.fullmatch(r"[0-9a-f]{32}\.json", entry.name):
                         identities.append((entry.stat(follow_symlinks=False).st_mtime_ns, entry.name[:-5]))
         identities.sort(reverse=True)
-        return {"status": "ok", "runs": [audit(root, identity) for _, identity in identities[:limit]],
+        return {"status": "ok", "runs": [audit(root, identity, live=live) for _, identity in identities[:limit]],
                 "truncated": truncated or len(identities) > limit, "limit": limit}
     except Exception as error:
         return {"status": "error", "error": _error(error)}

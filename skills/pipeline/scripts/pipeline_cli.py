@@ -68,6 +68,14 @@ def parser():
     scan = sub.add_parser("scan", help="bounded read-only existing audit discovery, no repair")
     scan.add_argument("--project", default=".")
     scan.add_argument("--limit", type=int, default=20)
+    multi_scan = sub.add_parser("scan-projects", help="read-only local index across project audit directories")
+    source = multi_scan.add_mutually_exclusive_group(required=True)
+    source.add_argument("--project", action="append", help="project root, repeat to include more projects")
+    source.add_argument("--workspace", help="scan immediate project directories only")
+    multi_scan.add_argument("--since", help="inclusive snapshot timestamp with timezone")
+    multi_scan.add_argument("--limit", type=int, default=5, help="latest run candidates per project, 1 to 20")
+    multi_scan.add_argument("--live", action="store_true", help="read registered metadata without saving snapshots")
+    multi_scan.add_argument("--format", choices=["json", "text"], default="json")
     preview = sub.add_parser("preview", help="local read-only audit preview; never upload, export or start a run")
     preview.add_argument("--project", default=".")
     preview.add_argument("--run-id", help="explicit run; otherwise select active or latest local record")
@@ -232,6 +240,11 @@ def dispatch(args):
         import audit_preview as V
         result = V.preview(args.project, args.run_id, live=args.live)
         return V.render(result) if args.format == "text" else result, int(result["snapshot_status"] == "error")
+    if args.action == "scan-projects":
+        import audit_projects as M
+        result = M.scan(args.project, workspace=args.workspace, since=args.since,
+                        limit=args.limit, live=args.live)
+        return M.render(result) if args.format == "text" else result, int(result["status"] == "error")
     root = Path(args.project).resolve(strict=True)
     if args.action == "visual-inspect":
         import visual_evidence as V

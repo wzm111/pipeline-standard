@@ -193,6 +193,36 @@ class AuditTests(unittest.TestCase):
         self.assertTrue(detail["release_plan_before_checks"])
         self.assertIsNone(detail["release_closeout"])
 
+    def test_cross_project_index_is_read_only_and_filters_snapshots(self):
+        workspace = self.root
+        first = workspace / "first"
+        second = workspace / "second"
+        first.mkdir()
+        second.mkdir()
+        run = R.start(first)
+        R.start(second)
+        started = R._now()
+        E.write_report(first, run["run_id"], run["owner_token"], "check", "activation", {
+            "started_at": started, "finished_at": R._now(), "exit_code": 0, "result_class": "success",
+            "coverage": ["release_activation", "PRIVATE category"], "command": "PRIVATE command",
+        })
+        before = self.files()
+        command = [sys.executable, "-B", str(SCRIPTS / "pipeline_cli.py"), "scan-projects", "--workspace", str(workspace)]
+        result = subprocess.run(command + ["--live"], capture_output=True, text=True, check=True)
+        value = json.loads(result.stdout)
+        self.assertEqual([row["project"] for row in value["runs"]], ["first", "second"])
+        release = value["runs"][0]["latest_task"]["release_command_seconds"]
+        self.assertGreaterEqual(release["release_activation"], 0)
+        self.assertNotIn("PRIVATE", result.stdout)
+        filtered = subprocess.run(command + ["--live", "--since", "2099-01-01T00:00:00+00:00"],
+                                  capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(filtered.stdout)["runs"], [])
+        stored = subprocess.run(command, capture_output=True, text=True, check=True)
+        rows = {row["project"]: row for row in json.loads(stored.stdout)["runs"]}
+        self.assertEqual(rows["first"]["snapshot_status"], "stale")
+        self.assertIsNone(rows["first"]["latest_task"]["release_command_seconds"])
+        self.assertEqual(self.files(), before)
+
     def test_missing_and_bad_reports_are_partial_not_fabricated_success(self):
         state = R.start(self.root)
         ref = E.write_report(self.root, state["run_id"], state["owner_token"], "check", "bad", {})

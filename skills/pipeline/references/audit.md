@@ -38,7 +38,21 @@ scan最多枚举1000个目录项，按候选状态文件修改时间读取最新
 
 诊断功能仅在本地记录与预览，不上传、不进Git，不保存另一份长报告。清理tmp会删除本地记录；长期归档只复制已确认脱敏的audit摘要，不打包私有receipt或整个运行目录。
 
+## 跨项目索引
+
+`scan-projects` 从共享 pipeline CLI 读取各项目自己的审计记录，返回按快照时间倒序的 JSON 索引。原始日志、状态和证据仍由各项目保存，索引按查询即时生成。
+
+```sh
+python3 <runner> scan-projects --project <项目A> --project <项目B> --limit 3
+python3 <runner> scan-projects --workspace <各项目的共同父目录> --since '2026-11-05T00:00:00+08:00' --live --format text
+```
+
+`--workspace` 只扫描直接子目录，每次最多检查 200 个目录项，最多汇总 20 个项目。`--limit` 先限制每个项目的最近候选，再按快照时间筛选。缺日期、缺快照、过期或截断都保留提示。默认读取已有快照，`--live` 只从现有登记元数据计算。
+
+按最近已登记任务看检查复用原因、环境差异数、QA 与最终验收、发布计划与收口、宿主失败和恢复。发布命令耗时按已知覆盖标签计算区间并集，类别可能重叠。单体部署命令内部的构建、传输和就绪时间需由实际适配器用 `release_timing` 另行登记。环境变动须先核对身份及影响范围。历史记录中缺少失败原因或恢复关联时保留未知。用户可见进度仍按实际发送的消息核查。
+
 ## 多聊天共用项目的归属
+
 
 宿主确实提供当前聊天ID时，执行者可在当前run或当前task起点调用`python3 <skill>/scripts/task_origin.py bind --project <项目> --receipt <本人receipt> --host-id <实际host> --thread-id <实际聊天UUID>`。只保存host与聊天ID的摘要和真实task边界；不保存聊天标题、对话或项目内容，不从旧delivery指针认领当前任务。调用方声明不是宿主证明；缺ID保持unknown，不为归属创建task、读取其他聊天或回填历史。
 
