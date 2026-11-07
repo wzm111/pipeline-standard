@@ -72,6 +72,11 @@ def write_report(project_root, run_id, owner_token, kind, name, payload):
         if state["status"] != "running":
             raise ValueError("only active runs can record reports")
         root = Path(project_root).resolve(strict=True)
+        if kind == "progress_feedback":
+            import progress_feedback
+            if not isinstance(payload, dict) or set(payload) != {"messages"}:
+                raise ValueError("progress feedback requires actual supplied messages")
+            payload = progress_feedback.inspect_feedback(payload["messages"])
         if kind == "qa" and "run_policy" in state:
             import managed_qa
             payload = managed_qa.canonical(root, state, payload)

@@ -145,7 +145,10 @@ def status(project_root, run_id=None):
     return {"active": active, "state": state}
 
 
-def start(project_root, initial=None, *, managed=False):
+def start(project_root, initial=None, *, managed=False, review_risk=None, review_reason=None):
+    if review_risk is not None:
+        if review_risk not in {"low", "medium", "high", "unknown"} or not isinstance(review_reason, str) or not review_reason.strip():
+            raise ValueError("review decision requires a valid risk and reason")
     initial = deepcopy({} if initial is None else initial)
     delivery_from = initial.pop("delivery_from", None) if isinstance(initial, dict) else None
     _validate_changes(initial)
@@ -159,6 +162,9 @@ def start(project_root, initial=None, *, managed=False):
                  "stage": "start", "activity": "execution", "batches": [], "pending": [], "next": None,
                  "artifacts": [], "created_at": now, "history": [], "updated_at": now}
         state.update(initial)
+        if review_risk is not None:
+            state["run_review_decision"] = {"risk": review_risk, "reason": review_reason,
+                                           "required": review_risk in {"high", "unknown"}, "retrospective": False}
         if managed:
             import run_policy
             state["run_policy"] = run_policy.initialize(project_root)
@@ -171,11 +177,17 @@ def start(project_root, initial=None, *, managed=False):
             try:
                 delivery.adopt(project_root, base, state, delivery_from)
             except (OSError, ValueError, KeyError, TypeError) as error:
+                inherited_review = state.get("inherited_review")
                 visual = state.get("inherited_visual")
                 state = before_adoption
+                if inherited_review:
+                    state["inherited_review"] = inherited_review
                 if visual:
                     state["inherited_visual"] = visual
                 state["delivery_status"] = {"adopted": False, "reason": getattr(error, "reason", type(error).__name__), "detail": str(error)[:160]}
+        if state.get("stage") == "implementation":
+            import review_control
+            review_control.validate_development(project_root, state)
         path = _state_path(base, state["run_id"])
         if path.exists():
             raise ValueError("run_id collision")
@@ -205,6 +217,9 @@ def update(project_root, run_id, owner_token, changes):
         path, state = _load_owned(base, run_id, owner_token)
         if state.get("status") != "running":
             raise ValueError("only a running run can be updated")
+        if changes.get("stage") == "implementation":
+            import review_control
+            review_control.validate_development(project_root, state)
         previous = (state.get("stage"), state.get("activity", "execution"))
         state.update(deepcopy(changes))
         if {"stage", "activity"} & changes.keys():

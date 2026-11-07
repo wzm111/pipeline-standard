@@ -44,7 +44,7 @@ runner为本skill实际目录的`scripts/pipeline_cli.py`；`paths --project <ro
 ```sh
 python3 <runner> paths --project <root>
 python3 <runner> status --project <root>
-python3 <runner> start --project <root> --stage review --compact
+python3 <runner> start --project <root> --review-risk <low|medium|high|unknown> --review-reason "<本次判断依据>" --stage review --compact
 # 读取本轮适用规则后，使用start返回的policy.revision确认；不是让用户填写。
 python3 <runner> policy-ack --project <root> --receipt <receipt> --revision <policy.revision>
 python3 <runner> allocation-decide --project <root> --receipt <receipt> --json '{"mode":"direct","reason":"small_scope","assignments":[]}'

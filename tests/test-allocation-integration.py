@@ -69,16 +69,16 @@ class AllocationIntegrationTests(unittest.TestCase):
         W.decide(*self.args, "serial", "shared_write_paths", [self.assignment()])
         ticket = D.begin(*self.args, "developer", work_item="core")
         D.accepted(*self.args, ticket["id"], "dev-1")
-        T.start(*self.args, "new-goal", "technical goal", ["technical acceptance"], require_managed=True)
+        T.start(*self.args, "new-goal", "technical goal", ["technical acceptance"], require_managed=True, review_risk="low", review_reason="fixture scoped change")
         state = R.status(self.root)["state"]
         self.assertEqual(W.summary(state)["status"], "pending")
         self.assertEqual(state["role_dispatches"][0]["status"], "working")
         W.decide(*self.args, "direct", "small_scope", [])
-        T.start(*self.args, "new-goal", "technical goal", ["technical acceptance"], require_managed=True)
+        T.start(*self.args, "new-goal", "technical goal", ["technical acceptance"], require_managed=True, review_risk="low", review_reason="fixture scoped change")
         self.assertEqual(W.summary(R.status(self.root)["state"])["status"], "decided")
 
     def test_real_cli_scope_change_idempotency_and_read_only_projection(self):
-        state = self.cli("start")
+        state = self.cli("start", "--review-risk", "low", "--review-reason", "fixture scoped change")
         receipt = state["receipt"]
         self.cli("policy-ack", "--receipt", receipt, "--revision", state["policy"]["revision"])
         payload = json.dumps({"mode": "direct", "reason": "small_scope", "assignments": []})
@@ -118,7 +118,7 @@ class AllocationIntegrationTests(unittest.TestCase):
         self.start()
         W.decide(*self.args, "serial", "shared_write_paths", [self.assignment()])
         D.begin(*self.args, "developer", work_item="core")
-        T.start(*self.args, "task-2", "technical goal", ["technical acceptance"], require_managed=True)
+        T.start(*self.args, "task-2", "technical goal", ["technical acceptance"], require_managed=True, review_risk="low", review_reason="fixture scoped change")
         W.decide(*self.args, "serial", "shared_write_paths", [self.assignment("next", path="src/other")])
         before = R.status(self.root)["state"]
         with self.assertRaisesRegex(ValueError, "outstanding dispatch"):

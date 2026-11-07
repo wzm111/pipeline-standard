@@ -1,6 +1,7 @@
 """Managed QA acceptance reuses registered checks/plans under the caller's lock."""
 import run_evidence as E
 import run_state as R
+import review_control
 
 
 def boundary(state):
@@ -154,7 +155,7 @@ def validate_finish(root, state):
     qa_refs = [ref for ref in state["artifacts"] if "/artifacts/qa/" in ref]
     exploration_only = all(any(f"/artifacts/{kind}/" in ref for kind in ("check", "check_reuse", "check_review"))
                            for ref in state["artifacts"])
-    if not current and not qa_refs and not _plans(root, state) and exploration_only and not _review_reports(root, state, "dual_review"):
+    if not current and not qa_refs and not _plans(root, state) and exploration_only and not _review_reports(root, state, "dual_review") and not review_control.required(state):
         return  # An empty run is not a delivered or accepted product.
     if not qa_refs:
         raise ValueError("current machine-validated QA is required before completing")
@@ -186,7 +187,8 @@ def release_requirements(root, state):
             source_qa[payload.get("plan_ref", "single")] = latest = payload
     if any(payload.get("gate") != "PASS" for payload in source_qa.values()):
         raise ValueError("current source QA has unresolved concerns or failure")
-    if _review_reports(root, state, "dual_review"):
+    import review_control
+    if review_control.required(state) or _review_reports(root, state, "dual_review"):
         if not latest or not latest.get("expert_reviews") or canonical(root, state, latest) != latest:
             raise ValueError("current dual expert QA is required before release acceptance")
     plans = _plans(root, state)
@@ -248,8 +250,20 @@ def _executor_ids(dispatch):
 
 def _apply_expert_reviews(root, state, result):
     requirements = _review_reports(root, state, "dual_review")
+    import review_control
     if not requirements:
+        if review_control.required(state):
+            if result["gate"] == "PASS":
+                result["gate"] = "CONCERNS"
+            result.setdefault("check_failures", {})["dual_review"] = "review_required_but_not_declared"
         return result
+    feedback = _review_reports(root, state, "progress_feedback")
+    if not feedback or feedback[-1][1]["payload"].get("format_valid") is not True:
+        if result["gate"] == "PASS":
+            result["gate"] = "CONCERNS"
+        result.setdefault("check_failures", {})["progress_feedback"] = "missing_or_invalid_visible_feedback"
+    else:
+        result["feedback_ref"] = feedback[-1][0]
     start = boundary(state)
     developers = {
         identity for dispatch in state.get("role_dispatches", [])
@@ -265,7 +279,15 @@ def _apply_expert_reviews(root, state, result):
         solution_ref, solution = solutions[-1]
         planner = _review_executor(state, solutions, "scope_guardian", requirement["recorded_at"])
         plan_ref = result.get("plan_ref")
-        if (planner and not _executor_ids(planner) & developers and plan_ref and solution["payload"].get("requirement_ref") == requirement_ref
+        implementation = [R._timestamp(d["requested_at"]) for d in state.get("role_dispatches", [])
+                          if d["role"] == "developer" and (start is None
+                          or R._timestamp(d["requested_at"]) >= R._timestamp(start))]
+        implementation.extend(R._timestamp(e["at"]) for e in state.get("history", [])
+                              if e.get("stage") == "implementation"
+                              and (start is None or R._timestamp(e["at"]) >= R._timestamp(start)))
+        timely = (review_control.decision(state).get("retrospective") is True or
+                  not implementation or R._timestamp(solution["recorded_at"]) <= min(implementation))
+        if (timely and planner and not _executor_ids(planner) & developers and plan_ref and solution["payload"].get("requirement_ref") == requirement_ref
                 and solution["payload"].get("plan_ref") == plan_ref):
             failure = "missing_current_independent_verification"
             if verifications:

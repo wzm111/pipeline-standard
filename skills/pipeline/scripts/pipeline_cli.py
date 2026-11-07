@@ -103,6 +103,8 @@ def parser():
     release_timing.add_argument("--check", help="optional current-run monolithic release check reference")
     start = sub.add_parser("start", help="start after reading contract; retain the returned private receipt path")
     start.add_argument("--project", default=".")
+    start.add_argument("--review-risk", required=True, choices=["low", "medium", "high", "unknown"])
+    start.add_argument("--review-reason", required=True)
     start.add_argument("--stage", default="execution")
     start.add_argument("--delivery-from", choices=["latest"])
     start.add_argument("--compact", action="store_true", help="short success response; full artifacts and error diagnostics remain unchanged")
@@ -179,6 +181,11 @@ def parser():
     update.add_argument("--next")
     for action in ("task-start", "task-end"):
         owned[action].add_argument("--task-id", required=True)
+    owned["task-start"].add_argument("--review-risk", required=True, choices=["low", "medium", "high", "unknown"])
+    owned["task-start"].add_argument("--review-reason", required=True)
+    owned["task-start"].add_argument("--continuation-of", help="explicit prior task in this run")
+    owned["task-start"].add_argument("--retrospective", action="store_true")
+    owned["task-start"].add_argument("--independent-goal", action="store_true")
     owned["task-start"].add_argument("--goal", required=True)
     owned["task-start"].add_argument("--accept", action="append", required=True, dest="acceptance")
     owned["task-end"].add_argument("--outcome", choices=["execution_ended", "paused", "aborted"], default="execution_ended")
@@ -308,7 +315,7 @@ def dispatch(args):
         initial = {"stage": args.stage}
         if args.delivery_from:
             initial["delivery_from"] = args.delivery_from
-        state = R.start(root, initial, managed=True)
+        state = R.start(root, initial, managed=True, review_risk=args.review_risk, review_reason=args.review_reason)
         # NamedTemporaryFile in _atomic gives 0600. No token is printed, passed
         # as argv, or inferred from a different task's active marker.
         receipt = E._local(root, f"tmp/pipeline/runs/{state['run_id']}/receipt.json")
@@ -365,7 +372,10 @@ def dispatch(args):
     if args.action in {"task-start", "task-end"}:
         import run_tasks as T
         if args.action == "task-start":
-            item = T.start(root, run_id, owner, args.task_id, args.goal, args.acceptance, require_managed=True)
+            item = T.start(root, run_id, owner, args.task_id, args.goal, args.acceptance, require_managed=True,
+                           review_risk=args.review_risk, review_reason=args.review_reason,
+                           continuation_of=args.continuation_of, retrospective=args.retrospective,
+                           independent_goal=args.independent_goal)
         else:
             item = T.end(root, run_id, owner, args.task_id, outcome=args.outcome, report_refs=args.report_refs)
         return {"run_id": run_id, "task": item, "notice": T.NOTICE}, 0

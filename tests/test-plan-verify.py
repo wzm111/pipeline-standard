@@ -27,7 +27,7 @@ class VerifyCliTests(unittest.TestCase):
         (self.root / "PIPELINE.md").write_text("isolated authorized fixture")
         (self.root / "input").write_text("stable")
         self.env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
-        self.started = self.cli("start")
+        self.started = self.cli("start", "--review-risk", "low", "--review-reason", "fixture scoped change")
         self.receipt = self.started["receipt"]
         self.cli("policy-ack", "--receipt", self.receipt, "--revision", self.started["policy"]["revision"])
         state = R.status(self.root)["state"]

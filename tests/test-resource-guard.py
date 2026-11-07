@@ -115,7 +115,7 @@ class ResourceGuardTests(unittest.TestCase):
                                  expected=1)["resources"]["status"], "unknown_writes")
         self.assertEqual(self.cli("preflight", "--write-path", "other", "--protected-path", "dist",
                                  "--protected-path", "preview", "--", *self.argv)["resources"]["status"], "disjoint")
-        started = self.cli("start")
+        started = self.cli("start", "--review-risk", "low", "--review-reason", "fixture scoped change")
         receipt = started["receipt"]
         self.cli("check", "--receipt", receipt, "--name", "blocked", "--scope", "input",
                  "--write-path", "dist", "--protected-path", "dist/assets", "--", *self.argv, expected=2)
@@ -125,7 +125,7 @@ class ResourceGuardTests(unittest.TestCase):
         self.assertTrue((self.root / "ran").exists())
 
     def test_cli_plan_run_rejects_declared_protected_output(self):
-        receipt = self.cli("start")["receipt"]
+        receipt = self.cli("start", "--review-risk", "low", "--review-reason", "fixture scoped change")["receipt"]
         payload = {"checks": {"build": {"argv": self.argv, "scope": ["input"],
                    "coverage": ["build"], "write_paths": ["dist"],
                    "protected_paths": ["dist/preview"]}}}

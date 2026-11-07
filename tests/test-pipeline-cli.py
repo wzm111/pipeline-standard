@@ -30,7 +30,7 @@ class PipelineCliTests(unittest.TestCase):
         return json.loads(r.stdout)
 
     def start(self):
-        s = self.cli("start")
+        s = self.cli("start", "--review-risk", "low", "--review-reason", "fixture scoped change")
         self.receipt = s["receipt"]
         self.cli("policy-ack", "--receipt", self.receipt, "--revision", s["policy"]["revision"])
         return s
@@ -118,7 +118,7 @@ class PipelineCliTests(unittest.TestCase):
         shutil.copy2(SCRIPTS.parent / "SKILL.md", scripts.parent / "SKILL.md")
         shutil.copytree(SCRIPTS.parent / "references", scripts.parent / "references")
         command = [sys.executable, "-B", str(scripts / "pipeline_cli.py")]
-        started = subprocess.run([*command, "start", "--project", str(self.root)], capture_output=True, text=True)
+        started = subprocess.run([*command, "start", "--review-risk", "low", "--review-reason", "fixture scoped change", "--project", str(self.root)], capture_output=True, text=True)
         state = R.status(self.root)["state"]
         self.assertEqual(state["status"], "running")
         receipt = self.root / f"tmp/pipeline/runs/{state['run_id']}/receipt.json"
@@ -141,7 +141,7 @@ class PipelineCliTests(unittest.TestCase):
         self.assertNotIn(receipt["owner_token"], json.dumps(s))
         self.assertEqual(s["stage"], "execution")
         before = Path(self.receipt).read_bytes()
-        self.assertEqual(self.cli("start", expected=2)["error"], "ValueError")
+        self.assertEqual(self.cli("start", "--review-risk", "low", "--review-reason", "fixture scoped change", expected=2)["error"], "ValueError")
         self.assertEqual(Path(self.receipt).read_bytes(), before)
 
     def test_attempt_names_change_but_stable_semantic_coverage_reuses_real_check(self):

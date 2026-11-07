@@ -35,7 +35,7 @@ class CompactCliTests(unittest.TestCase):
         return json.loads(result.stdout)
 
     def start(self, compact=True):
-        started = self.cli("start", *(["--compact"] if compact else []))
+        started = self.cli("start", "--review-risk", "low", "--review-reason", "fixture scoped change", *(["--compact"] if compact else []))
         self.receipt = started["receipt"]
         self.run = started["run_id"]
         self.cli("policy-ack", "--receipt", self.receipt, "--revision", started["policy"]["revision"])

@@ -44,7 +44,7 @@ class PolicyTests(unittest.TestCase):
         return value
 
     def start(self, acknowledge=False):
-        self.started = self.cli("start")
+        self.started = self.cli("start", "--review-risk", "low", "--review-reason", "fixture scoped change")
         self.receipt = self.started["receipt"]
         private = json.loads(Path(self.receipt).read_text())
         self.args = self.root, private["run_id"], private["owner_token"]
@@ -194,7 +194,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_missing_required_project_rule_and_managed_completed_guard(self):
         (self.root / "PIPELINE.md").unlink()
-        self.cli("start", expected=2)
+        self.cli("start", "--review-risk", "low", "--review-reason", "fixture scoped change", expected=2)
         self.assertIsNone(R.status(self.root)["state"])
         (self.root / "PIPELINE.md").write_text("fixture contract")
         self.start(acknowledge=True)

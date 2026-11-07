@@ -216,6 +216,9 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
         E._local(Path(root).resolve(strict=True), path)
     plan = prepare(root, run_id, owner_token)
     state = R.status(root, run_id)["state"]
+    if phase == "activate":
+        import review_control
+        review_control.validate_pre_activation(root, state)
     coverage = _coverage(root, state, plan["required_before"])
     if phase in {"build", "activate"}:
         missing = coverage["missing"]
@@ -244,6 +247,9 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
         options["environment"] = {**environment, "pipeline_release_candidate": candidate["id"]}
     with R._write_guard(root) as base:
         path, current = _owned(base, run_id, owner_token)
+        if phase == "activate":
+            import review_control
+            review_control.validate_pre_activation(root, current)
         attempts = current["release_plan"]["attempts"]
         if phase in {"build", "activate"}:
             if _recovery_blocked(root, current):

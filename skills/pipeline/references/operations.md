@@ -42,7 +42,7 @@
 
 ### 同一 run 的当前执行任务
 
-智能体可用 `pipeline_cli.py task-start --project <root> --receipt <当前receipt> --task-id <短标识> --goal '<当前目标>' --accept '<可观察验收条目>'` 开始当前需求执行段；多个验收条目重复 `--accept`。后续提交/发布需求仍沿用原 run，但须先显式结束当前 task，再用新 task-id 开始，目标和验收不能覆盖已有身份。同值重试幂等，不重复写盘；旧 task 不会重新打开。
+智能体可用 `pipeline_cli.py task-start --review-risk <low|medium|high|unknown> --review-reason "<本次判断依据>" --project <root> --receipt <当前receipt> --task-id <短标识> --goal '<当前目标>' --accept '<可观察验收条目>'` 开始当前需求执行段；多个验收条目重复 `--accept`。后续提交/发布需求仍沿用原 run，但须先显式结束当前 task，再用新 task-id 开始，目标和验收不能覆盖已有身份。同值重试幂等，不重复写盘；旧 task 不会重新打开。
 
 `task-end --receipt <当前receipt> --task-id <标识> [--outcome execution_ended|paused|aborted] [--report <本run原报告引用>]` 只记录调用时观测的执行段结束边界，不回填未知历史停止时间。报告必须已登记在当前 run，引用不证明 QA 仍有效。结束内容不可覆盖，同值重试幂等。状态标签不是宿主角色/进程停止证据，不替代原停止确认、QA、run 完成、发布授权或外部验收；pending、continuity_wait、计划、历史失败和 QA 次数均保留，不能通过换 task 重置。
 

@@ -25,7 +25,7 @@ class ObserveCliTests(unittest.TestCase):
         (self.root / "host.log").write_text("fixture host returned")
         self.declaration = {"command": "fixture.host.inspect", "scope": ["input"],
                             "environment": {"host": "fixture-private-context"}, "coverage": ["browser"]}
-        started = self.cli("start")
+        started = self.cli("start", "--review-risk", "low", "--review-reason", "fixture scoped change")
         self.receipt = started["receipt"]
         self.cli("policy-ack", "--receipt", self.receipt, "--revision", started["policy"]["revision"])
         self.private = json.loads((self.root / self.receipt).read_text())

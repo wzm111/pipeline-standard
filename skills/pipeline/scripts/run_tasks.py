@@ -66,14 +66,21 @@ def _clock(state):
     return now
 
 
-def start(root, run_id, owner, task_id, goal, acceptance, *, require_managed=False):
+def start(root, run_id, owner, task_id, goal, acceptance, *, require_managed=False, review_risk=None, review_reason=None,
+          continuation_of=None, retrospective=False, independent_goal=False):
     E._label(task_id)
     _text(goal)
+    if review_risk is not None:
+        if review_risk not in {"low", "medium", "high", "unknown"}:
+            raise ValueError("invalid review risk")
+        _text(review_reason)
+    elif require_managed:
+        raise ValueError("new managed tasks require explicit review risk and reason")
     if not isinstance(acceptance, list) or not acceptance:
         raise ValueError("task acceptance must be a nonempty list")
     for entry in acceptance:
         _text(entry)
-    if isinstance(owner, str) and owner and owner in json.dumps([task_id, goal, acceptance], ensure_ascii=False):
+    if isinstance(owner, str) and owner and owner in json.dumps([task_id, goal, acceptance, review_reason], ensure_ascii=False):
         raise ValueError("owner token must not appear in task records")
     with R._write_guard(root) as base:
         path, state = _owned(base, run_id, owner)
@@ -83,16 +90,28 @@ def start(root, run_id, owner, task_id, goal, acceptance, *, require_managed=Fal
         if existing is not None:
             if existing["goal"] != goal or existing["acceptance"] != acceptance:
                 raise ValueError("task identity already records a different goal or acceptance")
+            saved = state.get("review_decisions", {}).get(task_id)
+            if saved is not None and review_risk is not None and (
+                    saved.get("risk") != review_risk or saved.get("reason") != review_reason
+                    or saved.get("continuation_of") != continuation_of
+                    or saved.get("retrospective") != retrospective
+                    or saved.get("independent_goal", False) != independent_goal):
+                raise ValueError("task review decision is immutable")
             return deepcopy(existing)
         if require_managed and "run_policy" not in state:
             raise ValueError("new CLI tasks require managed adoption; inspect policy then policy-ack --receipt <current receipt> --revision <current revision>")
         run_policy.require_new_task(root, state)
         if any(item["status"] == "running" for item in tasks):
             raise ValueError("end the current task explicitly before starting another")
+        import review_control
+        decision = review_control.task_decision(root, state, review_risk, review_reason,
+                                                continuation_of, retrospective, independent_goal)
         now = _clock(state)
         item = {"task_id": task_id, "goal": goal, "acceptance": deepcopy(acceptance),
                 "started_at": now, "ended_at": None, "status": "running", "report_refs": []}
         state.setdefault("tasks", []).append(item)
+        if decision is not None:
+            state.setdefault("review_decisions", {})[task_id] = decision
         if require_managed or "work_allocation" in state:
             import work_allocation
             work_allocation.initialize(state, task_id)

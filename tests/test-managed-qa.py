@@ -11,6 +11,10 @@ from unittest.mock import patch
 SCRIPTS = Path(__file__).resolve().parents[1] / "skills/pipeline/scripts"
 sys.path.insert(0, str(SCRIPTS))
 import check_plan as P
+import managed_qa as Q
+import review_control as RC
+import release_checks as F
+import delivery as Delivery
 import role_dispatch as D
 import run_checks as C
 import run_evidence as E
@@ -192,6 +196,156 @@ class ManagedQaTests(unittest.TestCase):
                 self.finish()
         self.assertEqual(self.finish()["status"], "completed")
 
+    def test_high_risk_omitted_declaration_blocks_development_and_acceptance(self):
+        T.start(*self.args, "risk", "shared logic", ["cross entry"], require_managed=True,
+                review_risk="high", review_reason="shared authorization")
+        with self.assertRaisesRegex(ValueError, "solution review"):
+            D.begin(*self.args, "developer")
+        with self.assertRaisesRegex(ValueError, "solution review"):
+            R.update(*self.args, {"stage": "implementation"})
+        check = self.check()
+        self.assertEqual(self.payload(self.single(check))["gate"], "CONCERNS")
+        with self.assertRaises(ValueError):
+            self.finish()
+
+    def test_review_obligation_survives_task_continuation_but_not_unrelated_work(self):
+        first = T.start(*self.args, "risk", "shared logic", ["cross entry"],
+                        review_risk="high", review_reason="shared authorization")
+        T.end(*self.args, first["task_id"])
+        T.start(*self.args, "continued", "same delivery", ["same criteria"],
+                review_risk="low", review_reason="delivery only", continuation_of="risk")
+        self.assertTrue(RC.required(R.status(self.root)["state"]))
+        T.end(*self.args, "continued")
+        T.start(*self.args, "unrelated", "new task", ["new criteria"],
+                review_risk="low", review_reason="independent documentation change", independent_goal=True)
+        self.assertFalse(RC.required(R.status(self.root)["state"]))
+
+    def test_review_decision_is_required_for_managed_task_and_immutable(self):
+        with self.assertRaises(ValueError):
+            T.start(*self.args, "missing", "goal", ["criteria"], require_managed=True)
+        T.start(*self.args, "risk", "goal", ["criteria"], review_risk="high", review_reason="payments")
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            T.start(*self.args, "risk", "goal", ["criteria"], review_risk="low", review_reason="changed")
+
+    def test_actual_feedback_is_checked_and_only_metadata_is_saved(self):
+        ref = E.write_report(*self.args, "progress_feedback", "bad", {"messages": [{"text": "PRIVATE body"}]})
+        payload = self.payload(ref)
+        self.assertFalse(payload["format_valid"])
+        self.assertNotIn("PRIVATE", json.dumps(payload))
+        with self.assertRaises(ValueError):
+            E.write_report(*self.args, "progress_feedback", "forged", {"format_valid": True})
+
+    def test_activation_missing_experts_does_not_register_or_execute_mutation(self):
+        E.write_report(*self.args, "dual_review", "required", {})
+        # A real release build is unnecessary to prove the early fail-closed boundary.
+        with self.assertRaisesRegex(ValueError, "verification"):
+            F.execute(*self.args, "blocked", phase="activate",
+                      argv=[sys.executable, "-c", "from pathlib import Path; Path('mutated').touch()"],
+                      scope=["input"])
+        self.assertFalse((self.root / "mutated").exists())
+        state = R.status(self.root)["state"]
+        self.assertEqual(state["release_plan"]["attempts"], [])
+
+    def review_report(self, kind, name, payload):
+        return E.write_report(*self.args, kind, name, payload)
+
+    def review_dispatch(self, role, executor):
+        dispatch = D.begin(*self.args, role)["id"]
+        D.accepted(*self.args, dispatch, executor, host_executor_id="host-" + executor)
+        D.complete(*self.args, dispatch, executors_stopped=True, stop_evidence="fixture stopped")
+        return dispatch
+
+    def reviewed_plan(self, checks):
+        self.review_report("progress_feedback", "visible", {"messages": [
+            {"text": "🔵 **[进行中]** 已完成范围核对，下一步验证。"}]})
+        requirement = self.review_report("dual_review", "required", {})
+        plan = P.save_plan(*self.args, "reviewed", checks)
+        solution = self.review_report("solution_review", "solution", {
+            "gate": "PASS", "dispatch_id": self.review_dispatch("scope_guardian", "planner"),
+            "requirement_ref": requirement, "plan_ref": plan})
+        return plan, solution
+
+    def verified_refs(self, solution, refs, name="verification"):
+        return self.review_report("verification_review", name, {
+            "gate": "PASS", "dispatch_id": self.review_dispatch("tester", name),
+            "solution_ref": solution, "checks": refs})
+
+    def test_manual_run_obligation_survives_first_classified_task(self):
+        self.review_report("dual_review", "required", {})
+        T.start(*self.args, "first", "same delivery", ["same criteria"],
+                review_risk="low", review_reason="delivery continuation")
+        self.assertTrue(RC.required(R.status(self.root)["state"]))
+        with self.assertRaises(ValueError):
+            D.begin(*self.args, "developer")
+
+    def test_cross_run_delivery_preserves_obligation_and_valid_checks(self):
+        plan, solution = self.reviewed_plan({"unit": self.spec})
+        checked = P.run_planned(*self.args, plan, "unit", "unit")
+        refs = P.inspect_plan(*self.args, plan)["checks"]
+        self.verified_refs(solution, refs)
+        P.qa_from_plan(*self.args, plan, "final")
+        finished = self.finish()
+        reference = finished["delivery_status"]["reference"]
+        packet_path = self.root / reference["path"]
+        envelope = json.loads(packet_path.read_text())
+        self.assertTrue(envelope["payload"].pop("dual_review_required"))
+        # Simulate the prior receipt schema, whose QA still binds expert reviews.
+        R._atomic(packet_path, envelope)
+        legacy = Delivery._reference(self.root, self.args[1], reference["path"])
+        adopted = R.start(self.root, {"delivery_from": legacy}, managed=True)
+        self.assertTrue(adopted["delivery_status"]["adopted"])
+        self.assertTrue(RC.required(adopted))
+        self.assertEqual(len(adopted["delivery_status"]["checks"]), 1)
+
+    def test_reviewed_prechecks_cannot_be_replaced_by_same_label_pass(self):
+        failing = self.spec | {"argv": [sys.executable, "-B", "-c", "raise SystemExit(1)"]}
+        plan, solution = self.reviewed_plan({"unit": failing})
+        P.run_planned(*self.args, plan, "unit", "failed")
+        unrelated = self.check("unrelated")
+        self.verified_refs(solution, [unrelated["report"]])
+        F.prepare(*self.args)
+        with self.assertRaisesRegex(ValueError, "reviewed pre-activation check"):
+            RC.validate_pre_activation(self.root, R.status(self.root)["state"])
+
+    def test_pre_activation_allows_pending_post_smoke_but_closeout_does_not(self):
+        post = self.spec | {"coverage": ["release_identity"],
+                             "argv": [sys.executable, "-B", "-c", "print('post-release identity')"]}
+        plan, solution = self.reviewed_plan({"unit": self.spec, "post": post})
+        P.run_planned(*self.args, plan, "unit", "unit")
+        for phase in ("preflight", "compatibility"):
+            F.execute(*self.args, phase, phase=phase, argv=self.spec["argv"], scope=["input"], write_paths=[])
+        state = R.status(self.root)["state"]
+        refs = sorted(Q._checks(self.root, state)[0])
+        self.verified_refs(solution, refs)
+        RC.validate_pre_activation(self.root, R.status(self.root)["state"])
+        # A caller's unresolved business concern remains a blocker.
+        self.review_report("qa", "business-concern", {"gate": "CONCERNS"})
+        with self.assertRaisesRegex(ValueError, "unresolved"):
+            RC.validate_pre_activation(self.root, R.status(self.root)["state"])
+        with self.assertRaises(ValueError):
+            F.closeout(*self.args)
+
+    def test_late_solution_cannot_certify_earlier_implementation(self):
+        plan, solution = self.reviewed_plan({"unit": self.spec})
+        state = R.status(self.root)["state"]
+        state["history"].append({"event": "transition", "at": state["created_at"],
+                                 "stage": "implementation", "activity": "execution"})
+        R._atomic(self.root / "tmp/pipeline/runs" / (self.args[1] + ".json"), state)
+        P.run_planned(*self.args, plan, "unit", "unit")
+        refs = P.inspect_plan(*self.args, plan)["checks"]
+        self.verified_refs(solution, refs)
+        result = self.payload(P.qa_from_plan(*self.args, plan, "late"))
+        self.assertEqual(result["gate"], "CONCERNS")
+        self.assertIn("dual_review", result["check_failures"])
+
+    def test_declared_retrospective_cannot_start_development(self):
+        T.start(*self.args, "retro", "review existing implementation", ["evidence"],
+                review_risk="high", review_reason="post implementation pilot", retrospective=True)
+        with self.assertRaisesRegex(ValueError, "read-only"):
+            R.update(*self.args, {"stage": "implementation"})
+        with self.assertRaisesRegex(ValueError, "read-only"):
+            D.begin(*self.args, "tester", workflow_phase="implementation")
+
     def test_declared_dual_review_needs_independent_current_returns(self):
         def report(kind, name, payload):
             return E.write_report(*self.args, kind, name, payload)
@@ -202,6 +356,8 @@ class ManagedQaTests(unittest.TestCase):
             D.complete(*self.args, dispatch, executors_stopped=True, stop_evidence="fixture returned")
             return dispatch
 
+        report("progress_feedback", "visible", {"messages": [
+            {"text": "🔵 **[进行中]** 已核对候选，下一步独立评审。"}]})
         requirement = report("dual_review", "required", {})
         with self.assertRaises(ValueError):
             self.finish()
@@ -307,12 +463,12 @@ class ManagedQaTests(unittest.TestCase):
         self.args = self.root, state["run_id"], state["owner_token"]
         R._atomic(self.receipt, {"project_root": str(self.root), **{k: state[k] for k in ("schema_version", "run_id", "owner_token")}})
         T.start(*self.args, "old", "old goal", ["old observed"])
-        args = ("task-start", "--receipt", str(self.receipt), "--task-id", "old", "--goal", "old goal", "--accept", "old observed")
+        args = ("task-start", "--review-risk", "low", "--review-reason", "fixture scoped change", "--receipt", str(self.receipt), "--task-id", "old", "--goal", "old goal", "--accept", "old observed")
         before = R.status(self.root)["state"]
         self.cli(*args)
         self.assertEqual(R.status(self.root)["state"], before)
         T.end(*self.args, "old")
-        args = ("task-start", "--receipt", str(self.receipt), "--task-id", "new", "--goal", "new goal", "--accept", "new observed")
+        args = ("task-start", "--review-risk", "low", "--review-reason", "fixture scoped change", "--receipt", str(self.receipt), "--task-id", "new", "--goal", "new goal", "--accept", "new observed")
         self.cli(*args, expected=2)
         revision = self.cli("policy")["revision"]
         self.cli("policy-ack", "--receipt", str(self.receipt), "--revision", revision)

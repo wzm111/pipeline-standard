@@ -21,7 +21,7 @@ class ReleaseCliTests(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         (self.root / "PIPELINE.md").write_text("isolated authorized commands")
         (self.root / "source").write_text("v1")
-        state = self.call("pipeline_cli.py", "start")
+        state = self.call("pipeline_cli.py", "start", "--review-risk", "low", "--review-reason", "fixture scoped change")
         self.receipt = state["receipt"]
         self.call("pipeline_cli.py", "policy-ack", "--receipt", self.receipt,
                   "--revision", state["policy"]["revision"])
@@ -161,7 +161,7 @@ class ReleaseCliTests(unittest.TestCase):
 
     def test_prior_task_release_is_not_current_task_acceptance(self):
         self.accepted()
-        self.call("pipeline_cli.py", "task-start", "--receipt", self.receipt,
+        self.call("pipeline_cli.py", "task-start", "--review-risk", "low", "--review-reason", "fixture scoped change", "--receipt", self.receipt,
                   "--task-id", "new-task", "--goal", "new fixture task", "--accept", "current evidence")
         self.cli("closeout", {}, expected=2)
 

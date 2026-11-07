@@ -128,6 +128,10 @@ def seal(root, base, state):
     packet = {"project_root": str(root), "approvals": list(approvals.values()), "checks": checks,
               "context_scope": context, "context_fingerprint": E.fingerprint(root, context), "assets": assets,
               "excluded_checks": excluded, "coverage": _coverage(root, checks, required or None, excluded)}
+    import review_control
+    import managed_qa
+    if review_control.required(state) or managed_qa._review_reports(root, state, "dual_review"):
+        packet["dual_review_required"] = True
     if visual:
         packet["visual"] = visual
     digest = hashlib.sha256(json.dumps(packet, sort_keys=True).encode()).hexdigest()[:16]
@@ -162,6 +166,11 @@ def adopt(root, base, state, reference):
         # Retain known UI obligations even when later predecessor validation fails.
         state["inherited_visual"] = [{"receipt": deepcopy(reference), "binding": deepcopy(binding)}
                                      for binding in candidate["visual"]]
+    review_required = candidate.get("dual_review_required") or any(
+        _read_reference(root, approval, "qa").get("expert_reviews")
+        for approval in candidate.get("approvals", []) if approval.get("kind") == "qa")
+    if review_required:
+        state["inherited_review"] = {"required": True, "receipt": deepcopy(reference)}
     packet = validated_receipt(root, reference)
     imported, skipped = [], []
     for check in packet["checks"]:

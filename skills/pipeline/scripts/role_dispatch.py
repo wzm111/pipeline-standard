@@ -118,11 +118,16 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
         path, state = _owned(base, run_id, owner_token)
         import run_policy
         run_policy.require(project_root, state)
+        if workflow_phase == "implementation":
+            import review_control
+            review_control.validate_development(project_root, state)
         binding = {}
         if advice_case is not None:
             import expert_advice
             binding.update(expert_advice.require_dispatch(project_root, state, advice_case, role, parameters))
         if role == "developer":
+            import review_control
+            review_control.validate_development(project_root, state)
             import work_allocation
             binding = work_allocation.require_dispatch(state, work_item=work_item, executor_id=executor_id)
         elif work_item is not None:
@@ -201,6 +206,9 @@ def accepted(project_root, run_id, owner_token, dispatch_id, executor_id, *, act
                                         and not _human_wait(state) and not _checking(state))
             if item["workflow_applied"]:
                 phase = item["workflow_phase"]
+                if phase == "implementation":
+                    import review_control
+                    review_control.validate_development(project_root, state)
                 _transition(state, phase, WORKFLOW_PHASES[phase], now)
         state["updated_at"] = now
         R._atomic(path, state)

@@ -46,6 +46,16 @@ class ReleaseChecksTests(unittest.TestCase):
     def plan(self):
         return R.status(self.root)["state"]["release_plan"]
 
+    def test_activation_rechecks_review_under_lock_before_registering_attempt(self):
+        self.prechecks()
+        self.build()
+        before = self.plan()["attempts"]
+        with patch("review_control.validate_pre_activation", side_effect=[
+                None, ValueError("verification changed during activation registration")]):
+            with self.assertRaisesRegex(ValueError, "verification changed"):
+                self.activate()
+        self.assertEqual(self.plan()["attempts"], before)
+
     def test_fail_fast_before_build_when_runner_compatibility_has_not_passed(self):
         self.execute("preflight", "preflight")
         bad=self.execute("compatibility", "compatibility", [sys.executable,"-c","raise SystemExit(1)"])
