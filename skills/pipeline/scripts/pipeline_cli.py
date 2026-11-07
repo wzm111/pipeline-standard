@@ -235,11 +235,12 @@ def dispatch(args):
     if args.action in {"audit", "scan"}:
         import run_audit as A
         result = A.audit(args.project, args.run_id, live=args.live) if args.action == "audit" else A.scan(args.project, args.limit)
-        return result, int(result["status"] == "error")
+        return result, int(result["status"] == "error" and "live" not in result)
     if args.action == "preview":
         import audit_preview as V
         result = V.preview(args.project, args.run_id, live=args.live)
-        return V.render(result) if args.format == "text" else result, int(result["snapshot_status"] == "error")
+        failed = result["snapshot_status"] == "error" and result["source"] != "live"
+        return V.render(result) if args.format == "text" else result, int(failed)
     if args.action == "scan-projects":
         import audit_projects as M
         result = M.scan(args.project, workspace=args.workspace, since=args.since,

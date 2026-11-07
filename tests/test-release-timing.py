@@ -32,6 +32,20 @@ class ReleaseTimingTests(unittest.TestCase):
     def snapshot(self):
         return {str(p): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
 
+    def test_check_reports_only_valid_deployment_stage_markers(self):
+        import audit_projects as M
+
+        output = "\n".join(f"[pipeline-release-stage] {stage} {seconds}"
+                           for stage, seconds in (("transfer", 0), ("build", 0), ("readiness", 0), ("secret", 42)))
+        command = [sys.executable, "-c", f"print({output!r})"]
+        C.execute_check(*self.args, "deploy-fixture", argv=command, scope=["source"],
+                        coverage=["release_activation"])
+        row, = M.scan([self.root], live=True)["runs"]
+        self.assertEqual(row["latest_task"]["release_reported_stage_seconds"],
+                         {"transfer": 0, "build": 0, "readiness": 0})
+        self.assertEqual(T.reported_stages(b"[pipeline-release-stage] build 999", 1), {})
+        self.assertEqual(T.reported_stages(b"[pipeline-release-stage] build 0\n[pipeline-release-stage] build 0", 1), {})
+
     def test_nested_steps_union_and_read_only_summary_with_unknown_remainder(self):
         with self.at(1):
             outer = T.step(*self.args, "gates")

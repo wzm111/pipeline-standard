@@ -118,6 +118,8 @@ class PythonSourceTests(unittest.TestCase):
         source = self.src / "module.py"
         original = source.stat()
         source.write_text("VALUE = 2\n")
+        # The compiled fixture and restored source must have the same mtime.
+        os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
         cache = self.cache(f"module.{sys.implementation.cache_tag}.pyc")
         py_compile.compile(str(source), cfile=str(cache), doraise=True)
         source.write_text("VALUE = 1\n")

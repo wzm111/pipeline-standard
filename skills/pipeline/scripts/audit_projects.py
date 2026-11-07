@@ -8,6 +8,21 @@ import run_state as R
 
 MAX_PROJECTS = 20
 MAX_WORKSPACE_ENTRIES = 200
+MAX_RECENT_ANOMALIES = 3
+
+
+def _recent_anomalies(tasks):
+    findings = []
+    for task in reversed(tasks):
+        host = task.get("host_diagnostics") or {}
+        checks = {key: count for key, count in task["by_result_class"].items()
+                  if count and key not in {"success", "search_no_match", "reproduction_nonzero", "unclassified"}}
+        qa = {gate: task["qa_gates"][gate] for gate in ("FAIL", "CONCERNS") if task["qa_gates"].get(gate)}
+        causes = host.get("failure_causes") or {}
+        if checks or qa or causes:
+            findings.append({"task_index": task["index"], "check_failures": checks,
+                             "qa_findings": qa, "host_failure_causes": causes})
+    return findings[:MAX_RECENT_ANOMALIES], len(findings) > MAX_RECENT_ANOMALIES
 
 
 def _roots(projects, workspace):
@@ -37,6 +52,7 @@ def _row(root, record, document):
     timing = V._dict(audit.get("latency"))
     checks = V._dict(audit.get("checks"))
     tasks = audit.get("task_details") or []
+    anomalies, anomalies_truncated = _recent_anomalies(tasks)
     detail = V._dict(tasks[-1]) if tasks else {}
     sample = next((item for item in timing.get("samples", [])
                    if item["index"] == detail.get("index")), {})
@@ -45,11 +61,13 @@ def _row(root, record, document):
     handoff = V._dict(detail.get("qa_handoff"))
     return {
         "project": root.name, "run_id": run_id, "snapshot_status": record["status"],
+        "snapshot_error": record.get("error"),
         "snapshot_at": snapshot_at, "run_status": V._enum(audit.get("status"), R.FINAL | {"running"}),
         "audit_ref": f"tmp/pipeline/runs/{run_id}/audit.json" if "audit" in record else None,
         "checks": V._counts(checks, ("executed", "reused", "inherited", "host_observation_records")),
         "result_classes": {key: value for key, value in
                            V._counts(checks.get("by_result_class"), sorted(A.RESULTS)).items() if value},
+        "recent_anomalies": anomalies, "recent_anomalies_truncated": anomalies_truncated,
         "latest_task": None if not detail else {
             "index": detail["index"],
             **V._counts(detail, ("executed", "reused", "inherited", "qa_pass_before_tester_return")),
@@ -60,6 +78,7 @@ def _row(root, record, document):
             "release_plan_before_checks": detail["release_plan_before_checks"],
             "release_closeout": detail["release_closeout"],
             "release_command_seconds": detail.get("release_command_seconds"),
+            "release_reported_stage_seconds": detail.get("release_reported_stage_seconds"),
             "qa_gates": detail["qa_gates"],
             "acceptance_gates": handoff.get("acceptance_gates"),
             "host_diagnostics": detail.get("host_diagnostics"),
@@ -106,6 +125,18 @@ def render(result):
     for row in result["runs"]:
         lines.append(f"{row['project']}  {row['snapshot_at'] or '日期未知'}  "
                      f"{row['run_id'] or 'run 未知'}  {row['snapshot_status']}")
+        if row["snapshot_error"]:
+            lines.append(f"  快照读取异常 {row['snapshot_error']}")
+        for finding in row["recent_anomalies"]:
+            groups = []
+            for field, label in (("check_failures", "检查"), ("qa_findings", "QA"),
+                                 ("host_failure_causes", "宿主失败原因")):
+                if finding[field]:
+                    counts = "，".join(f"{key}={count}" for key, count in sorted(finding[field].items()))
+                    groups.append(f"{label} {counts}")
+            lines.append(f"  任务 {finding['task_index']} 异常记录 · " + " · ".join(groups))
+        if row["recent_anomalies_truncated"]:
+            lines.append("  较早异常已省略")
         task = row["latest_task"]
         if task is None:
             continue
@@ -118,6 +149,7 @@ def render(result):
             lines.append(f"  发布计划前置 {states[task['release_plan_before_checks']]} · "
                          f"已登记发布收口 {states[task['release_closeout']]}")
         for key, label in (("reuse_reasons", "复用判定"), ("release_command_seconds", "发布命令耗时（秒）"),
+                           ("release_reported_stage_seconds", "脚本报告的发布阶段耗时（秒）"),
                            ("qa_gates", "QA 登记"), ("acceptance_gates", "最终验收登记")):
             if task.get(key):
                 values = "，".join(f"{name}={value:g}" for name, value in sorted(task[key].items()))

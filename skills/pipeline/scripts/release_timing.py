@@ -4,6 +4,7 @@ Use step() around work already required by a project's deploy script. A
 monolithic command without inner observations remains partially attributed.
 """
 from contextlib import contextmanager
+import re
 
 import operation_metrics as O
 import run_evidence as E
@@ -11,6 +12,19 @@ import run_state as R
 from workflow_metrics import interval_seconds
 
 STEPS = {"dependencies", "gates", "build", "transfer", "readiness", "activate", "smoke"}
+REPORTED_STEPS = {"transfer", "build", "readiness"}
+STAGE_MARKER = re.compile(rb"^\[pipeline-release-stage\] (transfer|build|readiness) ([0-9]{1,8})\r?$", re.MULTILINE)
+
+
+def reported_stages(output, command_seconds):
+    """Collect only fixed stage markers from the just-executed release command."""
+    timings = {}
+    for match in STAGE_MARKER.finditer(output):
+        stage, seconds = match[1].decode("ascii"), int(match[2])
+        if stage in timings:
+            return {}
+        timings[stage] = seconds
+    return timings if sum(timings.values()) <= command_seconds + len(timings) else {}
 
 
 @contextmanager

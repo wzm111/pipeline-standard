@@ -223,6 +223,28 @@ class AuditTests(unittest.TestCase):
         self.assertIsNone(rows["first"]["latest_task"]["release_command_seconds"])
         self.assertEqual(self.files(), before)
 
+    def test_live_index_keeps_earlier_anomalies_when_the_snapshot_is_corrupt(self):
+        import audit_projects as M
+
+        state = R.start(self.root)
+        args = self.root, state["run_id"], state["owner_token"]
+        T.start(*args, "first", "First task", ["Check"])
+        E.write_report(*args, "check", "fixture-failure", {"result_class": "test_failure"})
+        T.end(*args, "first")
+        T.start(*args, "second", "Second task", ["Check"])
+        E.write_report(*args, "check", "fixture-success", {"result_class": "success"})
+        T.end(*args, "second")
+        self.target(state).write_text("{")
+        before = self.files()
+        stored, = M.scan([self.root])["runs"]
+        self.assertIsNone(stored["latest_task"])
+        live, = M.scan([self.root], live=True)["runs"]
+        self.assertEqual(live["snapshot_status"], "error")
+        self.assertEqual(live["latest_task"]["index"], 2)
+        self.assertEqual(live["recent_anomalies"], [{"task_index": 1,
+                         "check_failures": {"test_failure": 1}, "qa_findings": {}, "host_failure_causes": {}}])
+        self.assertEqual(self.files(), before)
+
     def test_missing_and_bad_reports_are_partial_not_fabricated_success(self):
         state = R.start(self.root)
         ref = E.write_report(self.root, state["run_id"], state["owner_token"], "check", "bad", {})

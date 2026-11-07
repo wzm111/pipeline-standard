@@ -393,6 +393,13 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
         except (OSError, ValueError):
             stable = False
         result_class = classify_result(exit_code, intent, error)
+        log_bytes = log.read_bytes()
+        timing = {}
+        if "release_activation" in coverage:
+            from release_timing import reported_stages
+            stages = reported_stages(log_bytes, seconds)
+            if stages:
+                timing["release_reported_stage_seconds"] = stages
         path = E.write_report(root, run_id, owner_token, "check", name,
                               {"command": command, "argv": argv, "intent": intent, "result_class": result_class,
                                "scope": scope, "fingerprint": before, "environment": env, "coverage": coverage,
@@ -401,7 +408,7 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
                                "inputs_stable": stable, "exit_code": exit_code, "seconds": seconds,
                                "reuse_decision": decision,
                                "started_at": started_at, "finished_at": finished_at, "log_path": relative,
-                               "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()})
+                               "log_sha256": hashlib.sha256(log_bytes).hexdigest(), **timing})
         if interrupted is not None:
             raise interrupted
         return {"report": path, "reused": False, "exit_code": exit_code, "result_class": result_class,

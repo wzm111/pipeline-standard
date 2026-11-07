@@ -10,6 +10,7 @@ import re
 
 from observed_checks import FAILURE_CAUSES, OPERATIONS
 import run_state as R
+from release_timing import REPORTED_STEPS
 
 RESULTS = {"success", "search_no_match", "path_lookup_failure", "reproduction_nonzero",
            "test_failure", "command_failure", "command_unavailable", "timeout", "interrupted",
@@ -216,6 +217,7 @@ def _checks(root, state, telemetry=None):
                     "recovery": isinstance(diagnostics.get("recovery_of"), str),
                     "exit_code": payload.get("exit_code"),
                     "release": bool(release_labels), "release_labels": release_labels,
+                    "release_reported_stage_seconds": payload.get("release_reported_stage_seconds"),
                     "environment_mismatch": changes.get("status") == "known" and bool(
                         changes.get("changed_keys") or changes.get("other_environment_changed"))})
             if kind == "check":
@@ -309,6 +311,7 @@ def _task_details(state, records):
     testers = [[] for _ in windows]
     first_release = [None for _ in windows]
     release_intervals = [{} for _ in windows]
+    latest_activation = [None for _ in windows]
     check_plans = [None for _ in windows]
     plan = state.get("release_plan") or {}
     closeout_ref = (plan.get("closeout") or {}).get("path")
@@ -392,6 +395,14 @@ def _task_details(state, records):
                     end = min(finished, windows[index][2])
                     for label in record["release_labels"]:
                         release_intervals[index].setdefault(label, []).append((time, end))
+                    if "release_activation" in record["release_labels"] and (
+                            latest_activation[index] is None or time >= latest_activation[index]):
+                        latest_activation[index] = time
+                        stages = record["release_reported_stage_seconds"]
+                        sample.pop("release_reported_stage_seconds", None)
+                        if (isinstance(stages, dict) and stages and stages.keys() <= REPORTED_STEPS
+                                and all(type(value) is int and value >= 0 for value in stages.values())):
+                            sample["release_reported_stage_seconds"] = stages
             if kind == "check_reuse":
                 sample["reused"] += 1
             else:
@@ -609,7 +620,8 @@ def _validate_details(details):
     expected = DETAIL_COUNTS | DETAIL_FLAGS | DETAIL_BUCKETS.keys() | {"dispatches", "release_phases", "role_union_seconds"}
     for sample in details:
         if (not isinstance(sample, dict) or not expected <= sample.keys()
-                or sample.keys() - expected - {"qa_handoff", "host_diagnostics", "release_command_seconds"}):
+                or sample.keys() - expected - {"qa_handoff", "host_diagnostics", "release_command_seconds",
+                                               "release_reported_stage_seconds"}):
             raise AuditError("invalid_audit")
         seconds = sample["role_union_seconds"]
         if (not counts({k: sample[k] for k in DETAIL_COUNTS}, DETAIL_COUNTS)
@@ -644,6 +656,9 @@ def _validate_details(details):
                     or any(type(value) not in {int, float} or not math.isfinite(value) or value < 0
                            for value in durations.values())):
                 raise AuditError("invalid_audit")
+        if "release_reported_stage_seconds" in sample and not counts(
+                sample["release_reported_stage_seconds"], REPORTED_STEPS):
+            raise AuditError("invalid_audit")
 
 
 def audit(project_root, run_id, *, live=False):
@@ -654,23 +669,21 @@ def audit(project_root, run_id, *, live=False):
         if state["run_id"] != run_id:
             raise AuditError("identity_mismatch")
         current = _build(Path(project_root).resolve(strict=True), state) if live else None
-        if not target.exists():
-            if R._read(state_path) != state:
-                raise AuditError("state_changed")
-            result = {"run_id": run_id, "status": "missing", "legacy": True}
-            if live:
-                result["live"] = current
-            return result
-        document = json.loads(target.read_text(encoding="utf-8"))
-        _validate_document(document)
-        if (not isinstance(document, dict) or document.get("schema_version") != 1
-                or document.get("run_id") != run_id):
-            raise AuditError("identity_mismatch")
+        result = {"run_id": run_id}
+        try:
+            document = json.loads(target.read_text(encoding="utf-8"))
+            _validate_document(document)
+            if document.get("run_id") != run_id:
+                raise AuditError("identity_mismatch")
+            result.update(status="current" if document.get("source_state_hash") == _hash(state) else "stale",
+                          audit=document)
+        except FileNotFoundError:
+            result.update(status="missing", legacy=True)
+        except (ValueError, TypeError, OSError, OverflowError) as error:
+            result.update(status="error", error=_error(error))
         # Detect state replacement or concurrent writes without acquiring a lock.
         if R._read(state_path) != state:
             raise AuditError("state_changed")
-        result = {"run_id": run_id, "status": "current" if document.get("source_state_hash") == _hash(state) else "stale",
-                  "audit": document}
         if live:
             result["live"] = current
         return result
@@ -714,7 +727,7 @@ def main():
     args = parser.parse_args()
     result = audit(args.project, args.run_id, live=args.live) if args.action == "audit" else scan(args.project, args.limit)
     print(json.dumps(result, sort_keys=True))
-    return int(result["status"] == "error")
+    return int(result["status"] == "error" and "live" not in result)
 
 
 if __name__ == "__main__":
