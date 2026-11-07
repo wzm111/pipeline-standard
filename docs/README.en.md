@@ -65,14 +65,15 @@ Choose an entry for the current goal: implement and verify a simple task directl
 ```mermaid
 flowchart TD
     A["Describe the task"] --> B["Define scope, risk and acceptance"]
-    B --> I{"Choose execution mode"}
+    B --> R["For high risk, a plan reviewer confirms required checks<br/>Other tasks proceed directly"]
+    R --> I{"Choose execution mode"}
     I -->|Simple| J["Work in the current session"]
     I -->|Complex| K["Coordinator assigns 1–3 developers to independent modules<br/>Queue dependencies and conflicting resources"]
     J --> C["Implement and run targeted checks<br/>Critical boundaries first"]
     K --> C
     C --> U{"Does this change visible UI?"}
     U -->|Yes| V["Follow the existing design<br/>Capture, view and review the actual UI"]
-    U -->|No| D{"Required review and full acceptance passed?"}
+    U -->|No| D{"Required acceptance passed?<br/>Independent verifier for high risk"}
     V --> D
     D -->|Pass| E["Summarize results and valid evidence<br/>Show viewed UI images"]
     D -->|Fix is in scope and below the limit| G["Fix failed items and affected behavior<br/>Run targeted verification"]
@@ -82,6 +83,8 @@ flowchart TD
 ```
 
 Small, low-risk tasks use fast mode in the current session. Standard mode uses only the roles needed for the task; thorough mode covers high-risk work and required human gates. Testing allows at most three rejection rounds per batch; scope review allows two. Reaching a limit stops the loop. A release failure does not automatically authorize development fixes.
+
+For high-risk work, a plan reviewer and an independent verifier share one acceptance checklist. The first checks scope and gaps before implementation. The second checks evidence against the frozen candidate. After a rejection, recheck the fix and affected behavior. See [dual expert review](../skills/pipeline/references/review.md).
 
 Routine successful responses can be compact while complete evidence stays in local reports. Failures and blockers remain fully visible. Required independent QA is retained, and valid checks and reviews of the same inputs are reused.
 
