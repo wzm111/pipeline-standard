@@ -35,6 +35,21 @@ class ProgressTests(unittest.TestCase):
         return {str(p): (p.read_bytes(), p.stat().st_mtime_ns)
                 for p in self.root.rglob("*") if p.is_file()}
 
+    def test_feedback_samples_do_not_fill_other_required_milestones(self):
+        message = {"text": "✅ **[已完成]** 已核对方案。"}
+        E.write_report(*self.args, "solution_review", "solution", {"gate": "PASS"})
+        E.write_report(*self.args, "release_blocker", "hold",
+                       {"action": "open", "coverage": "consent", "reason": "release issue"})
+        E.write_report(*self.args, "progress_feedback", "sample", {"messages": [message]})
+        audit = G.snapshot(self.root)["feedback_audit"]
+        self.assertEqual(audit["missing"], ["solution_returned", "blocked"])
+        self.assertEqual(audit["untagged_samples"], 1)
+        E.write_report(*self.args, "progress_feedback", "solution-feedback",
+                       {"milestone": "solution_returned", "messages": [message]})
+        audit = G.snapshot(self.root)["feedback_audit"]
+        self.assertEqual(audit["passed"], ["solution_returned"])
+        self.assertEqual(audit["missing"], ["blocked"])
+
     def test_no_run_does_not_create_files(self):
         with tempfile.TemporaryDirectory() as empty:
             value = G.snapshot(empty)

@@ -80,7 +80,8 @@ def begin(project_root, run_id, owner_token, observation_id, *, command, scope,
             if ticket["declaration"] != declaration:
                 raise ValueError("observation ID already has a different declaration or inputs")
             return _begin_result(ticket, False, event_view)
-        C._claim_state(root, run_id, state, observation_id, write_paths)
+        C._claim_state(root, run_id, state, observation_id, write_paths,
+                       activation="release_activation" in declaration["coverage"])
         ticket = {"observation_id": observation_id, "status": "running",
                   "started_at": R._now(), "declaration": declaration}
         tickets[observation_id] = ticket

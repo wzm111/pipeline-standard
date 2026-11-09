@@ -72,11 +72,19 @@ def write_report(project_root, run_id, owner_token, kind, name, payload):
         if state["status"] != "running":
             raise ValueError("only active runs can record reports")
         root = Path(project_root).resolve(strict=True)
+        if kind == "release_blocker":
+            import release_blockers
+            release_blockers.validate(root, state, payload)
         if kind == "progress_feedback":
             import progress_feedback
-            if not isinstance(payload, dict) or set(payload) != {"messages"}:
+            if not isinstance(payload, dict) or set(payload) not in ({"messages"}, {"messages", "milestone"}):
                 raise ValueError("progress feedback requires actual supplied messages")
+            milestone = payload.get("milestone")
+            if "milestone" in payload and milestone not in progress_feedback.MILESTONES:
+                raise ValueError("unknown progress milestone")
             payload = progress_feedback.inspect_feedback(payload["messages"])
+            if milestone is not None:
+                payload["milestone"] = milestone
         if kind == "qa" and "run_policy" in state:
             import managed_qa
             payload = managed_qa.canonical(root, state, payload)

@@ -6,6 +6,8 @@ import re
 import run_evidence as E
 import run_state as R
 import work_allocation as W
+import progress_feedback
+import release_blockers
 
 LIMIT = 20
 REPORT_LIMIT = 200
@@ -52,7 +54,7 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
     refs = state.get("artifacts", [])
     for ref in refs[-REPORT_LIMIT:]:
         if not isinstance(ref, str) or not re.fullmatch(
-                rf"tmp/pipeline/runs/{identity}/artifacts/(check|planned_check|check_plan|qa)/[a-z][a-z0-9_-]{{0,63}}\.json", ref):
+                rf"tmp/pipeline/runs/{identity}/artifacts/(check|planned_check|check_plan|qa|progress_feedback|solution_review|release_blocker)/[a-z][a-z0-9_-]{{0,63}}\.json", ref):
             continue
         try:
             report = E.read_report(root, identity, ref)
@@ -151,6 +153,31 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
         blockers.append("host_idle_with_registered_work")
     if any(item["result"] == "recorded_failure" for item in remaining):
         blockers.append("recorded_check_failure")
+    rollout_pending = release_blockers.pending(root, state)
+    if rollout_pending:
+        blockers.append("release_blocker_recorded")
+    def in_task(value):
+        at = stamp(value)
+        return bool(at and (not start or R._timestamp(at) >= R._timestamp(start))
+                    and (not ended or R._timestamp(at) <= R._timestamp(ended)))
+
+    milestones = ["start"] if "run_policy" in state else []
+    dispatches = state.get("role_dispatches", [])
+    history = [event for event in state.get("history", []) if in_task(event.get("at"))]
+    if (any(report["kind"] == "solution_review" for _, report in reports)
+            or any(d.get("role") == "scope_guardian" and d.get("status") == "completed"
+                   and in_task(d.get("completed_at")) for d in dispatches)):
+        milestones.append("solution_returned")
+    if (any(d.get("role") == "tester" and in_task(d.get("accepted_at")) for d in dispatches)
+            or any(event.get("stage") == "verification" for event in history)):
+        milestones.append("verification_started")
+    if (waiting or declared_wait or rollout_pending
+            or any(event.get("activity") == "human_wait" for event in history)
+            or any(report["kind"] == "release_blocker" and report["payload"].get("action") == "open"
+                   for _, report in reports)):
+        milestones.append("blocked")
+    feedback_audit = progress_feedback.milestone_audit(
+        milestones, [report["payload"] for _, report in reports if report["kind"] == "progress_feedback"])
     status = state.get("status") if state.get("status") in {"running", *R.FINAL} else "unknown"
     conflicts = any(key in blockers for key in ("human_wait_action_unrecorded", "host_idle_with_registered_work"))
     badge = ("🔴[需你处理]" if waiting else "🔎[待核实]" if conflicts else
@@ -166,6 +193,7 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
               "badge": badge, "current": {"checks": active_checks[:LIMIT], "roles": roles[:LIMIT],
                                            "operations": operations[:LIMIT], "observations": observations[:LIMIT]},
               "latest_qa": latest_qa,
+              "feedback_audit": feedback_audit,
               "allocation": allocation,
               "task_execution": {"status": task_status, "ended_at": ended},
               "delivery": {"status": delivery_status, "acceptance": "not_revalidated"},
@@ -243,4 +271,6 @@ def render(value):
             f"任务执行：{boundary}；交付：{delivery}；验收有效性未重新核验；宿主反馈：{value['host_feedback']['status']}。\n"
             f"已记录成功：{names(value['completed'])}；剩余/待核实：{names(value['remaining'])}；"
             f"阻塞：{', '.join(value['blockers']) or '未登记'}。最近检查结果：{value['last_result_at'] or '未知'}。下一步：{next_step}。\n"
+            f"进度反馈缺证据：{', '.join(value['feedback_audit']['missing']) or '无'}；"
+            f"格式待修正：{', '.join(value['feedback_audit']['invalid']) or '无'}。\n"
             "以上为登记记录，未重新核验有效性或宿主健康；无计划时剩余步骤未知，截断时需查看当前计划。")

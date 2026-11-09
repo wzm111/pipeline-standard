@@ -331,6 +331,8 @@ def _activated(plan, candidate):
 
 
 def _acceptance(root, state, pending):
+    import release_blockers
+    release_blockers.require_clear(root, state)
     plan = state.get("release_plan", {})
     if _recovery_blocked(root, state):
         raise ValueError("release recovery hold unresolved; cannot accept or finish")

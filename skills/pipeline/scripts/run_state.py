@@ -242,6 +242,8 @@ def _finish_readiness(project_root, state, outcome):
     if outcome == "completed":
         import run_policy
         run_policy.require(project_root, state)
+        import release_blockers
+        release_blockers.require_clear(project_root, state)
     if state.get("running_checks"):
         raise ValueError("close running checks after confirmed stop before finishing")
     if any(t.get("status") == "running" for t in state.get("observed_checks", {}).values()):

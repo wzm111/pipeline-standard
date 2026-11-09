@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills/pipeline/scripts"))
 import release_checks as F
+import run_checks as C
 import run_evidence as E
 import run_state as R
 
@@ -45,6 +46,31 @@ class ReleaseChecksTests(unittest.TestCase):
 
     def plan(self):
         return R.status(self.root)["state"]["release_plan"]
+
+    def test_rollout_blocker_prevents_activation_until_fresh_targeted_retest(self):
+        self.prechecks()
+        old = self.execute("before-finding", "preflight", coverage=["consent"])
+        self.build()
+        blocker = E.write_report(*self.args, "release_blocker", "consent-denied", {
+            "action": "open", "coverage": "consent", "reason": "Denied events still emitted"})
+        with self.assertRaisesRegex(ValueError, "unresolved release blockers"):
+            self.activate()
+        self.assertFalse(any(a["phase"] == "activate" for a in self.plan()["attempts"]))
+        with self.assertRaisesRegex(ValueError, "unresolved release blockers"):
+            C.execute_check(*self.args, "monolithic",
+                            argv=[sys.executable, "-c", "from pathlib import Path; Path('live').touch()"],
+                            scope=["source.py"], coverage=["release_activation"])
+        self.assertFalse((self.root / "live").exists())
+        with self.assertRaisesRegex(ValueError, "unresolved release blockers"):
+            R.finish(*self.args, "completed", executors_stopped=True, stop_evidence="fixture stopped")
+        resolution = {"action": "resolve", "blocker_ref": blocker, "check_ref": old["report"]}
+        with self.assertRaisesRegex(ValueError, "fresh retest"):
+            E.write_report(*self.args, "release_blocker", "stale", resolution)
+        fresh = self.execute("retest", "preflight", [sys.executable, "-c", "print('consent retest')"],
+                             coverage=["consent"])
+        E.write_report(*self.args, "release_blocker", "resolved",
+                       resolution | {"check_ref": fresh["report"]})
+        self.assertEqual(self.activate()["exit_code"], 0)
 
     def test_activation_rechecks_review_under_lock_before_registering_attempt(self):
         self.prechecks()

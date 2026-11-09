@@ -69,6 +69,8 @@ def validate_development(root, state):
 
 def validate_pre_activation(root, state):
     """Only pre-activation obligations, never post-release smoke or closeout."""
+    import release_blockers
+    release_blockers.require_clear(root, state)
     import managed_qa as Q
     if not required(state) and not Q._review_reports(root, state, "dual_review"):
         return

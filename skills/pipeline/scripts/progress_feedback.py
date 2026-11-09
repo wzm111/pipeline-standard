@@ -9,6 +9,18 @@ ICONS = {'进行中': '🔵', '已完成': '✅', '修复中': '🟠', '等待�
          '需你处理': '🔴', '待核实': '🔎'}
 LABEL = re.compile(r'^\s*(🔵|✅|🟠|⏳|🔴|🔎)\s*\*\*\[(进行中|已完成|修复中|等待中|需你处理|待核实)(?:[｜|][^\]\n]{1,40})?\]\*\*')
 MAX_BYTES = 262144
+MILESTONES = ("start", "solution_returned", "verification_started", "blocked")
+
+
+def milestone_audit(required, reports):
+    samples = {report.get("milestone"): report.get("format_valid") for report in reports}
+    return {"missing": [step for step in required if step not in samples],
+            "invalid": [step for step in required if step in samples and samples[step] is not True],
+            "passed": [step for step in required if samples.get(step) is True],
+            "sample_format_passed": sum(report.get("format_valid") is True for report in reports),
+            "sample_format_invalid": sum(report.get("format_valid") is False for report in reports),
+            "untagged_samples": sum("milestone" not in report for report in reports),
+            "basis": "caller_supplied_visible_messages"}
 
 
 class _Parser(argparse.ArgumentParser):

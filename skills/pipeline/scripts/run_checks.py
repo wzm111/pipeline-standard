@@ -155,20 +155,23 @@ def _environment(root, argv, child_env, context, *, project_root=None):
     return result
 
 
-def _claim(root, run_id, owner, name, write_paths, *, testing=True):
+def _claim(root, run_id, owner, name, write_paths, *, testing=True, activation=False):
     with R._write_guard(root) as base:
         path, state = R._load_owned(base, run_id, owner)
-        _claim_state(root, run_id, state, name, write_paths, testing=testing)
+        _claim_state(root, run_id, state, name, write_paths, testing=testing, activation=activation)
         state["updated_at"] = R._now()
         R._atomic(path, state)
 
 
-def _claim_state(root, run_id, state, name, write_paths, *, testing=True):
+def _claim_state(root, run_id, state, name, write_paths, *, testing=True, activation=False):
     """Shared claim mutation; caller holds the owned run's write guard."""
     if state["status"] != "running":
         raise ValueError("check requires an active owned run")
     import run_policy
     run_policy.require(root, state)
+    if activation:
+        import release_blockers
+        release_blockers.require_clear(root, state)
     E.write_paths_conflict(root, write_paths, [])
     claims = state.setdefault("running_checks", [])
     if any(c["name"] == name or E.write_paths_conflict(root, write_paths, c["write_paths"]) for c in claims):
@@ -358,7 +361,8 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
                 "exit_code": 0, "result_class": "success", "seconds": 0.0, "reuse_decision": decision}
     if not inspect_resources(root, write_paths, protected_paths)["safe_to_execute"]:
         raise ValueError("declared resources only: protected paths conflict or check write paths are unknown")
-    _claim(root, run_id, owner_token, name, write_paths, testing=intent not in {"search", "locate"})
+    _claim(root, run_id, owner_token, name, write_paths, testing=intent not in {"search", "locate"},
+           activation="release_activation" in coverage)
     process, interrupted = None, None
     try:
         relative = f"tmp/pipeline/runs/{run_id}/artifacts/logs/{name}.log"
