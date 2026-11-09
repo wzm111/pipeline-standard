@@ -35,8 +35,8 @@ def _validate(root, checks, required, owner, inherited, *, scan_inputs=True):
         E._label(key)
         if not isinstance(value, dict) or set(value) - allowed:
             raise ValueError("unknown check fields")
-        if "layer" in value and value["layer"] not in ("quick", "final"):
-            raise ValueError("check layer must be quick or final")
+        if "layer" in value and value["layer"] not in ("quick", "candidate", "final"):
+            raise ValueError("check layer must be quick, candidate or final")
         if "observed_ref" in value:
             if set(value) - {"observed_ref", "scope", "coverage", "environment", "intent", "layer", "depends_on"}:
                 raise ValueError("observed checks cannot declare execution fields")
@@ -245,6 +245,15 @@ def _dependencies(checks):
         if any(item not in checks or item == key for item in declared):
             raise ValueError("depends_on requires existing other check IDs")
         dependencies[key] = set(declared) | (quick if key not in quick else set())
+    candidates = {key for key, check in checks.items() if check.get("layer") == "candidate"}
+    prerequisites, pending = set(), list(candidates)
+    while pending:
+        for parent in dependencies[pending.pop()]:
+            if parent not in prerequisites:
+                prerequisites.add(parent)
+                pending.append(parent)
+    for key in checks.keys() - quick - candidates - prerequisites:
+        dependencies[key].update(candidates)
     return dependencies
 
 

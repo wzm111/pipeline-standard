@@ -40,6 +40,17 @@ class CheckOrderTests(unittest.TestCase):
         self.assertIn("heavy", result["missing_checks"])
         self.assertEqual(R.status(self.root)["state"]["status"], "running")
 
+    def test_candidate_failure_runs_build_but_skips_unrelated_final_check(self):
+        plan = P.save_plan(*self.args, "candidate-order", {
+            "a-unit": self.check("unit"),
+            "build": self.check("build"),
+            "candidate": self.check("candidate", layer="candidate", fail=True) | {"depends_on": ["build"]},
+        })
+        result = P.verify_plan(*self.args, plan, "candidate-run")
+        self.assertEqual(json.loads((self.root / "trace.json").read_text()), ["build", "candidate"])
+        self.assertEqual(result["skipped_checks"], ["a-unit"])
+        self.assertIn("unit", result["missing_checks"])
+
     def test_quick_then_final_retains_all_original_requirements(self):
         plan = P.save_plan(*self.args, "order", {"a-heavy": self.check("heavy", layer="final"),
                            "z-boundary": self.check("boundary", layer="quick")})

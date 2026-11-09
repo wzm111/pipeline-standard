@@ -75,3 +75,5 @@ QA自动包含计划的全部coverage和继承的必要类别；当前任务已�
 采用计划的CLI任务先生成当前QA判断，再finish。缺少当前计划的QA PASS，或完成前只读复核发现输入、环境、日志及后续观察已使证据失效时，finish保留活动run并给出下一步提示，不生成新的通过结论。需要暂停时仍可用原paused流程。环境不匹配时，QA及检查返回安全的差异诊断：只展示允许的运行环境键名，其他环境归为聚合变化；旧证据无诊断时标unknown。严格环境校验不变，不靠改标签、忽略未知环境或强写PASS消除CONCERNS。
 
 Python对应接口：`check_plan.save_plan`、`run_planned`、`qa_from_plan`、只读`preflight_plan(root, run_id, owner, plan_ref, name)`，以及 `verify_plan(root, run_id, owner, plan_ref, name, summary="")`；verify_plan只生成检查与QA证据，不自动finish。不得将凭据放进argv、计划environment或summary；environment只是身份信息，子进程仍由统一入口管理。
+
+候选产物上的定向快检可标记 `layer: "candidate"`，通过 `depends_on` 指定实际候选构建及其必要依赖。执行顺序为 quick、候选所需前置、候选快检、剩余终验。候选快检失败时停在当前结果，修复后复用仍有效的前置证据。候选依赖里只放真实前置，避免把本可后置的全量检查拖入关键路径。
