@@ -299,6 +299,18 @@ class VerifyCliTests(unittest.TestCase):
         self.assertEqual(prediction["reason"], "command_or_environment_changed")
         self.assertEqual((self.root / "counter").read_text(), "1")
 
+    def test_new_plan_reports_review_delta_before_execution(self):
+        original = self.plan
+        E.write_report(self.root, self.run, self.owner, "solution_review", "reviewed",
+                       {"gate": "PASS", "plan_ref": original})
+        changed = self.check | {"timeout": 30}
+        result = self.cli("plan", "--receipt", self.receipt, "--name", "new-plan",
+                          "--json", json.dumps({"checks": {"unit": changed}}))
+        delta = result["review_delta"]
+        self.assertEqual(delta["reviewed_plan"], original)
+        self.assertEqual(delta["execution_changed"], ["unit"])
+        self.assertFalse((self.root / "counter").exists())
+
     def test_verify_managed_preflight_rejects_missing_coverage_and_late_runner(self):
         missing = {**self.check, "argv": ["pipeline-fixture-no-such-runner"], "coverage": ["late"]}
         self.plan = self.cli("plan", "--receipt", self.receipt, "--name", "late-plan",

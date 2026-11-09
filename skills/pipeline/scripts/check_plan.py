@@ -505,6 +505,39 @@ def qa_from_plan(root, run_id, owner, plan_ref, name, summary=""):
                           payload)
 
 
+def review_delta(root, run_id, owner, plan_ref):
+    """Compare a proposed plan to the latest recorded solution; never approve it."""
+    import managed_qa as Q
+
+    state = _owned(root, run_id, owner, read_only=True)
+    reviews = Q._review_reports(root, state, "solution_review")
+    if not reviews:
+        return None
+    review = reviews[-1][1]["payload"]
+    reviewed_ref = review.get("plan_ref")
+    if review.get("gate") != "PASS" or reviewed_ref == plan_ref:
+        return None
+    snapshot = _snapshot(root, run_id, state)
+    current = _read_plan(root, run_id, owner, plan_ref, state, snapshot)
+    if not isinstance(reviewed_ref, str) or reviewed_ref not in state.get("check_plans", {}):
+        return {"status": "reviewed_plan_unavailable"}
+    try:
+        reviewed = _read_plan(root, run_id, owner, reviewed_ref, state, snapshot)
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"status": "reviewed_plan_unavailable"}
+    old, new = reviewed["checks"], current["checks"]
+    shared = old.keys() & new.keys()
+    old_dependencies, new_dependencies = _dependencies(old), _dependencies(new)
+    return {"status": "review_reference_changed", "reviewed_plan": reviewed_ref,
+            "added_checks": sorted(new.keys() - old.keys()),
+            "removed_checks": sorted(old.keys() - new.keys()),
+            "execution_changed": sorted(key for key in shared if _execution_spec(old[key]) != _execution_spec(new[key])),
+            "ordering_changed": sorted(key for key in shared if old_dependencies[key] != new_dependencies[key]
+                                       or old[key].get("layer") != new[key].get("layer")),
+            "required_added": sorted(set(current["required_checks"]) - set(reviewed["required_checks"])),
+            "required_removed": sorted(set(reviewed["required_checks"]) - set(current["required_checks"]))}
+
+
 def preflight_plan(root, run_id, owner, plan_ref, name, *, include_reuse=True):
     """Read-only static execution readiness, never a test or business PASS."""
     state = _owned(root, run_id, owner, read_only=True)

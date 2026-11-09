@@ -417,7 +417,11 @@ def dispatch(args):
         if args.action == "plan":
             payload = _plan_payload(args.payload)
             ref = P.save_plan(root, run_id, owner, args.name, payload.get("checks"), payload.get("required_checks"))
-            return {"run_id": run_id, "plan": ref}, 0
+            result = {"run_id": run_id, "plan": ref}
+            delta = P.review_delta(root, run_id, owner, ref)
+            if delta is not None:
+                result["review_delta"] = delta
+            return result, 0
         if args.action == "run":
             result = P.run_planned(root, run_id, owner, args.plan, args.check_id, args.name,
                                    impact_covered=args.impact_covered)
