@@ -505,13 +505,13 @@ def qa_from_plan(root, run_id, owner, plan_ref, name, summary=""):
                           payload)
 
 
-def preflight_plan(root, run_id, owner, plan_ref, name):
+def preflight_plan(root, run_id, owner, plan_ref, name, *, include_reuse=True):
     """Read-only static execution readiness, never a test or business PASS."""
     state = _owned(root, run_id, owner, read_only=True)
     snapshot = _snapshot(root, run_id, state)
     plan = _read_plan(root, run_id, owner, plan_ref, state, snapshot)
     ordered = _ordered(plan["checks"])
-    failures = []
+    failures, reuse = [], {}
 
     def fail(check_id, category, reason):
         failures.append({"check_id": check_id, "category": category, "reason": reason})
@@ -568,15 +568,19 @@ def preflight_plan(root, run_id, owner, plan_ref, name):
             conflict = any(claim["name"] == attempt or E.write_paths_conflict(
                     root, check.get("write_paths"), claim["write_paths"])
                    for claim in state.get("running_checks", []))
-            if not runner["resources"]["safe_to_execute"] or conflict:
+            resource_blocked = not runner["resources"]["safe_to_execute"] or conflict
+            if include_reuse or resource_blocked:
                 source, binding = _reuse_candidate(root, run_id, owner, state, plan_ref, key, check, snapshot, True)
-                reusable = binding is not None and _valid(
-                    root, run_id, owner, state, source, key, check, snapshot)[0] is not None
-                if binding is None:
-                    reusable = C.inspect_reuse(root, run_id, argv=check["argv"], scope=check["scope"],
+                if binding is not None:
+                    ref, reason = _valid(root, run_id, owner, state, source, key, check, snapshot)
+                    decision = {"reusable": ref is not None, "reason": reason or "valid_planned_evidence"}
+                else:
+                    decision = C.inspect_reuse(root, run_id, argv=check["argv"], scope=check["scope"],
                         intent=check.get("intent", "test"), environment=check.get("environment"),
-                        coverage=check["coverage"], cwd=check.get("cwd"), impact_covered=True)["reusable"]
-                if not reusable:
+                        coverage=check["coverage"], cwd=check.get("cwd"), impact_covered=True)
+                if include_reuse:
+                    reuse[key] = decision
+                if resource_blocked and not decision["reusable"]:
                     if not runner["resources"]["safe_to_execute"]:
                         fail(key, "resources", runner["resources"]["status"])
                     if conflict:
@@ -588,7 +592,7 @@ def preflight_plan(root, run_id, owner, plan_ref, name):
         fail(None, "snapshot", "run_changed_during_preflight")
     return {"run_id": run_id, "plan_ref": plan_ref, "ready": not failures,
             "required_checks": required, "missing_checks": missing, "failures": failures,
-            "unplanned_checks": unplanned,
+            "unplanned_checks": unplanned, "reuse": reuse,
             "notice": "Static readiness only; no process, API, authentication or business acceptance observed."}
 
 
@@ -600,7 +604,7 @@ def verify_plan(root, run_id, owner, plan_ref, name, summary=""):
     This records evidence, not independent business acceptance or run completion.
     """
     E._label(name)
-    preflight = preflight_plan(root, run_id, owner, plan_ref, name)
+    preflight = preflight_plan(root, run_id, owner, plan_ref, name, include_reuse=False)
     plan = read_plan(root, run_id, owner, plan_ref)
     ordered = _ordered(plan["checks"])
     attempts = [(check_id, f"{name}-c{index}")

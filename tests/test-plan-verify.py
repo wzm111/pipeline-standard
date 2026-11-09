@@ -289,7 +289,15 @@ class VerifyCliTests(unittest.TestCase):
         self.assertEqual(before, {p.relative_to(self.root): p.read_bytes()
                                   for p in self.root.rglob("*") if p.is_file()})
         self.assertFalse((self.root / "counter").exists())
+        self.assertFalse(result["reuse"]["unit"]["reusable"])
         self.assertEqual(self.verify("ready")["gate"], "PASS")
+        args = ("plan-preflight", "--receipt", self.receipt, "--plan", plan, "--name", "preview")
+        self.assertTrue(self.cli(*args)["reuse"]["unit"]["reusable"])
+        changed = {**self.env, "SHLVL": str(int(self.env.get("SHLVL", "0")) + 1)}
+        prediction = self.cli(*args, env=changed)["reuse"]["unit"]
+        self.assertFalse(prediction["reusable"])
+        self.assertEqual(prediction["reason"], "command_or_environment_changed")
+        self.assertEqual((self.root / "counter").read_text(), "1")
 
     def test_verify_managed_preflight_rejects_missing_coverage_and_late_runner(self):
         missing = {**self.check, "argv": ["pipeline-fixture-no-such-runner"], "coverage": ["late"]}
