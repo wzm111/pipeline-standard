@@ -14,6 +14,34 @@ REPORT_LIMIT = 200
 NOTICE = "Registered results only; freshness, host health and acceptance are not revalidated."
 
 
+def audit_feedback(state, reports, start, ended, *, blocked=False):
+    """Assess recorded milestones in one task window."""
+    def in_task(value):
+        try:
+            at = R._timestamp(value)
+            return (not start or at >= R._timestamp(start)) and (not ended or at <= R._timestamp(ended))
+        except (ValueError, TypeError):
+            return False
+
+    milestones = ["start"] if "run_policy" in state else []
+    dispatches = state.get("role_dispatches", [])
+    history = [event for event in state.get("history", []) if in_task(event.get("at"))]
+    if (any(report["kind"] == "solution_review" for report in reports)
+            or any(d.get("role") == "scope_guardian" and d.get("status") == "completed"
+                   and in_task(d.get("completed_at")) for d in dispatches)):
+        milestones.append("solution_returned")
+    if (any(d.get("role") == "tester" and in_task(d.get("accepted_at")) for d in dispatches)
+            or any(event.get("stage") == "verification" for event in history)):
+        milestones.append("verification_started")
+    if (blocked
+            or any(event.get("activity") == "human_wait" for event in history)
+            or any(report["kind"] == "release_blocker" and report["payload"].get("action") == "open"
+                   for report in reports)):
+        milestones.append("blocked")
+    return progress_feedback.milestone_audit(
+        milestones, [report["payload"] for report in reports if report["kind"] == "progress_feedback"])
+
+
 def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
     if host_status not in {"unknown", "running", "idle"}:
         raise ValueError("host_status must be unknown, running or idle")
@@ -156,28 +184,8 @@ def snapshot(root, run_id=None, *, host_status="unknown", host_ended_at=None):
     rollout_pending = release_blockers.pending(root, state)
     if rollout_pending:
         blockers.append("release_blocker_recorded")
-    def in_task(value):
-        at = stamp(value)
-        return bool(at and (not start or R._timestamp(at) >= R._timestamp(start))
-                    and (not ended or R._timestamp(at) <= R._timestamp(ended)))
-
-    milestones = ["start"] if "run_policy" in state else []
-    dispatches = state.get("role_dispatches", [])
-    history = [event for event in state.get("history", []) if in_task(event.get("at"))]
-    if (any(report["kind"] == "solution_review" for _, report in reports)
-            or any(d.get("role") == "scope_guardian" and d.get("status") == "completed"
-                   and in_task(d.get("completed_at")) for d in dispatches)):
-        milestones.append("solution_returned")
-    if (any(d.get("role") == "tester" and in_task(d.get("accepted_at")) for d in dispatches)
-            or any(event.get("stage") == "verification" for event in history)):
-        milestones.append("verification_started")
-    if (waiting or declared_wait or rollout_pending
-            or any(event.get("activity") == "human_wait" for event in history)
-            or any(report["kind"] == "release_blocker" and report["payload"].get("action") == "open"
-                   for _, report in reports)):
-        milestones.append("blocked")
-    feedback_audit = progress_feedback.milestone_audit(
-        milestones, [report["payload"] for _, report in reports if report["kind"] == "progress_feedback"])
+    feedback_audit = audit_feedback(state, [report for _, report in reports], start, ended,
+                                    blocked=bool(waiting or declared_wait or rollout_pending))
     status = state.get("status") if state.get("status") in {"running", *R.FINAL} else "unknown"
     conflicts = any(key in blockers for key in ("human_wait_action_unrecorded", "host_idle_with_registered_work"))
     badge = ("🔴[需你处理]" if waiting else "🔎[待核实]" if conflicts else

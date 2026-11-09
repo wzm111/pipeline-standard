@@ -223,6 +223,23 @@ class AuditTests(unittest.TestCase):
         self.assertIsNone(rows["first"]["latest_task"]["release_command_seconds"])
         self.assertEqual(self.files(), before)
 
+    def test_cross_project_compliance_reports_only_counts_and_milestones(self):
+        import audit_projects as M
+
+        run = R.start(self.root)
+        args = self.root, run["run_id"], run["owner_token"]
+        E.write_report(*args, "release_blocker", "rollout", {
+            "action": "open", "coverage": "consent", "reason": "PRIVATE finding"})
+        E.write_report(*args, "progress_feedback", "bad-format",
+                       {"milestone": "blocked", "messages": [{"text": "PRIVATE feedback"}]})
+        self.assertEqual(A.capture(self.root, R.status(self.root)["state"])["status"], "recorded")
+        for live in (False, True):
+            result = M.scan([self.root], live=live)
+            compliance = result["runs"][0]["compliance"]
+            self.assertEqual(compliance["release_blockers_pending"], 1)
+            self.assertEqual(compliance["feedback_invalid"], ["blocked"])
+            self.assertNotIn("PRIVATE", json.dumps(result))
+
     def test_live_index_keeps_earlier_anomalies_when_the_snapshot_is_corrupt(self):
         import audit_projects as M
 

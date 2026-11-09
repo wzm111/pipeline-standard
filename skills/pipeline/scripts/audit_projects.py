@@ -67,6 +67,7 @@ def _row(root, record, document):
         "checks": V._counts(checks, ("executed", "reused", "inherited", "host_observation_records")),
         "result_classes": {key: value for key, value in
                            V._counts(checks.get("by_result_class"), sorted(A.RESULTS)).items() if value},
+        "compliance": audit.get("compliance"),
         "recent_anomalies": anomalies, "recent_anomalies_truncated": anomalies_truncated,
         "latest_task": None if not detail else {
             "index": detail["index"],
@@ -127,6 +128,14 @@ def render(result):
                      f"{row['run_id'] or 'run 未知'}  {row['snapshot_status']}")
         if row["snapshot_error"]:
             lines.append(f"  快照读取异常 {row['snapshot_error']}")
+        compliance = row.get("compliance")
+        if compliance is None:
+            lines.append("  发布阻断及进度审计：未知")
+        else:
+            lines.append(f"  发布阻断登记 {compliance['release_blockers_recorded']} 项 · "
+                         f"待解除 {compliance['release_blockers_pending']} 项 · "
+                         f"进度缺证据 {', '.join(compliance['feedback_missing']) or '无'} · "
+                         f"格式待修正 {', '.join(compliance['feedback_invalid']) or '无'}")
         for finding in row["recent_anomalies"]:
             groups = []
             for field, label in (("check_failures", "检查"), ("qa_findings", "QA"),

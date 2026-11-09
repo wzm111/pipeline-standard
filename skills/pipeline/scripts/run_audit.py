@@ -161,7 +161,7 @@ def _checks(root, state, telemetry=None):
         return result
     for ref in dict.fromkeys(item for item in refs if isinstance(item, str)):
         # Only registered, current-run check JSON envelopes; no arbitrary refs.
-        match = re.fullmatch(r"tmp/pipeline/runs/([0-9a-f]{32})/artifacts/(check|check_reuse|check_review|qa|acceptance|check_plan)/[a-z][a-z0-9_-]{0,63}\.json", ref)
+        match = re.fullmatch(r"tmp/pipeline/runs/([0-9a-f]{32})/artifacts/(check|check_reuse|check_review|qa|acceptance|check_plan|progress_feedback|solution_review|release_blocker)/[a-z][a-z0-9_-]{0,63}\.json", ref)
         if not match:
             if re.search(r"/artifacts/(?:check|check_reuse|check_review)/", ref):
                 result["unavailable"] += 1
@@ -176,6 +176,12 @@ def _checks(root, state, telemetry=None):
                 raise AuditError("invalid_report")
             payload = report["payload"]
             kind = match[2]
+            if kind in {"progress_feedback", "solution_review", "release_blocker"}:
+                if telemetry is not None:
+                    telemetry.append({"kind": kind, "recorded_at": report["recorded_at"],
+                                      "payload": {key: payload[key] for key in ("action", "milestone", "format_valid")
+                                                  if key in payload}})
+                continue
             if kind == "check_plan":
                 declared = payload.get("checks")
                 if (telemetry is not None and ref in state.get("check_plans", {}) and isinstance(declared, dict)
@@ -465,6 +471,22 @@ def _build(root, state):
     tasks = state.get("tasks")
     coverage = state.get("delivery_status", {}).get("coverage", {})
     missing = coverage.get("missing")
+    import release_blockers
+    import run_progress
+    pending = release_blockers.pending(root, state)
+    task = tasks[-1] if tasks else {}
+    start = _stamp(task.get("started_at") or state.get("created_at"))
+    ended = _stamp(task.get("ended_at"))
+    feedback_reports = [item for item in telemetry
+                        if item["kind"] in {"progress_feedback", "solution_review", "release_blocker"}
+                        and (not start or R._timestamp(item["recorded_at"]) >= R._timestamp(start))
+                        and (not ended or R._timestamp(item["recorded_at"]) <= R._timestamp(ended))]
+    feedback = run_progress.audit_feedback(state, feedback_reports, start, ended,
+        blocked=bool(pending or state.get("activity") == "human_wait"))
+    compliance = {"release_blockers_pending": len(pending),
+                  "release_blockers_recorded": sum(item["kind"] == "release_blocker"
+                      and item["payload"].get("action") == "open" for item in telemetry),
+                  "feedback_missing": feedback["missing"], "feedback_invalid": feedback["invalid"]}
     return {"schema_version": 1, "run_id": state["run_id"], "notice": NOTICE,
             "source_state_hash": _hash(state), "implementation_hash": _implementation(),
             "created_at": _stamp(state.get("created_at")), "snapshot_at": _stamp(state.get("updated_at")),
@@ -484,6 +506,7 @@ def _build(root, state):
             "latency": latency,
             "task_details": _task_details(state, telemetry),
             "adoption": run_policy.audit_summary(root, state),
+            "compliance": compliance,
             "coverage": {"missing_count": len(missing) if isinstance(missing, list) else None,
                          "complete": coverage.get("complete") if type(coverage.get("complete")) is bool else None},
             "actual_model": None, "tokens": None}
@@ -575,17 +598,27 @@ def _validate(value, key=None):
 def _validate_document(document):
     if not isinstance(document, dict):
         raise AuditError("invalid_audit")
-    _validate({k: v for k, v in document.items() if k != "task_details"})
+    _validate({k: v for k, v in document.items() if k not in {"task_details", "compliance"}})
     required = {"schema_version", "run_id", "notice", "source_state_hash", "implementation_hash",
                 "created_at", "snapshot_at", "status", "completeness", "timing", "tasks", "roles",
                 "checks", "coverage", "actual_model", "tokens"}
     if (not required <= set(document)
-            or set(document) - required - {"adoption", "latency", "task_details"}
+            or set(document) - required - {"adoption", "latency", "task_details", "compliance"}
             or type(document["schema_version"]) is not int or document["schema_version"] != 1
             or document["notice"] != NOTICE or document["actual_model"] is not None or document["tokens"] is not None
             or document["status"] not in R.FINAL | {"running", "unknown"}
             or document["completeness"] not in {"partial", "recorded_only"}):
         raise AuditError("invalid_audit")
+    if "compliance" in document:
+        from progress_feedback import MILESTONES
+        compliance = document["compliance"]
+        counts = {"release_blockers_pending", "release_blockers_recorded"}
+        lists = {"feedback_missing", "feedback_invalid"}
+        if (not isinstance(compliance, dict) or set(compliance) != counts | lists
+                or any(type(compliance[key]) is not int or compliance[key] < 0 for key in counts)
+                or any(not isinstance(compliance[key], list) or len(compliance[key]) > len(MILESTONES)
+                       or any(value not in MILESTONES for value in compliance[key]) for key in lists)):
+            raise AuditError("invalid_audit")
     if document.get("task_details") is not None:
         _validate_details(document["task_details"])
     if "latency" in document:

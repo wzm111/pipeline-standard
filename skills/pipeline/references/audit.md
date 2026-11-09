@@ -61,3 +61,5 @@ python3 <runner> scan-projects --workspace <各项目的共同父目录> --since
 宿主确实提供当前聊天ID时，执行者可在当前run或当前task起点调用`python3 <skill>/scripts/task_origin.py bind --project <项目> --receipt <本人receipt> --host-id <实际host> --thread-id <实际聊天UUID>`。只保存host与聊天ID的摘要和真实task边界；不保存聊天标题、对话或项目内容，不从旧delivery指针认领当前任务。调用方声明不是宿主证明；缺ID保持unknown，不为归属创建task、读取其他聊天或回填历史。
 
 日后用同一脚本的`inspect --project <项目> --run-id <run> --host-id <host> --thread-id <UUID>`只读核对，或`scan --project <项目> --host-id <host> --thread-id <UUID> --limit 20`有界筛选。scan只返回明确匹配的任务时间边界，不附整份混合run耗时；无归属记录单列unattributed，不当作未使用pipeline。旧task不补写，同一task不允许改认另一聊天。所有记录留本地ignored目录，不上传。
+
+跨项目摘要同时列出已登记发布阻断、记录中待解除的数量，以及当前任务的进度里程碑缺证据和格式异常。只读取登记元数据，发布时仍由门禁重新验证证据。旧快照缺少这些字段时显示未知，可用 `--live` 只读查询当前记录。
