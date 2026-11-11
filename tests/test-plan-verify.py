@@ -309,6 +309,14 @@ class VerifyCliTests(unittest.TestCase):
         self.assertEqual(prediction["reason"], "command_or_environment_changed")
         self.assertEqual((self.root / "counter").read_text(), "1")
 
+    def test_preflight_reports_missing_solution_alongside_reuse(self):
+        E.write_report(self.root, self.run, self.owner, "dual_review", "required", {})
+        result = self.cli("plan-preflight", "--receipt", self.receipt,
+                          "--plan", self.plan, "--name", "review-preview")
+        self.assertEqual(result["review"]["status"], "missing_solution_review")
+        self.assertFalse(result["reuse"]["unit"]["reusable"])
+        self.assertFalse((self.root / "counter").exists())
+
     def test_new_plan_reports_review_delta_before_execution(self):
         original = self.plan
         E.write_report(self.root, self.run, self.owner, "solution_review", "reviewed",

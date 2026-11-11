@@ -77,3 +77,5 @@ QA自动包含计划的全部coverage和继承的必要类别；当前任务已�
 Python对应接口：`check_plan.save_plan`、`run_planned`、`qa_from_plan`、只读`preflight_plan(root, run_id, owner, plan_ref, name)`，以及 `verify_plan(root, run_id, owner, plan_ref, name, summary="")`；verify_plan只生成检查与QA证据，不自动finish。不得将凭据放进argv、计划environment或summary；environment只是身份信息，子进程仍由统一入口管理。
 
 候选产物上的定向快检可标记 `layer: "candidate"`，通过 `depends_on` 指定实际候选构建及其必要依赖。执行顺序为 quick、候选所需前置、候选快检、剩余终验。候选快检失败时停在当前结果，修复后复用仍有效的前置证据。候选依赖里只放真实前置，避免把本可后置的全量检查拖入关键路径。
+
+高风险任务补跑前先看同一份 `plan-preflight` 的 `review`、`unplanned_checks` 和 `reuse`。它们分别显示方案记录是否对应本计划、哪些当前检查未纳入计划，以及当前环境下各检查的复用判定。方案引用变化时返回已有差量。静态 `ready` 只表示执行入口可用，QA 仍独立核验方案和结果。

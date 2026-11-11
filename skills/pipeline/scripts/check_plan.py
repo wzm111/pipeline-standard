@@ -655,12 +655,28 @@ def preflight_plan(root, run_id, owner, plan_ref, name, *, include_reuse=True):
                         fail(key, "resources", "active_check_conflict")
         except (OSError, ValueError, TypeError, KeyError):
             fail(key, "runner", "runner_or_resource_declaration_unavailable")
+    review = None
+    if include_reuse and "run_policy" in state:
+        import review_control
+
+        requirements = managed_qa._review_reports(root, state, "dual_review")
+        if review_control.required(state) or requirements:
+            solutions = managed_qa._review_reports(root, state, "solution_review")
+            review = {"status": "missing_solution_review"}
+            if requirements and solutions and managed_qa._review_executor(
+                    state, solutions, "scope_guardian", requirements[-1][1]["recorded_at"]):
+                payload = solutions[-1][1]["payload"]
+                if payload.get("requirement_ref") == requirements[-1][0]:
+                    if payload.get("plan_ref") == plan_ref:
+                        review = {"status": "current_solution_recorded"}
+                    else:
+                        review = review_delta(root, run_id, owner, plan_ref)
     current = _owned(root, run_id, owner, read_only=True)
     if current != state:
         fail(None, "snapshot", "run_changed_during_preflight")
     return {"run_id": run_id, "plan_ref": plan_ref, "ready": not failures,
             "required_checks": required, "missing_checks": missing, "failures": failures,
-            "unplanned_checks": unplanned, "reuse": reuse,
+            "unplanned_checks": unplanned, "reuse": reuse, "review": review,
             "notice": "Static readiness only; no process, API, authentication or business acceptance observed."}
 
 
