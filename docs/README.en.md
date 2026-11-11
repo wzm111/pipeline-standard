@@ -17,7 +17,7 @@ Describe a task in your coding-agent session. Pipeline helps the agent define sc
 
 Use it for feature work, fixes with meaningful acceptance checks, and development-to-release handoffs. For a one-line edit or a simple query, a direct agent request may be sufficient. No fixed speedup or token reduction is promised.
 
-[Quick example](TRY-PIPELINE.md) · [Updates](releases/UNRELEASED.md)
+[Quick example](TRY-PIPELINE.md) · [Stable v3.13.0](https://github.com/wzm111/pipeline-standard/releases/tag/v3.13.0) · [Development updates on main](releases/UNRELEASED.md)
 
 ## Install the complete repository
 
@@ -89,6 +89,14 @@ For high-risk work, a plan reviewer and an independent verifier share one accept
 Routine successful responses can be compact while complete evidence stays in local reports. Failures and blockers remain fully visible. Required independent QA is retained, and valid checks and reviews of the same inputs are reused.
 
 ### Hand a task to another agent
+
+```mermaid
+flowchart LR
+    A["Persist run state during execution"] --> B["Agent switches or becomes unavailable"]
+    B --> C["Incoming agent reads saved state"]
+    C --> D["Check the workspace and in-flight work"]
+    D --> E["Confirm run ownership before continuing"]
+```
 
 When switching agents in the same project directory or worktree, give the incoming agent the project directory and run ID. Pipeline persists registered stages, tasks, next steps, and evidence references during execution. If the outgoing agent becomes unavailable, `handoff-read` can still retrieve these facts. The current orchestrator uses `handoff-save` to add decision rationale as needed. Aim for a summary around 8 KiB and use named sections for longer context.
 

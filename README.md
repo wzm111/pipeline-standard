@@ -17,7 +17,7 @@ pipeline 是一套由编码智能体执行的 skill 和本地工具。你描述�
 - **视觉自查**：页面任务沿用项目设计，记录实际截图、查看与复核；缺少真实观察时保留待验。
 - **本地诊断**：运行记录可在本地预览，诊断模块不自动上传报告。
 
-[快速试用](docs/TRY-PIPELINE.md) · [更新记录](docs/releases/UNRELEASED.md)
+[快速试用](docs/TRY-PIPELINE.md) · [稳定版 v3.13.0](https://github.com/wzm111/pipeline-standard/releases/tag/v3.13.0) · [main 开发更新](docs/releases/UNRELEASED.md)
 
 ## 三步开始
 
@@ -202,6 +202,14 @@ flowchart TD
 记录默认不提交 Git；清理 `tmp/pipeline/` 会删除本地记录。长期归档只保留已确认脱敏的摘要，不打包整个运行目录。
 
 ## 跨 Agent 接手同一任务
+
+```mermaid
+flowchart LR
+    A["执行中保存运行状态"] --> B["切换 Agent 或原 Agent 中断"]
+    B --> C["新 Agent 读取已保存的状态"]
+    C --> D["核对工作区与在途操作"]
+    D --> E["确认运行归属后继续"]
+```
 
 在同一项目或 worktree 切换 Agent 时，把项目目录和 run ID 告诉接手者。Pipeline 在执行时自动保存已登记的阶段、任务、下一步和证据引用。原 Agent 突然停用时，接手者仍可用 `handoff-read` 读取这些事实。关键决策及原因由当前主调度员用 `handoff-save` 按需补记，建议摘要约 8 KiB，长背景按主题放入详情。
 
