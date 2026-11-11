@@ -1,6 +1,8 @@
 """Synthetic page observations test handoff logic, not live browser acceptance."""
 from pathlib import Path
 from copy import deepcopy
+import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -160,6 +162,16 @@ class FirstProbeTests(unittest.TestCase):
             self.assertEqual(B.probe(conditions,self.page)["reasons"],["page_conditions_invalid"])
         self.assertEqual(B.probe(self.conditions,{})["reasons"],["page_observation_missing"])
         self.assertEqual(B.probe(self.conditions,{"url":"https://[invalid"})["reasons"],["page_observation_invalid"])
+
+    def test_cli_blocks_not_ready_page_without_revealing_query(self):
+        page = {**self.page, "page_ready": False, "url": self.page["url"] + "?session=private"}
+        cli = Path(B.__file__).with_name("pipeline_cli.py")
+        result = subprocess.run([sys.executable, "-B", str(cli), "browser-probe"],
+                                input=json.dumps({"preconditions": self.conditions, "snapshot": page}),
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertNotIn("private", result.stdout)
+        self.assertEqual(json.loads(result.stdout)["failure_cause"], "target_state")
 
     def test_probe_does_not_mutate_inputs_or_return_private_url_query(self):
         page = {**self.page,"url":self.page["url"]+"?session=ephemeral-secret"}

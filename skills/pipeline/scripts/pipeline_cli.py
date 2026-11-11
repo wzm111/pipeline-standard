@@ -87,6 +87,7 @@ def parser():
     status.add_argument("--recovery", action="store_true", help="bounded registered recovery pointers; no retry permission")
     status.add_argument("--host-status", choices=["unknown", "running", "idle"], default="unknown")
     status.add_argument("--host-ended-at", help="explicit native host idle boundary, never inferred from run age")
+    sub.add_parser("browser-probe", help="check host-observed readiness from JSON stdin without opening a browser")
     progress = sub.add_parser("progress", help="bounded read-only steps; no health or acceptance claim")
     progress.add_argument("--project", default=".")
     progress.add_argument("--run-id")
@@ -255,6 +256,18 @@ def dispatch(args):
         result = M.scan(args.project, workspace=args.workspace, since=args.since,
                         limit=args.limit, live=args.live)
         return M.render(result) if args.format == "text" else result, int(result["status"] == "error")
+    if args.action == "browser-probe":
+        import browser_handoff
+        from progress_feedback import MAX_BYTES
+
+        raw = sys.stdin.buffer.read(MAX_BYTES + 1)
+        if len(raw) > MAX_BYTES:
+            raise ValueError("oversized browser observation")
+        payload = json.loads(raw)
+        if not isinstance(payload, dict) or set(payload) != {"preconditions", "snapshot"}:
+            raise ValueError("browser probe requires preconditions and snapshot")
+        result = browser_handoff.probe(payload["preconditions"], payload["snapshot"])
+        return result, int(not result["ready"])
     root = Path(args.project).resolve(strict=True)
     if args.action == "visual-inspect":
         import visual_evidence as V

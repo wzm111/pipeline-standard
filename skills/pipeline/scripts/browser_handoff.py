@@ -135,6 +135,8 @@ def probe(preconditions, snapshot):
         return result
     if f"{actual.scheme}://{actual.netloc}" != expected["origin"] or actual.path != expected["path"]:
         result["reasons"].append("page_mismatch")
+    if snapshot.get("page_ready") is False:
+        result["reasons"].append("page_not_ready")
     markers = snapshot.get("markers", {})
     if not isinstance(markers, dict) or any(markers.get(name) is not True for name in expected["markers"]):
         result["reasons"].append("required_marker_missing_or_unknown")
@@ -153,4 +155,6 @@ def probe(preconditions, snapshot):
         result["target_failures"] = failures
     if not result["reasons"]:
         result["ready"] = True
+    elif any(reason in result["reasons"] for reason in ("page_mismatch", "page_not_ready")):
+        result["failure_cause"] = "target_state"
     return result
