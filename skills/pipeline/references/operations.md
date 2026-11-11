@@ -8,12 +8,13 @@
 
 ```sh
 python3 <runner> handoff-save --project <root> --receipt <原私有receipt> <<'JSON'
-{"goal":"本次目标","done":["已完成项"],"decisions":["关键取舍及原因"],"next":"第一个未完成动作","blockers":[],"evidence":[]}
+{"goal":"本次目标","done":["已完成项"],"decisions":["关键取舍及原因"],"next":"第一个未完成动作","blockers":[],"evidence":[],"details":{"design":"较长的设计背景和取舍"}}
 JSON
 python3 <runner> handoff-read --project <root> --run-id <run_id>
+python3 <runner> handoff-read --project <root> --run-id <run_id> --detail design
 ```
 
-交接保存到项目本地的 `tmp/pipeline/runs/<run_id>/handoff.json`。正文最多 8 KiB，只写任务摘要，保留关键决策及原因，敏感数据和凭据留在原安全存储。读取时核对任务、当前 Git 工作区、引用文件和在途工作。同一 run 的新记录覆盖旧交接，接手按 run ID 直读。Git 核对使用暂存对象标识，对未暂存或未跟踪的变更文件读取内容摘要。最多检查 64 个变更文件和 8 MiB 内容，超过预算或无法完整读取时标为部分核验。报告匹配只表示其内容未变，按原证据规则核验候选和环境后再复用。
+交接保存到项目本地的 `tmp/pipeline/runs/<run_id>/handoff.json`。摘要优先保留目标、关键决策及原因、未完成事项、下一步和证据引用。8 KiB 是建议值，超过会返回大小提示并完整保存。较长的复现步骤、方案历史和模块说明放入 `details` 的命名文本段。默认只返回摘要及详情目录，通过 `--detail <段名>` 读取单段。提交 JSON 的安全上限为 1 MiB，超过时应把长材料留在项目文档或已有证据中，通过引用定位。敏感数据和凭据留在原安全存储。读取时核对任务、当前 Git 工作区、引用文件和在途工作。同一 run 的新记录覆盖旧交接，接手按 run ID 直读。Git 核对使用暂存对象标识，对未暂存或未跟踪的变更文件读取内容摘要。最多检查 64 个变更文件和 8 MiB 内容，超过预算或无法完整读取时标为部分核验。报告匹配只表示其内容未变，按原证据规则核验候选和环境后再复用。
 
 接手前读项目和当前宿主适用规则。若仍有检查、角色、发布尝试或恢复阻断，先核对实际执行者和原结果。继续写入须具备用户已授权的原运行归属和安全访问原 receipt 的方式。若原 run 已暂停，按下文恢复接口核对真实停止证据。读取交接本身不取得归属、不解除等待或发布限制。已完成交付仍使用 `delivery_from`。
 

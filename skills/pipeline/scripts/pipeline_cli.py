@@ -140,6 +140,7 @@ def parser():
     handoff = sub.add_parser("handoff-read", help="inspect an explicit cross-agent checkpoint")
     handoff.add_argument("--project", default=".")
     handoff.add_argument("--run-id", required=True)
+    handoff.add_argument("--detail", help="read only the named detail section")
     owned = {}
     for name in ("handoff-save", "update", "check", "report", "finish", "plan", "plan-preflight", "plan-bind", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "expert-prepare", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
         owned[name] = sub.add_parser(name)
@@ -274,7 +275,7 @@ def dispatch(args):
     root = Path(args.project).resolve(strict=True)
     if args.action == "handoff-read":
         import agent_handoff
-        return agent_handoff.read(root, args.run_id), 0
+        return agent_handoff.read(root, args.run_id, detail=args.detail), 0
     if args.action == "visual-inspect":
         import visual_evidence as V
         return V.inspect(root, args.run_id, args.requirement), 0
@@ -352,7 +353,7 @@ def dispatch(args):
         import agent_handoff
         raw = sys.stdin.buffer.read(agent_handoff.MAX_INPUT_BYTES + 1)
         if len(raw) > agent_handoff.MAX_INPUT_BYTES:
-            raise ValueError("oversized handoff notes")
+            raise ValueError("handoff input exceeds the 1 MiB safety limit")
         return agent_handoff.save(root, run_id, owner, json.loads(raw)), 0
     if args.action == "expert-prepare":
         import expert_advice as X

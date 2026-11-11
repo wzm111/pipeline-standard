@@ -8,7 +8,9 @@ import run_continuity
 import run_evidence as E
 import run_state as R
 
-MAX_INPUT_BYTES = 8192
+SUMMARY_TARGET_BYTES = 8 * 1024
+MAX_INPUT_BYTES = 1024 * 1024
+MAX_RECORD_BYTES = 4 * MAX_INPUT_BYTES
 REPORT_KINDS = {"check", "check_plan", "planned_check", "check_reuse", "check_review",
                 "qa", "acceptance", "verification_review",
                 "solution_review", "release_blocker", "release_recovery"}
@@ -67,20 +69,38 @@ def _path(root, run_id):
 
 
 def _notes(value, owner):
-    if not isinstance(value, dict) or set(value) - {"goal", "done", "decisions", "next", "blockers", "evidence"}:
+    if not isinstance(value, dict) or set(value) - {"goal", "done", "decisions", "next", "blockers", "evidence", "details"}:
         raise ValueError("invalid handoff fields")
     encoded = json.dumps(value, ensure_ascii=False, allow_nan=False).encode()
-    if len(encoded) > MAX_INPUT_BYTES or owner.encode() in encoded:
-        raise ValueError("handoff must be short and omit ownership credentials")
+    if len(encoded) > MAX_INPUT_BYTES:
+        raise ValueError("handoff input exceeds the 1 MiB safety limit")
+    if owner.encode() in encoded:
+        raise ValueError("handoff must omit ownership credentials")
     for key in ("goal", "next"):
         if not isinstance(value.get(key), str) or not value[key].strip():
             raise ValueError("handoff requires a goal and a concrete next step")
     for key in ("done", "decisions", "blockers", "evidence"):
         entries = value.get(key, [])
-        if (not isinstance(entries, list) or len(entries) > 8
+        if (not isinstance(entries, list) or (key == "evidence" and len(entries) > 8)
                 or any(not isinstance(item, str) or not item.strip() for item in entries)):
-            raise ValueError("handoff lists accept up to eight short entries")
+            raise ValueError("handoff lists require nonempty strings and at most eight evidence references")
+    details = value.get("details", {})
+    if not isinstance(details, dict):
+        raise ValueError("handoff details must be an object of named text sections")
+    for name, content in details.items():
+        E._label(name)
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("handoff detail must be nonempty text")
     return value
+
+
+def _summary(notes):
+    return {key: value for key, value in notes.items() if key != "details"}
+
+
+def _summary_size(notes):
+    size = len(json.dumps(_summary(notes), ensure_ascii=False).encode())
+    return {"bytes": size, "target_bytes": SUMMARY_TARGET_BYTES, "over_target": size > SUMMARY_TARGET_BYTES}
 
 
 def _evidence(root, state, refs):
@@ -123,21 +143,29 @@ def save(root, run_id, owner, notes):
                   "git": git, "notes": notes,
                   "evidence": evidence}
         R._atomic(path, record)
-    return {"run_id": run_id, "handoff": path.relative_to(root).as_posix()}
+    return {"run_id": run_id, "handoff": path.relative_to(root).as_posix(), "summary_size": _summary_size(notes)}
 
 
-def read(root, run_id):
+def read(root, run_id, *, detail=None):
     root = Path(root).resolve(strict=True)
     before = R.status(root, run_id)
     state = before["state"]
     with _path(root, run_id).open("rb") as stream:
-        raw = stream.read(4 * MAX_INPUT_BYTES + 1)
-    if len(raw) > 4 * MAX_INPUT_BYTES:
+        raw = stream.read(MAX_RECORD_BYTES + 1)
+    if len(raw) > MAX_RECORD_BYTES:
         raise ValueError("oversized handoff record")
     record = json.loads(raw)
     if not isinstance(record, dict) or record.get("schema_version") != 1 or record.get("run_id") != run_id:
         raise ValueError("invalid handoff identity")
+    if state is None:
+        raise ValueError("handoff requires its original run")
     notes = _notes(record["notes"], state["owner_token"])
+    details = notes.get("details", {})
+    if detail is not None:
+        if detail not in details:
+            raise ValueError("handoff detail not found")
+        return {"run_id": run_id, "detail": detail, "text": details[detail],
+                "task_changed": _task(state) != record.get("task")}
     git = _git_state(root)
     saved_git = record.get("git")
     git_status = ("unknown" if git is None or not isinstance(saved_git, dict)
@@ -159,7 +187,8 @@ def read(root, run_id):
             "release_attempts": sum(a.get("status") == "running"
                                     for a in state.get("release_plan", {}).get("attempts", [])),
             "release_holds": release["unresolved_hold_count"] if release else 0}
-    return {"run_id": run_id, "notes": notes, "git": git, "git_status": git_status, "evidence": evidence,
+    return {"run_id": run_id, "notes": _summary(notes), "summary_size": _summary_size(notes),
+            "detail_sections": sorted(details), "git": git, "git_status": git_status, "evidence": evidence,
             "run_changed": state["updated_at"] != record["run_updated_at"], "progress": recovery["progress"],
             "task": _task(state), "task_changed": _task(state) != record.get("task"),
             "stored_policy_revision_changed": state.get("run_policy", {}).get("revision") != record.get("policy_revision"),

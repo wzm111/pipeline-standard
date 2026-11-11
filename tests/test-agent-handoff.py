@@ -61,6 +61,20 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(result["notes"]["next"], "Run targeted regression")
         self.assertEqual(checkpoint.read_bytes(), before)
 
+    def test_over_target_summary_survives_and_details_are_read_on_demand(self):
+        goal = "保留完整目标" * 600
+        details = {"design": "extended context " * 900, "reproduction": "specific steps"}
+        saved = self.cli("handoff-save", "--receipt", str(self.receipt),
+                         payload={"goal": goal, "next": "Check evidence", "details": details})
+        self.assertTrue(saved["summary_size"]["over_target"])
+        summary = self.cli("handoff-read", "--run-id", self.run)
+        self.assertEqual(summary["notes"]["goal"], goal)
+        self.assertNotIn("details", summary["notes"])
+        self.assertEqual(summary["detail_sections"], ["design", "reproduction"])
+        detail = self.cli("handoff-read", "--run-id", self.run, "--detail", "design")
+        self.assertEqual(detail["text"], details["design"])
+        self.assertNotIn("notes", detail)
+
     def test_project_below_git_root_hashes_changed_file_content(self):
         project = self.root / "app"
         project.mkdir()
