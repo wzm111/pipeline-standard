@@ -4,7 +4,7 @@
 
 ## 跨 Agent 交接
 
-在同一项目工作目录或 worktree 切换 Agent 时，原执行者在停止前用当前 run 的私有 receipt 保存交接。只传 run ID 和项目位置给接手者。可按需列出最多八条同 run 已登记的证据引用。
+同一项目工作目录或 worktree 切换 Agent 时，只传 run ID 和项目位置。Pipeline 在原有状态写入时自动保留阶段、任务、待办、已登记的检查与在途工作，无需生成模型摘要。原执行者失联时直接运行 `handoff-read`，`source=run_state` 表示只有已落盘事实，Git 只显示当前现场，未记录的决策原因无法恢复。当前主调度员负责汇总交接，可在关键决策落定时用当前私有 receipt 补写。开发、测试等角色提供各自的结论和证据引用，由主调度员合入同一份交接，按需列出最多八条同 run 已登记的证据引用。读取含人工摘要时返回 `source=saved_notes`，同时提供当前运行状态，按 `task_changed` 和 `run_changed` 判断旧摘要是否需要复核。
 
 ```sh
 python3 <runner> handoff-save --project <root> --receipt <原私有receipt> <<'JSON'

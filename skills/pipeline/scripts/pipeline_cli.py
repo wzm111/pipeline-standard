@@ -137,7 +137,7 @@ def parser():
     visual_status.add_argument("--project", default=".")
     visual_status.add_argument("--run-id", required=True)
     visual_status.add_argument("--requirement", required=True)
-    handoff = sub.add_parser("handoff-read", help="inspect an explicit cross-agent checkpoint")
+    handoff = sub.add_parser("handoff-read", help="inspect recorded run state and optional cross-agent notes")
     handoff.add_argument("--project", default=".")
     handoff.add_argument("--run-id", required=True)
     handoff.add_argument("--detail", help="read only the named detail section")

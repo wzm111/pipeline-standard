@@ -41,6 +41,25 @@ class HandoffTests(unittest.TestCase):
         self.assertNotIn(self.owner, result.stdout)
         return json.loads(result.stdout)
 
+    def test_read_recovers_latest_recorded_state_without_outgoing_agent(self):
+        R.update(self.root, self.run, self.owner, {
+            "stage": "verification", "activity": "testing", "pending": ["Review result"],
+            "next": "Inspect targeted regression",
+        })
+        ref = E.write_report(self.root, self.run, self.owner, "qa", "prior", {"gate": "CONCERNS"})
+        self.receipt.unlink()
+        result = self.cli("handoff-read", "--run-id", self.run)
+        self.assertEqual(result["source"], "run_state")
+        self.assertIsNone(result["notes"])
+        self.assertIsNone(result["task_changed"])
+        self.assertEqual(result["git_status"], "unknown")
+        self.assertEqual(result["progress"]["stage"], "verification")
+        self.assertEqual(result["progress"]["next"], "Inspect targeted regression")
+        self.assertEqual(result["progress"]["pending"]["items"], ["Review result"])
+        self.assertEqual(result["registered_evidence"]["reports"]["items"], [ref])
+        self.assertTrue(result["selected_run_active"])
+        self.assertFalse(self.receipt.with_name("handoff.json").exists())
+
     def test_cli_preserves_context_and_detects_same_path_content_drift(self):
         ref = E.write_report(self.root, self.run, self.owner, "qa", "prior", {"gate": "CONCERNS"})
         untracked = self.root / "new"

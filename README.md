@@ -203,9 +203,9 @@ flowchart TD
 
 ## 跨 Agent 接手同一任务
 
-在同一项目或 worktree 切换 Agent 时，让原 Agent 用 `handoff-save` 保存当前目标、已完成事项、关键决策及原因、阻塞和下一步。每个 run 保留最新一份交接，建议摘要控制在 8 KiB 左右。长背景可按主题放入详情，检查和验收结果通过引用传递。接手时只需要告诉新 Agent 项目目录和 run ID。
+在同一项目或 worktree 切换 Agent 时，把项目目录和 run ID 告诉接手者。Pipeline 在执行时自动保存已登记的阶段、任务、下一步和证据引用。原 Agent 突然停用时，接手者仍可用 `handoff-read` 读取这些事实。关键决策及原因由当前主调度员用 `handoff-save` 按需补记，建议摘要约 8 KiB，长背景按主题放入详情。
 
-新 Agent 用 `handoff-read` 核对分支、提交、未提交改动、原任务和在途工作，再按需读取详情、文件与证据。仍在进行的检查或发布先核对原结果。继续操作沿用原项目规则和已授权的运行归属。可运行 Python 并访问同一工作区的宿主均可读取交接。 [交接命令与恢复规则](skills/pipeline/references/operations.md)
+新 Agent 用 `handoff-read` 查看分支、提交、未提交改动、当前任务和在途工作，有手动快照时比较工作区变化，再按需读取详情、文件与证据。仍在进行的检查或发布先核对原结果。继续操作沿用原项目规则和已授权的运行归属。可运行 Python 并访问同一工作区的宿主均可读取交接。 [交接命令与恢复规则](skills/pipeline/references/operations.md)
 
 ## 角色模型与运行边界
 

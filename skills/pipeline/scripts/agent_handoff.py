@@ -150,16 +150,22 @@ def read(root, run_id, *, detail=None):
     root = Path(root).resolve(strict=True)
     before = R.status(root, run_id)
     state = before["state"]
-    with _path(root, run_id).open("rb") as stream:
-        raw = stream.read(MAX_RECORD_BYTES + 1)
-    if len(raw) > MAX_RECORD_BYTES:
-        raise ValueError("oversized handoff record")
-    record = json.loads(raw)
-    if not isinstance(record, dict) or record.get("schema_version") != 1 or record.get("run_id") != run_id:
-        raise ValueError("invalid handoff identity")
     if state is None:
         raise ValueError("handoff requires its original run")
-    notes = _notes(record["notes"], state["owner_token"])
+    record = None
+    try:
+        with _path(root, run_id).open("rb") as stream:
+            raw = stream.read(MAX_RECORD_BYTES + 1)
+    except FileNotFoundError:
+        if detail is not None:
+            raise ValueError("handoff detail not found") from None
+    else:
+        if len(raw) > MAX_RECORD_BYTES:
+            raise ValueError("oversized handoff record")
+        record = json.loads(raw)
+        if not isinstance(record, dict) or record.get("schema_version") != 1 or record.get("run_id") != run_id:
+            raise ValueError("invalid handoff identity")
+    notes = _notes(record["notes"], state["owner_token"]) if record is not None else {}
     details = notes.get("details", {})
     if detail is not None:
         if detail not in details:
@@ -167,7 +173,7 @@ def read(root, run_id, *, detail=None):
         return {"run_id": run_id, "detail": detail, "text": details[detail],
                 "task_changed": _task(state) != record.get("task")}
     git = _git_state(root)
-    saved_git = record.get("git")
+    saved_git = record.get("git") if record is not None else None
     git_status = ("unknown" if git is None or not isinstance(saved_git, dict)
                   else "changed" if git != saved_git
                   else "matched" if git["content_complete"] else "partial")
@@ -187,13 +193,20 @@ def read(root, run_id, *, detail=None):
             "release_attempts": sum(a.get("status") == "running"
                                     for a in state.get("release_plan", {}).get("attempts", [])),
             "release_holds": release["unresolved_hold_count"] if release else 0}
-    return {"run_id": run_id, "notes": _summary(notes), "summary_size": _summary_size(notes),
+    return {"run_id": run_id, "source": "saved_notes" if record is not None else "run_state",
+            "notes": _summary(notes) if record is not None else None,
+            "summary_size": _summary_size(notes) if record is not None else None,
+            "registered_evidence": {key: recovery[key] for key in ("checks", "reports", "plans")},
             "detail_sections": sorted(details), "git": git, "git_status": git_status, "evidence": evidence,
-            "run_changed": state["updated_at"] != record["run_updated_at"], "progress": recovery["progress"],
-            "task": _task(state), "task_changed": _task(state) != record.get("task"),
-            "stored_policy_revision_changed": state.get("run_policy", {}).get("revision") != record.get("policy_revision"),
+            "run_changed": state["updated_at"] != record["run_updated_at"] if record is not None else None, "progress": recovery["progress"],
+            "task": _task(state), "task_changed": _task(state) != record.get("task") if record is not None else None,
+            "stored_policy_revision_changed": (
+                state.get("run_policy", {}).get("revision") != record.get("policy_revision")
+                if record is not None else None
+            ),
             "policy": run_policy.audit_summary(root, state),
             "selected_run_active": recovery["selected_run_active"],
             "other_or_unknown_active": recovery["active"] and not recovery["selected_run_active"],
-            "registered_in_flight": live, "release": release,
+            "registered_in_flight": live, "registered_roles": recovery["roles"],
+            "running_checks": recovery["running_checks"], "release": release,
             "notice": "Read project rules and confirm host state before continuing. Matched evidence refers to report bytes only."}

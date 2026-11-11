@@ -90,7 +90,7 @@ Routine successful responses can be compact while complete evidence stays in loc
 
 ### Hand a task to another agent
 
-When switching agents in the same project directory or worktree, ask the outgoing agent to run `handoff-save` with the goal, completed work, decisions and their reasons, blockers, and the next step. Each run keeps its latest local checkpoint. Aim for a summary around 8 KiB, use named sections for longer context, and link to existing evidence. Give the incoming agent the project directory and run ID.
+When switching agents in the same project directory or worktree, give the incoming agent the project directory and run ID. Pipeline persists registered stages, tasks, next steps, and evidence references during execution. If the outgoing agent becomes unavailable, `handoff-read` can still retrieve these facts. The current orchestrator uses `handoff-save` to add decision rationale as needed. Aim for a summary around 8 KiB and use named sections for longer context.
 
 Use `handoff-read` to check the current Git state, task, evidence references, and work in flight. Open individual detail sections as needed and check the original result of any running check or release before continuing. Writes still require the authorized run ownership. The checkpoint is accessible to hosts with Python and access to the same workspace. [Handoff commands and recovery rules](../skills/pipeline/references/operations.md)
 
