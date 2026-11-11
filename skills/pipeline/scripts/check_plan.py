@@ -305,6 +305,34 @@ def _reuse_candidate(root, run_id, owner, state, plan_ref, check_id, check, snap
     return candidate_plan, previous
 
 
+def bind_check(root, run_id, owner, plan_ref, check_id, name, check_ref):
+    """Register current evidence against a plan without executing its command."""
+    import managed_qa as Q
+    import run_policy
+
+    state = _owned(root, run_id, owner)
+    run_policy.require(root, state)
+    snapshot = _snapshot(root, run_id, state)
+    plan = _read_plan(root, run_id, owner, plan_ref, state, snapshot)
+    check = plan["checks"].get(check_id)
+    if check is None or "observed_ref" in check:
+        raise ValueError("binding requires an existing executable plan check")
+    report = Q._read(root, state, check_ref, "check")
+    proof = report["payload"]
+    if (not Q._current(report, state) or proof.get("inherited_from")
+            or snapshot["observations"].get(_identity(proof)) != check_ref):
+        raise ValueError("binding requires the latest actual check in this task")
+    result = {"report": check_ref, "exit_code": 0, "reused": True}
+    binding = {"plan_ref": plan_ref, "plan_sha256": _cached_digest(root, plan_ref, snapshot),
+               "check_id": check_id, "result": result, "evidence_only": True}
+    snapshot["bindings"][(plan_ref, check_id)] = (None, binding)
+    accepted, reason = _valid(root, run_id, owner, state, plan_ref, check_id, check, snapshot)
+    if accepted is None:
+        raise ValueError("cannot bind check evidence: " + reason)
+    ref = E.write_report(root, run_id, owner, "planned_check", name, binding)
+    return {**result, "plan_ref": plan_ref, "check_id": check_id, "planned_report": ref}
+
+
 def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=False):
     state = _owned(root, run_id, owner)
     snapshot = _snapshot(root, run_id, state)
@@ -335,6 +363,13 @@ def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=Fa
             message = "final check requires current valid quick evidence: "
         raise ValueError(message + ", ".join(blocked[:8])
                          + (f" (+{len(blocked) - 8} more)" if len(blocked) > 8 else ""))
+    binding_ref, binding = snapshot["bindings"].get((plan_ref, check_id), (None, None))
+    if binding and binding.get("evidence_only"):
+        ref, reason = _valid(root, run_id, owner, state, plan_ref, check_id, check, snapshot)
+        if ref is None:
+            raise ValueError("bound evidence is no longer valid: " + reason)
+        return {**binding["result"], "plan_ref": plan_ref, "check_id": check_id,
+                "planned_report": binding_ref}
     if "observed_ref" in check:
         ref, reason = _valid_observed(root, run_id, state, check, snapshot, allow_old=impact_covered is True)
         if ref is None:

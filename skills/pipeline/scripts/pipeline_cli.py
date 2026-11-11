@@ -137,7 +137,7 @@ def parser():
     visual_status.add_argument("--run-id", required=True)
     visual_status.add_argument("--requirement", required=True)
     owned = {}
-    for name in ("update", "check", "report", "finish", "plan", "plan-preflight", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "expert-prepare", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
+    for name in ("update", "check", "report", "finish", "plan", "plan-preflight", "plan-bind", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "expert-prepare", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
@@ -210,10 +210,12 @@ def parser():
     report.add_argument("--json", required=True, dest="payload")
     owned["plan"].add_argument("--name", required=True)
     owned["plan"].add_argument("--json", required=True, dest="payload", help="agent-maintained checks and required_checks")
-    for action in ("run", "qa", "verify", "plan-preflight"):
+    for action in ("run", "qa", "verify", "plan-preflight", "plan-bind"):
         if action != "verify":
             owned[action].add_argument("--plan", required=True)
         owned[action].add_argument("--name", required=True)
+    owned["plan-bind"].add_argument("--id", required=True, dest="check_id")
+    owned["plan-bind"].add_argument("--check", required=True, dest="check_ref")
     owned["run"].add_argument("--id", required=True, dest="check_id")
     owned["run"].add_argument("--impact-covered", action="store_true")
     owned["qa"].add_argument("--summary", default="")
@@ -388,7 +390,7 @@ def dispatch(args):
             state = T.resume_work(root, run_id, owner, evidence=args.evidence)
         return {**_public(state), "handoff": {key: state["continuity_wait"].get(key)
                 for key in ("status", "reason", "action", "verify")}}, 0
-    if args.action in {"plan", "plan-preflight", "run", "qa", "verify"}:
+    if args.action in {"plan", "plan-preflight", "plan-bind", "run", "qa", "verify"}:
         import check_plan as P
         if args.action == "plan-preflight":
             result = P.preflight_plan(root, run_id, owner, args.plan, args.name)
@@ -422,6 +424,8 @@ def dispatch(args):
             if delta is not None:
                 result["review_delta"] = delta
             return result, 0
+        if args.action == "plan-bind":
+            return P.bind_check(root, run_id, owner, args.plan, args.check_id, args.name, args.check_ref), 0
         if args.action == "run":
             result = P.run_planned(root, run_id, owner, args.plan, args.check_id, args.name,
                                    impact_covered=args.impact_covered)

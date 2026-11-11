@@ -278,6 +278,16 @@ class VerifyCliTests(unittest.TestCase):
         self.assertNotIn("completion", second)
         self.assertFalse((self.root / "tmp/pipeline/delivery/latest.json").exists())
 
+    def test_bind_earlier_actual_result_without_reexecuting_command(self):
+        observed = self.verify("original")["results"][0]["report"]
+        new = self.cli("plan", "--receipt", self.receipt, "--name", "handoff",
+                       "--json", json.dumps({"checks": {"unit": self.check}}))["plan"]
+        self.cli("plan-bind", "--receipt", self.receipt, "--plan", new, "--id", "unit",
+                 "--name", "binding", "--check", observed)
+        self.plan = new
+        self.assertEqual(self.verify("bound")["gate"], "PASS")
+        self.assertEqual((self.root / "counter").read_text(), "1")
+
     def test_plan_preflight_cli_is_read_only_and_valid_plan_still_executes(self):
         plan = self.plan
         before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
