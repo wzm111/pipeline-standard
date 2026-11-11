@@ -2,6 +2,21 @@
 
 只在续跑、异常、CONCERNS、预算预警或契约启用通知时读取。
 
+## 跨 Agent 交接
+
+在同一项目工作目录或 worktree 切换 Agent 时，原执行者在停止前用当前 run 的私有 receipt 保存交接。只传 run ID 和项目位置给接手者。可按需列出最多八条同 run 已登记的证据引用。
+
+```sh
+python3 <runner> handoff-save --project <root> --receipt <原私有receipt> <<'JSON'
+{"goal":"本次目标","done":["已完成项"],"decisions":["关键取舍及原因"],"next":"第一个未完成动作","blockers":[],"evidence":[]}
+JSON
+python3 <runner> handoff-read --project <root> --run-id <run_id>
+```
+
+交接保存到项目本地的 `tmp/pipeline/runs/<run_id>/handoff.json`。正文最多 8 KiB，只写任务摘要，保留关键决策及原因，敏感数据和凭据留在原安全存储。读取时核对任务、当前 Git 工作区、引用文件和在途工作。同一 run 的新记录覆盖旧交接，接手按 run ID 直读。Git 核对使用暂存对象标识，对未暂存或未跟踪的变更文件读取内容摘要。最多检查 64 个变更文件和 8 MiB 内容，超过预算或无法完整读取时标为部分核验。报告匹配只表示其内容未变，按原证据规则核验候选和环境后再复用。
+
+接手前读项目和当前宿主适用规则。若仍有检查、角色、发布尝试或恢复阻断，先核对实际执行者和原结果。继续写入须具备用户已授权的原运行归属和安全访问原 receipt 的方式。若原 run 已暂停，按下文恢复接口核对真实停止证据。读取交接本身不取得归属、不解除等待或发布限制。已完成交付仍使用 `delivery_from`。
+
 ## 续跑
 
 ### 人工等待与宿主空闲

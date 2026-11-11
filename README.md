@@ -201,6 +201,12 @@ flowchart TD
 
 记录默认不提交 Git；清理 `tmp/pipeline/` 会删除本地记录。长期归档只保留已确认脱敏的摘要，不打包整个运行目录。
 
+## 跨 Agent 接手同一任务
+
+在同一项目或 worktree 从 GPT 切换到 Claude 或 DeepSeek 时，让原 Agent 用 `handoff-save` 保存当前目标、已完成事项、关键决策及原因、阻塞和下一步。交接正文最多 8 KiB，每个 run 只保留最新一份。原检查和验收结果通过引用传递。接手时只需要告诉新 Agent 项目目录和 run ID。
+
+新 Agent 用 `handoff-read` 核对分支、提交、未提交改动、原任务和在途工作，再按需读文件与证据。仍在进行的检查或发布先核对原结果。继续操作沿用原项目规则和已授权的运行归属。可运行 Python 并访问同一工作区的宿主均可读取交接。 [交接命令与恢复规则](skills/pipeline/references/operations.md)
+
 ## 角色模型与运行边界
 
 模型优先级为：**本次指定 → 项目配置 → 本机默认 → skill 模板 → 运行时默认**。

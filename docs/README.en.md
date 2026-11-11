@@ -88,6 +88,12 @@ For high-risk work, a plan reviewer and an independent verifier share one accept
 
 Routine successful responses can be compact while complete evidence stays in local reports. Failures and blockers remain fully visible. Required independent QA is retained, and valid checks and reviews of the same inputs are reused.
 
+### Hand a task to another agent
+
+When switching between GPT, Claude, or DeepSeek in the same project directory or worktree, ask the outgoing agent to run `handoff-save` with the goal, completed work, decisions and their reasons, blockers, and the next step. Each run keeps one local checkpoint with at most 8 KiB of notes and links to existing evidence. Give the incoming agent the project directory and run ID.
+
+Use `handoff-read` to check the current Git state, task, evidence references, and work in flight. Check the original result of any running check or release before continuing. Writes still require the authorized run ownership. The checkpoint is accessible to hosts with Python and access to the same workspace. [Handoff commands and recovery rules](../skills/pipeline/references/operations.md)
+
 ### Up to three parallel developers
 
 The existing coordinator decides whether to use one, two, or three developers and assigns each write scope. There is no extra approval role and no requirement to fill all slots. Shared files have one owner; dependent work and conflicting resources are queued. Developers run focused checks, then the coordinator combines frozen results, reuses valid evidence, and performs necessary final verification, commits, and releases.

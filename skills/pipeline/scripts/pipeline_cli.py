@@ -137,8 +137,11 @@ def parser():
     visual_status.add_argument("--project", default=".")
     visual_status.add_argument("--run-id", required=True)
     visual_status.add_argument("--requirement", required=True)
+    handoff = sub.add_parser("handoff-read", help="inspect an explicit cross-agent checkpoint")
+    handoff.add_argument("--project", default=".")
+    handoff.add_argument("--run-id", required=True)
     owned = {}
-    for name in ("update", "check", "report", "finish", "plan", "plan-preflight", "plan-bind", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "expert-prepare", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
+    for name in ("handoff-save", "update", "check", "report", "finish", "plan", "plan-preflight", "plan-bind", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "expert-prepare", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
@@ -269,6 +272,9 @@ def dispatch(args):
         result = browser_handoff.probe(payload["preconditions"], payload["snapshot"])
         return result, int(not result["ready"])
     root = Path(args.project).resolve(strict=True)
+    if args.action == "handoff-read":
+        import agent_handoff
+        return agent_handoff.read(root, args.run_id), 0
     if args.action == "visual-inspect":
         import visual_evidence as V
         return V.inspect(root, args.run_id, args.requirement), 0
@@ -342,6 +348,12 @@ def dispatch(args):
                 "audit": _optional_audit(root, state["run_id"]), **paths()}, 0
     receipt = _receipt(root, args.receipt)
     run_id, owner = receipt["run_id"], receipt["owner_token"]
+    if args.action == "handoff-save":
+        import agent_handoff
+        raw = sys.stdin.buffer.read(agent_handoff.MAX_INPUT_BYTES + 1)
+        if len(raw) > agent_handoff.MAX_INPUT_BYTES:
+            raise ValueError("oversized handoff notes")
+        return agent_handoff.save(root, run_id, owner, json.loads(raw)), 0
     if args.action == "expert-prepare":
         import expert_advice as X
         payload = json.loads(args.expert_payload)
