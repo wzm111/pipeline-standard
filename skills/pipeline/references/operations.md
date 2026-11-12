@@ -30,6 +30,8 @@ python3 <runner> handoff-read --project <root> --run-id <run_id> --detail design
 
 由智能体调用`pipeline_cli.py wait --project <root> --receipt <当前receipt> --reason '<阻塞原因>' --action '<用户具体动作>' --verify '<恢复后验证标准>'`。仅当前owner、执行者已停止时可登记；保留pending、next和原报告，activity切为human_wait，未解决的等待阻止completed。用户回应后调用`continue --receipt <当前receipt> --evidence '<实际回应或动作证据>'`，沿用run，把验证标准设为next；不生成QA PASS。暂停run仍按原恢复接口处理，不能自动认领他人的receipt。
 
+必须人工完成多步操作时，在现有等待说明中按顺序列出实际入口、每步动作和可观察的完成标志。说明最后应回传的非敏感结果，以及恢复时从哪一步核验。敏感值由操作者填入项目约定的安全位置，回传验证状态。
+
 监控可用`status --run-id <run> --host-status idle --host-ended-at <宿主明确结束时间>`获取只读observation。仅明确idle、没有活动检查/角色、且结束时间不早于最新状态变动时，才标unclosed并在返回的timing里剔除已知空闲尾段，单列known_idle_seconds。未提供宿主证据、证据过时或状态并发变化时保持unknown；不能只按运行很久判断空闲。原状态/历史不改写，不自动完成、放行QA或清锁。此接口需调用者接入，不声称拦截所有Claude/Codex最终回复。
 
 - 用户已说“继续”就读取 state 和相关产物续跑，不再确认同一意图；恢复前仍须核对 run 归属及执行者停止证据。没有明确意图且存在未完成任务时才问续跑或新开。state 保留 status/stage/batches/pending/next 与必要的归属、产物及恢复证据。
