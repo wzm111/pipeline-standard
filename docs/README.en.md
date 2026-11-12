@@ -19,7 +19,7 @@ Use it for feature work, fixes with meaningful acceptance checks, and developmen
 
 [Quick example](TRY-PIPELINE.md) · [Stable v3.13.0](https://github.com/wzm111/pipeline-standard/releases/tag/v3.13.0) · [Development updates on main](releases/UNRELEASED.md)
 
-## Install the complete repository
+## Get started
 
 Requirements: Git, Python 3, and an existing Claude Code or Codex installation. Repository CI runs on Ubuntu and macOS with Python 3.11. The installer uses Bash and symbolic links; native Windows installation is not claimed here.
 
@@ -35,7 +35,7 @@ Review the installer before running it. It creates skill links and local model d
 
 This package depends on resources outside the skill folder. Copying only `SKILL.md` or `skills/pipeline/` is not a complete installation. See [distribution status](DISTRIBUTION.md) before advertising third-party one-command installation.
 
-## Try a task
+### Try a task
 
 In a Codex project session:
 
@@ -64,6 +64,10 @@ Continue naturally:
 
 Commit, push, and release permissions are distinct. The workflow does not turn a commit request into permission to deploy or modify another project.
 
+## What you can see during a run
+
+The executing agent reports the current action, the latest confirmed result, and the next step or blocker. Ask “What is done, and what remains?” The agent sends progress in the conversation. See the [progress guide](../skills/pipeline/references/progress.md).
+
 ## How development proceeds
 
 Choose an entry for the current goal: implement and verify a simple task directly, delegate independent work when needed, or deliver already accepted work. The diagram covers development and fixes; phase changes do not repeat planning or review, and delivery retains its required gates.
@@ -88,39 +92,7 @@ flowchart TD
     E --> F["Commit or deliver within authorization"]
 ```
 
-Small, low-risk tasks use fast mode in the current session. Standard mode uses only the roles needed for the task; thorough mode covers high-risk work and required human gates. Testing allows at most three rejection rounds per batch; scope review allows two. Reaching a limit stops the loop. A release failure does not automatically authorize development fixes.
-
-For high-risk work, a plan reviewer and an independent verifier share one acceptance checklist. The first checks scope and gaps before implementation. The second checks evidence against the frozen candidate. After a rejection, recheck the fix and affected behavior. See [dual expert review](../skills/pipeline/references/review.md).
-
-Routine successful responses can be compact while complete evidence stays in local reports. Failures and blockers remain fully visible. Required independent QA is retained, and valid checks and reviews of the same inputs are reused.
-
-### Hand a task to another agent
-
-```mermaid
-flowchart LR
-    A["Persist run state during execution"] --> B["Agent switches or becomes unavailable"]
-    B --> C["Incoming agent reads saved state"]
-    C --> D["Check the workspace and in-flight work"]
-    D --> E["Confirm run ownership before continuing"]
-```
-
-When switching agents in the same project directory or worktree, give the incoming agent the project directory and run ID. Pipeline persists registered stages, tasks, next steps, and evidence references during execution. If the outgoing agent becomes unavailable, `handoff-read` can still retrieve these facts. The current orchestrator uses `handoff-save` to add decision rationale as needed. Aim for a summary around 8 KiB and use named sections for longer context.
-
-Use `handoff-read` to check the current Git state, task, evidence references, and work in flight. Open individual detail sections as needed and check the original result of any running check or release before continuing. Writes still require the authorized run ownership. The checkpoint is accessible to hosts with Python and access to the same workspace. [Handoff commands and recovery rules](../skills/pipeline/references/operations.md)
-
-### Up to three parallel developers
-
-The existing coordinator decides whether to use one, two, or three developers and assigns each write scope. There is no extra approval role and no requirement to fill all slots. Shared files have one owner; dependent work and conflicting resources are queued. Developers run focused checks, then the coordinator combines frozen results, reuses valid evidence, and performs necessary final verification, commits, and releases.
-
-The coordinator reassesses at task start and meaningful scope changes without waiting for a reminder. Progress explains assignments or the reason for serial work, separating plans, requests, recorded host acceptance, and returns. A plan does not prove that a subagent has started.
-
-For a recurring blocker, an existing expert role can provide a short diagnosis after a focused repair still fails, or when developers and QA disagree on the cause. Advice is limited to once per cause and twice per task with compact context; it adds no permanent observer and does not change acceptance limits.
-
-A run reserves at most three developer dispatch slots, including pending dispatches. A slot is released only after confirmed completion. Independent QA starts when frozen work and host capacity are available. The main session also uses a slot: with four total host slots, three developers leave no room for QA until a developer returns. The dispatch guard covers integrated records; it does not prove host capacity or intercept every native call.
-
-UI tasks use an applicable design skill already available in the host, or the built-in design checks. Existing project styles and components remain the baseline. The agent declares the required surfaces, viewports, states, version and complete inputs; it then records actual screenshots, viewing and review. Changes invalidate affected old evidence. Small changes can be self-reviewed; important or substantial changes use proportionate independent review. The final response shows actual viewed images and unverified limitations.
-
-Declared UI requirements participate in managed QA and completion checks. **Tools validate evidence bindings and completeness; aesthetic judgment remains the actual observer's responsibility.** Missing browser access, images or required states remain pending. Builds and DOM checks alone do not establish visual acceptance. See [visual acceptance](../skills/pipeline/references/visual.md).
+Simple tasks can run in the current conversation. Complex tasks can use up to three developers for independent work. High-risk tasks use [separate plan and verification reviews](../skills/pipeline/references/review.md). UI changes include [visual inspection of the actual interface](../skills/pipeline/references/visual.md).
 
 ## How accepted work is released
 
@@ -142,19 +114,26 @@ flowchart TD
 
 Do not change version metadata after final candidate acceptance or silently rebuild during activation. Revalidate affected evidence after changes. After interruptions, check the original execution and activation state before retrying. HTTP success, upload completion and downstream platform acceptance are separate results. Multiple native browser checks can join the same [check plan](../skills/pipeline/references/check-plan.md) through exact observed references without fabricated shell commands or new execution time. See [delivery handoffs](../skills/pipeline/references/delivery.md).
 
-## What you can verify
+## Hand a task to another agent
 
-The tools validate evidence at integrated entry points and retain failed checks. A rule acknowledgement does not prove that a model understood every instruction. Registered `running` state alone does not prove host health. A successful test does not prove deployment or downstream platform acceptance.
+```mermaid
+flowchart LR
+    A["Persist run state during execution"] --> B["Agent switches or becomes unavailable"]
+    B --> C["Incoming agent reads saved state"]
+    C --> D["Check the workspace and in-flight work"]
+    D --> E["Confirm run ownership before continuing"]
+```
 
-Progress scripts produce read-only summaries; the executing agent must actually send them in the conversation. Long host calls can delay visible updates. Read-only monitoring does not replace the executor's progress updates, and there is no per-message send-time validator or automatic correction. Loading the skill or acknowledging a revision does not prove message-format compliance. Claude hooks and Codex's workflow checks have different enforcement boundaries; neither is described as a complete sandbox.
-
-Diagnostics are recorded under the project's ignored `tmp/pipeline/` directory. Preview output is restricted to technical metadata; raw logs and private ownership files are not public reporting artifacts. When an agent displays a preview in chat, that text is handled under the host's data policy. Local diagnostic code does not make the whole host offline.
+When switching agents in the same project or worktree, give the incoming agent the project path and run ID. Use `handoff-read` to inspect the saved task, workspace, and evidence references. Check any work still in flight before continuing under the existing authorization. See [handoff and recovery](../skills/pipeline/references/operations.md).
 
 ## Releases and details
 
-Version status and known limitations are listed in the [update notes](releases/UNRELEASED.md). The complete Chinese guide covers [project setup](../skills/pipeline/references/interaction.md), [check plans](../skills/pipeline/references/check-plan.md), [delivery](../skills/pipeline/references/delivery.md), and [local records](../skills/pipeline/references/audit.md).
+- [Stable v3.13.0](https://github.com/wzm111/pipeline-standard/releases/tag/v3.13.0) · [Main branch updates](releases/UNRELEASED.md) · [Installation, updates, and distribution](DISTRIBUTION.md)
+- [Project setup](../skills/pipeline/references/interaction.md) · [Roles and models](../skills/pipeline/references/models.md) · [Host compatibility and enforcement](COMPATIBILITY.md)
+- [Check plans](../skills/pipeline/references/check-plan.md) · [Evidence reuse](../skills/pipeline/references/evidence.md) · [Local records and previews](../skills/pipeline/references/audit.md)
+- [Implementation and maintenance](IMPLEMENTATION.md) · [Roadmap](ROADMAP.md)
 
-Maintainers run `bash tests/run-all.sh` from the repository root. Local tests and CI are implementation evidence; actual project adoption and performance require separate measurements.
+After updating, ask an existing conversation to reread the current skill and relevant references while retaining the current task and any still-valid evidence.
 
 ## Feedback
 
