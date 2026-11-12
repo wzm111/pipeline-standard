@@ -80,6 +80,27 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(result["notes"]["next"], "Run targeted regression")
         self.assertEqual(checkpoint.read_bytes(), before)
 
+    def test_interruption_exposes_new_failure_and_current_next_step(self):
+        old = E.write_report(self.root, self.run, self.owner, "qa", "old", {"gate": "PASS"})
+        self.cli("handoff-save", "--receipt", str(self.receipt), payload={
+            "goal": "Finish verification", "next": "Prepare release", "evidence": [old],
+        })
+        (self.root / "source").write_text("new candidate")
+        failed = E.write_report(self.root, self.run, self.owner, "qa", "current", {"gate": "FAIL"})
+        R.update(self.root, self.run, self.owner, {
+            "stage": "verification", "activity": "testing", "next": "Inspect current QA failure",
+        })
+        self.receipt.unlink()
+
+        result = self.cli("handoff-read", "--run-id", self.run)
+        self.assertTrue(result["run_changed"])
+        self.assertEqual(result["git_status"], "changed")
+        self.assertEqual(result["notes"]["next"], "Prepare release")
+        self.assertEqual(result["progress"]["next"], "Inspect current QA failure")
+        self.assertEqual(result["evidence"], {old: "matched"})
+        self.assertEqual(result["registered_evidence"]["reports"]["items"], [old, failed])
+        self.assertEqual(E.read_report(self.root, self.run, failed)["payload"]["gate"], "FAIL")
+
     def test_over_target_summary_survives_and_details_are_read_on_demand(self):
         goal = "保留完整目标" * 600
         details = {"design": "extended context " * 900, "reproduction": "specific steps"}
