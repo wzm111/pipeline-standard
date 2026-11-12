@@ -8,7 +8,7 @@ standard/thorough 共用；单批打回最多 3 轮。
 
 报告归属、实际路径、检查复用及共享资源规则见[evidence.md](evidence.md)。以下路径为逻辑名，脚本模式传本run的实际报告路径，不重复生成旧路径正文。
 
-多项验收交接共享[检查计划](check-plan.md)引用；不把final-round等执行名复制为required_checks。QA仍审查业务断言与覆盖是否完整，计划生成PASS不替代独立判断。
+多项验收交接共享[检查计划](check-plan.md)引用；不把final-round等执行名复制为required_checks。QA按[需求与实现核对](review.md#核对需求与实现)审查业务断言与覆盖是否完整，计划生成PASS不替代独立判断。
 
 脚本模式以实际plan/qa/check引用为唯一检查清单与证据，不再把同一内容抄成下方手写索引；独立QA先核对冻结版本的覆盖、未决问题和差量，再补真正缺少的验证。一次命令非零先定位和分类，不自动等同一次完整业务QA打回；已经形成的QA FAIL/CONCERNS仍按原规则保留和处理，不重置上限或自动放行。
 

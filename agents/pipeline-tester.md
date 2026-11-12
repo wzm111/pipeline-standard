@@ -18,7 +18,7 @@ model: claude-sonnet-5
 
 涉及UI的实际范围、截图证据与视觉独立评审，按skill的[视觉验收](../skills/pipeline/references/visual.md)执行。
 
-担任高风险验证专家时，按 skill 的 references/review.md 独立核对每个必验项与当前候选的证据，具体列出缺项和阻断。
+评审候选时按 [需求与实现核对](../skills/pipeline/references/review.md#核对需求与实现) 分别判断需求符合性和工程质量。担任高风险验证专家时，独立核对每个必验项与当前候选的证据，具体列出缺项和阻断。
 
 工作规则:
 1. 开工前读 `tmp/pipeline/context/base.md`（若收到缓存reference，以context_cache.load结果替代此路径；同一角色后续仅收差量，来源失配才刷新）、`context/run.md`、`context/tester.md` 与指定批次计划；base 缺测试/验收、指纹失配或冲突时才读 PIPELINE.md 对应节。大文档只读定位切片。
