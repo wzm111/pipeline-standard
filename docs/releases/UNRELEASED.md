@@ -1,6 +1,6 @@
 # main 开发更新
 
-以下更新已进入 [v3.14.0-rc.1 候选版](v3.14.0-rc.1.md)。当前稳定版为 `v3.13.0`。代码的本地回归通过，真实宿主的完整采用仍有待验项，不能据此认定所有会话已遵循规范。
+以下更新已收录于 [v3.14.0](v3.14.0.md)。代码的本地回归通过，真实宿主的完整采用仍有待验项，不能据此认定所有会话已遵循规范。
 
 ## 本次变化
 
@@ -28,10 +28,10 @@
 
 ## 更新与试用
 
-试用时可检出 `v3.14.0-rc.1`，并从仓库根目录运行 `bash install.sh`。更新后，已有聊天需重新读取最新版入口及本次适用引用，保留原任务与仍有效的检查；不要求重做已通过的工作。旧状态保留兼容，不倒填采用记录。
+安装固定版本时可检出 `v3.14.0`，并从仓库根目录运行 `bash install.sh`。更新后，已有聊天需重新读取最新版入口及本次适用引用，保留原任务与仍有效的检查；不要求重做已通过的工作。旧状态保留兼容，不倒填采用记录。
 
-需要稳定版时继续使用 `v3.13.0`；开发分支试用请从合成任务开始，并明确区分本地检查、实际宿主采用和业务验收。完整验证补齐后再考虑正式版本发布。
+开发分支试用请从合成任务开始，并分别核对本地检查、实际宿主采用和业务验收。
 
 ## English summary
 
-These updates are available in [v3.14.0-rc.1](v3.14.0-rc.1.md). The stable release is `v3.13.0`. The updates add cross-agent recovery from persisted run state, optional handoff notes, explicit visual evidence and QA gates, native `observed_ref` check plans, managed release integration, resource discovery, and bilingual workflow diagrams. This update also adds version regression isolation and checks for existing functionality before implementing feature requests. Local tests pass; complete native-host adoption is still unconfirmed. Progress formatting is not enforced at message-send time, and observer-declared reviews are not machine aesthetic certification. Diagnostics remain local; no run-data upload service is introduced.
+These updates are included in [v3.14.0](v3.14.0.md). The updates add cross-agent recovery from persisted run state, optional handoff notes, explicit visual evidence and QA gates, native `observed_ref` check plans, managed release integration, resource discovery, and bilingual workflow diagrams. This update also adds version regression isolation and checks for existing functionality before implementing feature requests. Local tests pass; complete native-host adoption is still unconfirmed. Progress formatting is not enforced at message-send time, and observer-declared reviews are not machine aesthetic certification. Diagnostics remain local; no run-data upload service is introduced.
