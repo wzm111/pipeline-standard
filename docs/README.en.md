@@ -52,6 +52,7 @@ Continue naturally:
 | Goal | Example |
 | --- | --- |
 | Clarify requirements | `$pipeline Clarify the batch reconciliation requirements. Discuss only.` |
+| Break down work | `$pipeline Split the spec into independently verifiable outcomes and list dependencies.` |
 | Review code | `$pipeline Review changes from <SHA> to HEAD against <spec path>. Report findings only.` |
 | See progress | `$pipeline Show completed, current, remaining steps and blockers.` |
 | Resume | `$pipeline Continue the last task and reuse checks that are still valid.` |
