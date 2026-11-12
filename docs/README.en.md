@@ -56,6 +56,7 @@ Continue naturally:
 | Break down work | `$pipeline Split the spec into independently verifiable outcomes and list dependencies.` |
 | Implement one task | `$pipeline Implement and verify task 03. Stop before committing.` |
 | Review code | `$pipeline Review changes from <SHA> to HEAD against <spec path>. Report findings only.` |
+| Verify a feature request | `$pipeline Check whether <issue link> is already covered. Report applicable versions, activation conditions, and gaps.` |
 | See progress | `$pipeline Show completed, current, remaining steps and blockers.` |
 | Resume | `$pipeline Continue the last task and reuse checks that are still valid.` |
 | Inspect local records | `$pipeline Preview this project's local run report.` |

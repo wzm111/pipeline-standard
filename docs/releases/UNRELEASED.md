@@ -12,6 +12,8 @@
 - **发布与检查复用**：新增稳定的发布模块薄 CLI，接通 managed release QA；前置关键交互和真实就绪检查，明确候选终验前冻结版本与元数据。既有发布脚本、候选身份和上线冒烟要求继续保留。
 - **入口与文档**：`paths` 支持真实资源发现与 `--project`，缺失资源如实报告。补充无计划直做的进度结果、改前 baseline、同进程 verify 收口；中英文 README 同步开发/修复循环、视觉验收与独立发布流程图，新增合成页面试用。
 
+- **回归定位与工单核验**：对照可验证的正常和异常版本定位回归区间。收到外部功能工单时，先沿实际入口核对已有覆盖和启用条件，再确认开发缺口。
+
 详细说明：[视觉验收](../../skills/pipeline/references/visual.md)、[检查计划](../../skills/pipeline/references/check-plan.md)、[交付承接](../../skills/pipeline/references/delivery.md)、[独立试用](../TRY-PIPELINE.md)。
 
 ## 验证与已知限制
@@ -32,4 +34,4 @@
 
 ## English summary
 
-These are **unreleased main-branch updates**, not a new tag or GitHub Release. Stable `v3.13.0` remains unchanged. The updates add cross-agent recovery from persisted run state, optional handoff notes, explicit visual evidence and QA gates, native `observed_ref` check plans, managed release integration, resource discovery, and bilingual workflow diagrams. Local tests pass; complete native-host adoption is still unconfirmed. Progress formatting is not enforced at message-send time, and observer-declared reviews are not machine aesthetic certification. Diagnostics remain local; no run-data upload service is introduced.
+These are **unreleased main-branch updates**, not a new tag or GitHub Release. Stable `v3.13.0` remains unchanged. The updates add cross-agent recovery from persisted run state, optional handoff notes, explicit visual evidence and QA gates, native `observed_ref` check plans, managed release integration, resource discovery, and bilingual workflow diagrams. This update also adds version regression isolation and checks for existing functionality before implementing feature requests. Local tests pass; complete native-host adoption is still unconfirmed. Progress formatting is not enforced at message-send time, and observer-declared reviews are not machine aesthetic certification. Diagnostics remain local; no run-data upload service is introduced.
