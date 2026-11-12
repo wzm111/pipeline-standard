@@ -21,6 +21,10 @@
 
 参考 [Matt Pocock 的 code-review](https://github.com/mattpocock/skills/blob/main/skills/engineering/code-review/SKILL.md) 与 [tdd](https://github.com/mattpocock/skills/blob/main/skills/engineering/tdd/SKILL.md)。
 
+## 把重复漏审补进检查
+
+同类问题反复漏审或单次遗漏后果明显时，在现有短复盘记录遗漏的入口或条件、原检查为何未覆盖，以及下次要补的断言或可执行验收步骤。把本任务仍需验证的项纳入现有检查计划。跨任务的改进写明适用条件和检查落点。已有项目回归用例或验收清单可承载时，在授权范围内补入，超出当前范围的改进记入待办。未执行的检查保留待验。
+
 ## 记录与门禁
 
 使用 managed CLI 时，在派发方案专家前用现有 `report --kind dual_review` 登记本任务要求，JSON 可用 `{}`。先建立可供评审的 check-plan，调整必验清单时使用新计划引用。方案专家返回且实际停止后写 `solution_review`，包含 `gate`、`dispatch_id`、`requirement_ref`、`plan_ref` 和简短评审结论。验证专家核对当前证据、返回并实际停止后写 `verification_review`，包含 `gate`、`dispatch_id`、`solution_ref`、按 QA 返回顺序列出的完整 `checks` 引用和逐项结论。两个报告的 gate 只有明确通过才填 PASS。缺证据时可用同一计划的 QA 返回定位缺项，补齐后新建报告复核。计划改变、检查引用更新或最新评审失败后，旧通过结论不能继续放行。
