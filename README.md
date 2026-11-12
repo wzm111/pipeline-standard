@@ -17,7 +17,7 @@ pipeline 是一套由编码智能体执行的 skill 和本地工具。你描述�
 - **视觉自查**：页面任务沿用项目设计，记录实际截图、查看与复核；缺少真实观察时保留待验。
 - **本地诊断**：运行记录可在本地预览，诊断模块不自动上传报告。
 
-[快速试用](docs/TRY-PIPELINE.md) · [稳定版 v3.13.0](https://github.com/wzm111/pipeline-standard/releases/tag/v3.13.0) · [main 开发更新](docs/releases/UNRELEASED.md)
+[快速试用](docs/TRY-PIPELINE.md) · [稳定版 v3.13.0](https://github.com/wzm111/pipeline-standard/releases/tag/v3.13.0) · [候选版 v3.14.0-rc.1](docs/releases/v3.14.0-rc.1.md)
 
 ## 三步开始
 

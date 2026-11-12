@@ -17,7 +17,7 @@ Describe a task in your coding-agent session. Pipeline helps the agent define sc
 
 Use it for feature work, fixes with meaningful acceptance checks, and development-to-release handoffs. For a one-line edit or a simple query, a direct agent request may be sufficient. No fixed speedup or token reduction is promised.
 
-[Quick example](TRY-PIPELINE.md) · [Stable v3.13.0](https://github.com/wzm111/pipeline-standard/releases/tag/v3.13.0) · [Development updates on main](releases/UNRELEASED.md)
+[Quick example](TRY-PIPELINE.md) · [Stable v3.13.0](https://github.com/wzm111/pipeline-standard/releases/tag/v3.13.0) · [Prerelease v3.14.0-rc.1](releases/v3.14.0-rc.1.md)
 
 ## Get started
 
