@@ -98,15 +98,24 @@ def scan(projects=None, *, workspace=None, since=None, limit=5, live=False):
     rows, projects_checked = [], []
     for root in roots:
         result = A.scan(root, limit, live=live)
-        projects_checked.append({"project": root.name, "status": result["status"],
-                                 "truncated": result.get("truncated", False),
-                                 "error": result.get("error")})
+        candidates = []
         for record in result.get("runs", []):
             document = record.get("live") if live else record.get("audit")
-            row = _row(root, record, document)
-            # An undated row stays visible so a missing snapshot cannot silently vanish.
-            if cutoff is None or row["snapshot_at"] is None or R._timestamp(row["snapshot_at"]) >= cutoff:
-                rows.append(row)
+            candidates.append(_row(root, record, document))
+        dates = [row["snapshot_at"] for row in candidates if row["snapshot_at"] is not None]
+        # Keep undated rows visible so a missing snapshot cannot silently vanish.
+        visible = [row for row in candidates if cutoff is None or row["snapshot_at"] is None
+                   or R._timestamp(row["snapshot_at"]) >= cutoff]
+        rows.extend(visible)
+        projects_checked.append({
+            "project": root.name, "status": result["status"], "error": result.get("error"),
+            "truncated": result.get("truncated", False),
+            "truncation_reasons": result.get("truncation_reasons", []),
+            "candidates_checked": len(candidates), "rows_returned": len(visible),
+            "undated_candidates": len(candidates) - len(dates),
+            "oldest_snapshot_at": min(dates, key=R._timestamp, default=None),
+            "newest_snapshot_at": max(dates, key=R._timestamp, default=None),
+        })
     rows.sort(key=lambda row: (R._timestamp(row["snapshot_at"]).timestamp() if row["snapshot_at"] else float("-inf"),
                                row["project"], row["run_id"] or ""), reverse=True)
     return {"status": "partial" if any(p["status"] != "ok" or p["truncated"] for p in projects_checked)
@@ -168,9 +177,19 @@ def render(result):
             causes = ", ".join(f"{name}={count}" for name, count in sorted(host["failure_causes"].items()))
             lines.append(f"  宿主失败原因 {causes or '无登记'} · 关联恢复成功 {host['recovery_successes']} · "
                          f"关联恢复失败 {host['recovery_failures']}")
+    labels = {"directory_entry_limit": "目录扫描上限", "candidate_limit": "每项目候选上限"}
     for project in result["projects"]:
-        if project["error"] or project["truncated"]:
-            lines.append(f"{project['project']}  {project['error'] or '候选已截断'}")
+        span = "日期未知"
+        if project["oldest_snapshot_at"]:
+            span = f"{project['oldest_snapshot_at']} 至 {project['newest_snapshot_at']}"
+        line = (f"{project['project']}  已查 {project['candidates_checked']} 个候选 · "
+                f"返回 {project['rows_returned']} 条 · {span} · 无日期 {project['undated_candidates']} 条")
+        if project["truncated"]:
+            reasons = "、".join(labels[reason] for reason in project["truncation_reasons"])
+            line += f" · 候选已截断（{reasons}）"
+        if project["error"]:
+            line += f" · {project['error']}"
+        lines.append(line)
     if result["workspace_truncated"]:
         lines.append("工作区扫描已截断")
     return "\n".join(lines)

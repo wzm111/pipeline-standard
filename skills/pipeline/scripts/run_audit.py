@@ -745,7 +745,9 @@ def scan(project_root, limit=20, *, live=False):
                         identities.append((entry.stat(follow_symlinks=False).st_mtime_ns, entry.name[:-5]))
         identities.sort(reverse=True)
         return {"status": "ok", "runs": [audit(root, identity, live=live) for _, identity in identities[:limit]],
-                "truncated": truncated or len(identities) > limit, "limit": limit}
+                "truncated": truncated or len(identities) > limit, "limit": limit,
+                "truncation_reasons": (["directory_entry_limit"] if truncated else [])
+                + (["candidate_limit"] if len(identities) > limit else [])}
     except Exception as error:
         return {"status": "error", "error": _error(error)}
 

@@ -216,7 +216,14 @@ class AuditTests(unittest.TestCase):
         self.assertNotIn("PRIVATE", result.stdout)
         filtered = subprocess.run(command + ["--live", "--since", "2099-01-01T00:00:00+00:00"],
                                   capture_output=True, text=True, check=True)
-        self.assertEqual(json.loads(filtered.stdout)["runs"], [])
+        filtered_value = json.loads(filtered.stdout)
+        self.assertEqual(filtered_value["runs"], [])
+        for project in filtered_value["projects"]:
+            self.assertEqual(project["candidates_checked"], 1)
+            self.assertEqual(project["rows_returned"], 0)
+            self.assertEqual(project["undated_candidates"], 0)
+            self.assertEqual(project["oldest_snapshot_at"], project["newest_snapshot_at"])
+            self.assertIsNotNone(project["newest_snapshot_at"])
         stored = subprocess.run(command, capture_output=True, text=True, check=True)
         rows = {row["project"]: row for row in json.loads(stored.stdout)["runs"]}
         self.assertEqual(rows["first"]["snapshot_status"], "stale")
