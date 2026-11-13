@@ -141,6 +141,10 @@ def render(result):
         return "未知" if value is None else f"{value:.1f} 秒"
 
     lines = [f"跨项目审计 · {result['source']} · {result['status']} · {len(result['runs'])} 条"]
+    if result["since"] is not None:
+        undated = sum(row["snapshot_at"] is None for row in result["runs"])
+        lines.append(f"日期筛选起点 {result['since']} · 命中 {len(result['runs']) - undated} 条 · "
+                     f"另保留无日期诊断 {undated} 条")
     for row in result["runs"]:
         lines.append(f"{row['project']}  {row['snapshot_at'] or '日期未知'}  "
                      f"{row['run_id'] or 'run 未知'}  {row['snapshot_status']}")

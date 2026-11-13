@@ -240,6 +240,15 @@ class AuditTests(unittest.TestCase):
         self.assertIsNone(rows["first"]["latest_task"]["release_command_seconds"])
         self.assertEqual(self.files(), before)
 
+    def test_cross_project_text_distinguishes_undated_diagnostics_from_matches(self):
+        import audit_projects as M
+
+        run = R.start(self.root)
+        self.target(run).unlink()
+        result = M.scan([self.root], since="2099-01-01T00:00:00+00:00")
+        self.assertIn("命中 0 条 · 另保留无日期诊断 1 条", M.render(result))
+        self.assertEqual(result["status"], "partial")
+
     def test_cross_project_compliance_reports_only_counts_and_milestones(self):
         import audit_projects as M
 
