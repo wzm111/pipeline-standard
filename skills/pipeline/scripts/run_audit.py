@@ -1,6 +1,7 @@
 """Lifecycle-only, privacy-filtered run snapshots. Never acceptance or reuse evidence."""
 import argparse
 from bisect import bisect_right
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
@@ -741,11 +742,14 @@ def scan(project_root, limit=20, *, live=False):
                     if number >= 1000:
                         truncated = True
                         break
-                    if re.fullmatch(r"[0-9a-f]{32}\.json", entry.name):
+                    if re.fullmatch(r"[0-9a-f]{32}\.json", entry.name) and entry.is_file(follow_symlinks=False):
                         identities.append((entry.stat(follow_symlinks=False).st_mtime_ns, entry.name[:-5]))
         identities.sort(reverse=True)
         return {"status": "ok", "runs": [audit(root, identity, live=live) for _, identity in identities[:limit]],
                 "truncated": truncated or len(identities) > limit, "limit": limit,
+                "state_files_found": len(identities), "state_enumeration_complete": not truncated,
+                "newest_state_mtime": (datetime.fromtimestamp(identities[0][0] / 1_000_000_000, timezone.utc)
+                                       .isoformat() if identities else None),
                 "truncation_reasons": (["directory_entry_limit"] if truncated else [])
                 + (["candidate_limit"] if len(identities) > limit else [])}
     except Exception as error:

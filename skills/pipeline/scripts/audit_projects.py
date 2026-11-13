@@ -112,6 +112,9 @@ def scan(projects=None, *, workspace=None, since=None, limit=5, live=False):
             "truncated": result.get("truncated", False),
             "truncation_reasons": result.get("truncation_reasons", []),
             "candidates_checked": len(candidates), "rows_returned": len(visible),
+            "state_files_found": result.get("state_files_found"),
+            "state_enumeration_complete": result.get("state_enumeration_complete"),
+            "newest_state_mtime": result.get("newest_state_mtime"),
             "undated_candidates": len(candidates) - len(dates),
             "oldest_snapshot_at": min(dates, key=R._timestamp, default=None),
             "newest_snapshot_at": max(dates, key=R._timestamp, default=None),
@@ -184,6 +187,10 @@ def render(result):
             span = f"{project['oldest_snapshot_at']} 至 {project['newest_snapshot_at']}"
         line = (f"{project['project']}  已查 {project['candidates_checked']} 个候选 · "
                 f"返回 {project['rows_returned']} 条 · {span} · 无日期 {project['undated_candidates']} 条")
+        if project["state_enumeration_complete"] is not None:
+            enumeration = "完整" if project["state_enumeration_complete"] else "截断"
+            mtime = project["newest_state_mtime"] or "无"
+            line += f" · 枚举{enumeration} · 状态文件 {project['state_files_found']} 个 · 观察到的最新修改 {mtime}"
         if project["truncated"]:
             reasons = "、".join(labels[reason] for reason in project["truncation_reasons"])
             line += f" · 候选已截断（{reasons}）"

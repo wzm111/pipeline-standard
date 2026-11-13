@@ -40,6 +40,31 @@ class PipelineCliTests(unittest.TestCase):
         return self.cli("check", "--receipt", self.receipt, "--name", name, "--scope", "source.py",
             "--coverage", coverage, "--impact-covered", "--timeout", "10", "--", sys.executable, "-c", command, expected=expected)
 
+    def test_managed_run_is_discoverable_after_finish(self):
+        for _ in range(2):
+            latest = self.start()
+            checked = self.check("audit-fixture", "print('synthetic audit check')")
+            self.cli("update", "--receipt", self.receipt, "--stage", "acceptance", "--activity", "testing")
+            self.cli("report", "--receipt", self.receipt, "--kind", "qa", "--name", "final", "--json",
+                     json.dumps({"gate": "PASS", "checks": [checked["report"]],
+                                 "required_checks": ["unit-fixture"]}))
+            self.cli("finish", "--receipt", self.receipt, "--direct", "--stopped",
+                     "--stop-evidence", "fixture command exited")
+
+        for mode in ((), ("--live",)):
+            result = self.cli("scan-projects", "--project", str(self.root), "--limit", "1", *mode)
+            project, = result["projects"]
+            row, = result["runs"]
+            self.assertEqual(project["state_files_found"], 2)
+            self.assertTrue(project["state_enumeration_complete"])
+            self.assertTrue(project["newest_state_mtime"])
+            self.assertEqual(project["candidates_checked"], 1)
+            self.assertEqual(project["truncation_reasons"], ["candidate_limit"])
+            self.assertEqual(row["run_id"], latest["run_id"])
+            self.assertEqual(row["snapshot_status"], "current")
+            self.assertEqual(row["run_status"], "completed")
+            self.assertEqual(row["checks"]["executed"], 1)
+
     def test_paths_and_status_are_read_only_and_resolve_existing_names(self):
         before = sorted(self.root.iterdir())
         p = self.cli("paths")["paths"]
