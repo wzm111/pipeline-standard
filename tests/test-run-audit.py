@@ -214,6 +214,17 @@ class AuditTests(unittest.TestCase):
         release = value["runs"][0]["latest_task"]["release_command_seconds"]
         self.assertGreaterEqual(release["release_activation"], 0)
         self.assertNotIn("PRIVATE", result.stdout)
+        for fmt in ("json", "text"):
+            summary = subprocess.run(command + ["--live", "--summary-only", "--format", fmt],
+                                     capture_output=True, text=True, check=True).stdout
+            self.assertNotIn(run["run_id"], summary)
+            if fmt == "json":
+                compact = json.loads(summary)
+                self.assertNotIn("runs", compact)
+                self.assertEqual(compact["projects"], value["projects"])
+            else:
+                self.assertIn("first  已查 1 个候选", summary)
+
         filtered = subprocess.run(command + ["--live", "--since", "2099-01-01T00:00:00+00:00"],
                                   capture_output=True, text=True, check=True)
         filtered_value = json.loads(filtered.stdout)

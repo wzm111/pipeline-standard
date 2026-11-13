@@ -76,6 +76,8 @@ def parser():
     multi_scan.add_argument("--limit", type=int, default=5, help="latest run candidates per project, 1 to 20")
     multi_scan.add_argument("--live", action="store_true", help="read registered metadata without saving snapshots")
     multi_scan.add_argument("--format", choices=["json", "text"], default="json")
+    multi_scan.add_argument("--summary-only", action="store_true",
+                            help="show project coverage without individual run rows")
     preview = sub.add_parser("preview", help="local read-only audit preview; never upload, export or start a run")
     preview.add_argument("--project", default=".")
     preview.add_argument("--run-id", help="explicit run; otherwise select active or latest local record")
@@ -259,7 +261,13 @@ def dispatch(args):
         import audit_projects as M
         result = M.scan(args.project, workspace=args.workspace, since=args.since,
                         limit=args.limit, live=args.live)
-        return M.render(result) if args.format == "text" else result, int(result["status"] == "error")
+        if args.format == "text":
+            output = M.render(result, summary_only=args.summary_only)
+        elif args.summary_only:
+            output = {key: value for key, value in result.items() if key != "runs"}
+        else:
+            output = result
+        return output, int(result["status"] == "error")
     if args.action == "browser-probe":
         import browser_handoff
         from progress_feedback import MAX_BYTES

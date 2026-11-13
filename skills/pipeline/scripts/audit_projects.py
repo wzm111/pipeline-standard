@@ -133,7 +133,7 @@ def scan(projects=None, *, workspace=None, since=None, limit=5, live=False):
             "workspace_truncated": truncated, "projects": projects_checked, "runs": rows}
 
 
-def render(result):
+def render(result, *, summary_only=False):
     if result["status"] == "error":
         return result["error"]
 
@@ -145,7 +145,7 @@ def render(result):
         undated = sum(row["snapshot_at"] is None for row in result["runs"])
         lines.append(f"日期筛选起点 {result['since']} · 命中 {len(result['runs']) - undated} 条 · "
                      f"另保留无日期诊断 {undated} 条")
-    for row in result["runs"]:
+    for row in (() if summary_only else result["runs"]):
         lines.append(f"{row['project']}  {row['snapshot_at'] or '日期未知'}  "
                      f"{row['run_id'] or 'run 未知'}  {row['snapshot_status']}")
         if row["snapshot_error"]:
