@@ -17,7 +17,7 @@ pipeline 是一套由编码智能体执行的 skill 和本地工具。你描述�
 - **视觉自查**：页面任务沿用项目设计，记录实际截图、查看与复核；缺少真实观察时保留待验。
 - **本地诊断**：运行记录可在本地预览，诊断模块不自动上传报告。
 
-[快速试用](docs/TRY-PIPELINE.md) · [稳定版 v3.14.1](https://github.com/wzm111/pipeline-standard/releases/tag/v3.14.1)
+[快速试用](docs/TRY-PIPELINE.md) · [稳定版 v3.14.2](https://github.com/wzm111/pipeline-standard/releases/tag/v3.14.2)
 
 ## 三步开始
 
@@ -138,7 +138,7 @@ flowchart LR
 
 ## 版本与详细文档
 
-- [稳定版 v3.14.1](https://github.com/wzm111/pipeline-standard/releases/tag/v3.14.1) · [main 开发更新](docs/releases/UNRELEASED.md) · [安装、更新与分发](docs/DISTRIBUTION.md)
+- [稳定版 v3.14.2](https://github.com/wzm111/pipeline-standard/releases/tag/v3.14.2) · [main 开发更新](docs/releases/UNRELEASED.md) · [安装、更新与分发](docs/DISTRIBUTION.md)
 - [项目接入](skills/pipeline/references/interaction.md) · [角色和模型](skills/pipeline/references/models.md) · [双端兼容与校验边界](docs/COMPATIBILITY.md)
 - [检查计划](skills/pipeline/references/check-plan.md) · [证据复用](skills/pipeline/references/evidence.md) · [本地运行记录与预览](skills/pipeline/references/audit.md)
 - [实现与维护](docs/IMPLEMENTATION.md) · [路线图](docs/ROADMAP.md)
