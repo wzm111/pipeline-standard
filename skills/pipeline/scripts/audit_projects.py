@@ -108,6 +108,9 @@ def scan(projects=None, *, workspace=None, since=None, limit=5, live=False):
         visible = [row for row in candidates if cutoff is None or row["snapshot_at"] is None
                    or R._timestamp(row["snapshot_at"]) >= cutoff]
         rows.extend(visible)
+        # A filtered stale snapshot can hide a run whose current state is newer.
+        filtered_noncurrent = (sum(row["snapshot_status"] != "current" for row in candidates)
+                               - sum(row["snapshot_status"] != "current" for row in visible))
         projects_checked.append({
             "project": root.name, "status": result["status"], "error": result.get("error"),
             "truncated": result.get("truncated", False),
@@ -117,12 +120,14 @@ def scan(projects=None, *, workspace=None, since=None, limit=5, live=False):
             "state_enumeration_complete": result.get("state_enumeration_complete"),
             "newest_state_mtime": result.get("newest_state_mtime"),
             "undated_candidates": len(candidates) - len(dates),
+            "filtered_noncurrent_candidates": filtered_noncurrent,
             "oldest_snapshot_at": min(dates, key=R._timestamp, default=None),
             "newest_snapshot_at": max(dates, key=R._timestamp, default=None),
         })
     rows.sort(key=lambda row: (R._timestamp(row["snapshot_at"]).timestamp() if row["snapshot_at"] else float("-inf"),
                                row["project"], row["run_id"] or ""), reverse=True)
-    return {"status": "partial" if any(p["status"] != "ok" or p["truncated"] for p in projects_checked)
+    return {"status": "partial" if any(p["status"] != "ok" or p["truncated"] or p["filtered_noncurrent_candidates"]
+                                      for p in projects_checked)
             or truncated or any(row["snapshot_status"] != "current" for row in rows) else "ok",
             "source": "live" if live else "stored", "since": since, "limit_per_project": limit,
             "workspace_truncated": truncated, "projects": projects_checked, "runs": rows}
@@ -200,6 +205,8 @@ def render(result):
         if project["truncated"]:
             reasons = "、".join(labels[reason] for reason in project["truncation_reasons"])
             line += f" · 候选已截断（{reasons}）"
+        if project["filtered_noncurrent_candidates"]:
+            line += f" · 日期筛除的非当前快照 {project['filtered_noncurrent_candidates']} 条"
         if project["error"]:
             line += f" · {project['error']}"
         lines.append(line)

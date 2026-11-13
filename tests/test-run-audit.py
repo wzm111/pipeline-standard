@@ -224,6 +224,16 @@ class AuditTests(unittest.TestCase):
             self.assertEqual(project["undated_candidates"], 0)
             self.assertEqual(project["oldest_snapshot_at"], project["newest_snapshot_at"])
             self.assertIsNotNone(project["newest_snapshot_at"])
+        stored_filtered = subprocess.run(
+            command + ["--since", "2099-01-01T00:00:00+00:00"],
+            capture_output=True, text=True, check=True)
+        stored_value = json.loads(stored_filtered.stdout)
+        self.assertEqual(stored_value["runs"], [])
+        self.assertEqual(stored_value["status"], "partial")
+        projects = {project["project"]: project for project in stored_value["projects"]}
+        self.assertEqual(projects["first"]["filtered_noncurrent_candidates"], 1)
+        self.assertEqual(projects["second"]["filtered_noncurrent_candidates"], 0)
+
         stored = subprocess.run(command, capture_output=True, text=True, check=True)
         rows = {row["project"]: row for row in json.loads(stored.stdout)["runs"]}
         self.assertEqual(rows["first"]["snapshot_status"], "stale")
