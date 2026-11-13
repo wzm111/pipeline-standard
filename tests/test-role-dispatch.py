@@ -118,6 +118,7 @@ class RoleDispatchTests(unittest.TestCase):
 
     def test_native_parameter_mismatch_and_unrelated_payload_are_rejected(self):
         for parameters in ({"model": "another-model"}, {"fork_turns": "none"},
+                           {"model": "gpt-6.1-sol"},
                            {"model": "gpt-6.1-sol", "prompt": "unrelated body"},
                            {"model": "gpt-6.1-sol", "reasoning_effort": "high"}):
             with self.assertRaises(ValueError):

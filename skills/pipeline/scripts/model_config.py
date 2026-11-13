@@ -15,6 +15,7 @@ TASK_KINDS = {
     "scoped_fix": {"developer"},
     "ui_validation": {"tester"},
     "high_risk_verification": {"tester"},
+    "high_risk_implementation": {"developer"},
     "release_summary": {"releaser"},
 }
 
@@ -152,14 +153,15 @@ def select_task_route(role, preference, *, task_kind=None, risk="unknown", compl
         raise ValueError("task kind does not apply to role")
     effective = deepcopy(preference)
     routes = effective.pop("task_routes", {})
+    high_risk_route = task_kind in {"high_risk_verification", "high_risk_implementation"}
     applied = False
     if task_kind is None:
         reason = "task_kind_missing"
-    elif task_kind == "high_risk_verification" and risk != "high":
+    elif high_risk_route and risk != "high":
         reason = "risk_not_high"
-    elif task_kind != "high_risk_verification" and risk != "low":
+    elif not high_risk_route and risk != "low":
         reason = "risk_not_low"
-    elif task_kind != "high_risk_verification" and complexity != "simple":
+    elif not high_risk_route and complexity != "simple":
         reason = "complexity_not_simple"
     elif task_kind not in routes:
         reason = "route_not_configured"

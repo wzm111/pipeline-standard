@@ -30,7 +30,8 @@ class TaskRoutingTests(unittest.TestCase):
     def test_all_role_task_pairs_and_cross_role_config_rejection(self):
         expected = {"routine_planning": {"planner"}, "routine_review": {"scope_guardian"},
                     "scoped_fix": {"developer"}, "ui_validation": {"tester"},
-                    "high_risk_verification": {"tester"}, "release_summary": {"releaser"}}
+                    "high_risk_verification": {"tester"}, "high_risk_implementation": {"developer"},
+                    "release_summary": {"releaser"}}
         self.assertEqual(MODELS.TASK_KINDS, expected)
         for task_kind, roles in expected.items():
             role = next(iter(roles))
@@ -39,7 +40,7 @@ class TaskRoutingTests(unittest.TestCase):
                 document = {"schema_version": 1, "runtimes": {"codex": {other_role: config}}}
                 if other_role == role:
                     MODELS.validate_document(document)
-                    risk = "high" if task_kind == "high_risk_verification" else "low"
+                    risk = "high" if task_kind.startswith("high_risk_") else "low"
                     result = MODELS.select_task_route(role, config, task_kind=task_kind, risk=risk, complexity="simple")
                     self.assertEqual(result["preference"], {"model": "light"})
                 else:
@@ -61,6 +62,15 @@ class TaskRoutingTests(unittest.TestCase):
                 )
                 self.assertEqual(result["routing"]["applied"], risk == "high")
                 self.assertEqual(result["preference"]["effort"], "high" if risk == "high" else "medium")
+
+    def test_high_risk_implementation_applies_to_complex_repairs(self):
+        config = {"model": "base", "effort": "medium",
+                  "task_routes": {"high_risk_implementation": {"model": "expert", "effort": "high"}}}
+        for risk in ("low", "medium", "high", "unknown"):
+            result = self.choose(preference=config, task_kind="high_risk_implementation",
+                                 risk=risk, complexity="complex")
+            self.assertEqual(result["routing"]["applied"], risk == "high")
+            self.assertEqual(result["preference"]["model"], "expert" if risk == "high" else "base")
 
     def test_unknown_medium_high_and_complex_tasks_keep_base(self):
         for risk in ("low", "medium", "high", "unknown"):

@@ -92,6 +92,8 @@ def _parameters(value, model, effort):
             raise ValueError("native model differs from requested model")
     elif model not in {"unknown", "inherit"}:
         raise ValueError("explicit model request requires its native parameter")
+    if effort not in {"unknown", "inherit"} and not {"reasoning_effort", "effort"} & value.keys():
+        raise ValueError("explicit effort request requires its native parameter")
     for key in ("reasoning_effort", "effort"):
         if key in value:
             _effort(value[key])

@@ -6,7 +6,7 @@
 
 model/effort仍为角色基础方案，可选task_routes表示用户允许的分流。先按“本次 > 项目 > 本机 > 模板”选中整个角色，再在该角色内选择路线。项目固定角色没有task_routes时，不继承本机路由；明确inherit同样屏蔽低层方案。
 
-常规路线仅在 risk=low、complexity=simple 时应用。独立验证专家使用 tester 的 high_risk_verification 路线，仅在明确 risk=high 且配置该路线时应用。其余分类沿用基础模型。类型不认识、跨角色或配置非法时报错；未传任务上下文的旧调用保持原结果。
+常规路线仅在 risk=low、complexity=simple 时应用。高风险实现或修复使用 developer 的 high_risk_implementation 路线，独立验证使用 tester 的 high_risk_verification 路线。两条路线均须明确 risk=high 且有对应配置才应用。其余分类沿用基础模型。类型不认识、跨角色或配置非法时报错；未传任务上下文的旧调用保持原结果。
 
 | 角色 | 内部任务类型 | 明确低风险简单任务 | 基础方案 |
 | --- | --- | --- | --- |
