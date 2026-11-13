@@ -17,7 +17,7 @@ Describe a task in your coding-agent session. Pipeline helps the agent define sc
 
 Use it for feature work, fixes with meaningful acceptance checks, and development-to-release handoffs. For a one-line edit or a simple query, a direct agent request may be sufficient. No fixed speedup or token reduction is promised.
 
-[Quick example](TRY-PIPELINE.md) · [Stable v3.14.0](https://github.com/wzm111/pipeline-standard/releases/tag/v3.14.0)
+[Quick example](TRY-PIPELINE.md) · [Stable v3.14.1](https://github.com/wzm111/pipeline-standard/releases/tag/v3.14.1)
 
 ## Get started
 
@@ -29,7 +29,7 @@ cd pipeline-standard
 bash install.sh
 ```
 
-Install only one runtime with `bash install.sh --codex` or `bash install.sh --claude`. These commands install the current default branch. For a fixed release, clone with `--branch v3.14.0 --depth 1` instead.
+Install only one runtime with `bash install.sh --codex` or `bash install.sh --claude`. These commands install the current default branch. For a fixed release, clone with `--branch v3.14.1 --depth 1` instead.
 
 Review the installer before running it. It creates skill links and local model defaults; for Claude Code it also links agents and hooks. Keep the checkout at its installed location. Existing model choices are preserved on reinstall. Hook activation for a project is part of project setup, not a promise that every host operation is intercepted.
 
@@ -128,7 +128,7 @@ When switching agents in the same project or worktree, give the incoming agent t
 
 ## Releases and details
 
-- [Stable v3.14.0](https://github.com/wzm111/pipeline-standard/releases/tag/v3.14.0) · [Main branch updates](releases/UNRELEASED.md) · [Installation, updates, and distribution](DISTRIBUTION.md)
+- [Stable v3.14.1](https://github.com/wzm111/pipeline-standard/releases/tag/v3.14.1) · [Main branch updates](releases/UNRELEASED.md) · [Installation, updates, and distribution](DISTRIBUTION.md)
 - [Project setup](../skills/pipeline/references/interaction.md) · [Roles and models](../skills/pipeline/references/models.md) · [Host compatibility and enforcement](COMPATIBILITY.md)
 - [Check plans](../skills/pipeline/references/check-plan.md) · [Evidence reuse](../skills/pipeline/references/evidence.md) · [Local records and previews](../skills/pipeline/references/audit.md)
 - [Implementation and maintenance](IMPLEMENTATION.md) · [Roadmap](ROADMAP.md)
