@@ -68,6 +68,7 @@ def _row(root, record, document):
         "result_classes": {key: value for key, value in
                            V._counts(checks.get("by_result_class"), sorted(A.RESULTS)).items() if value},
         "compliance": audit.get("compliance"),
+        "adoption": V.adoption_summary(audit.get("adoption")),
         "recent_anomalies": anomalies, "recent_anomalies_truncated": anomalies_truncated,
         "latest_task": None if not detail else {
             "index": detail["index"],
@@ -140,6 +141,11 @@ def render(result):
                      f"{row['run_id'] or 'run 未知'}  {row['snapshot_status']}")
         if row["snapshot_error"]:
             lines.append(f"  快照读取异常 {row['snapshot_error']}")
+        adoption = row["adoption"]
+        states = {True: "是", False: "否", None: "未知"}
+        lines.append(f"  规则采用 {adoption['mode']} · 当前版本 {states[adoption['current']]} · "
+                     f"调用方确认 {states[adoption['caller_acknowledged']]} · "
+                     f"规则过期 {states[adoption['stale']]}")
         compliance = row.get("compliance")
         if compliance is None:
             lines.append("  发布阻断及进度审计：未知")

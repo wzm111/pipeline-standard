@@ -29,6 +29,15 @@ def _enum(value, choices):
     return value if isinstance(value, str) and value in choices else "unknown"
 
 
+def adoption_summary(value):
+    adoption = _dict(value)
+    return {
+        "mode": _enum(adoption.get("mode"), {"managed", "legacy_untracked", "unknown"}),
+        **{key: adoption.get(key) if type(adoption.get(key)) is bool else None
+           for key in ("current", "caller_acknowledged", "stale")},
+    }
+
+
 def preview(project_root, run_id=None, *, live=False):
     """Select explicit/current/latest locally, then expose only typed leaves.
 
@@ -65,7 +74,7 @@ def preview(project_root, run_id=None, *, live=False):
     source = "live" if live and selected is not None else "stored" if selected is not None else "none"
     document = _dict(selected)
     timing, checks = _dict(document.get("timing")), _dict(document.get("checks"))
-    adoption, coverage = _dict(document.get("adoption")), _dict(document.get("coverage"))
+    coverage = _dict(document.get("coverage"))
     tasks, latency = _dict(document.get("tasks")), _dict(document.get("latency"))
     details = document.get("task_details")
     # Stored details pass the closed schema in audit(); live details come from its builder.
@@ -94,9 +103,7 @@ def preview(project_root, run_id=None, *, live=False):
         "checks": {**_counts(checks, ("executed", "reused", "inherited", "unavailable", "check_records")),
                    "by_result_class": _counts(checks.get("by_result_class"), sorted(A.RESULTS))},
         "task_count": _number(tasks.get("count"), count=True),
-        "adoption": {"mode": _enum(adoption.get("mode"), {"managed", "legacy_untracked", "unknown"}),
-                     **{key: adoption.get(key) if type(adoption.get(key)) is bool else None
-                        for key in ("current", "caller_acknowledged", "stale")}},
+        "adoption": adoption_summary(document.get("adoption")),
         "evidence_coverage": {"complete": coverage.get("complete") if type(coverage.get("complete")) is bool else None,
                               "missing_count": _number(coverage.get("missing_count"), count=True)},
         "latency": {"coverage": _enum(latency.get("coverage"), {"unknown", "partial", "recorded_only"}),

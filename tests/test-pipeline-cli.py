@@ -64,6 +64,8 @@ class PipelineCliTests(unittest.TestCase):
             self.assertEqual(row["snapshot_status"], "current")
             self.assertEqual(row["run_status"], "completed")
             self.assertEqual(row["checks"]["executed"], 1)
+            self.assertEqual(row["adoption"], {"mode": "managed", "current": True,
+                                               "caller_acknowledged": True, "stale": False})
 
     def test_paths_and_status_are_read_only_and_resolve_existing_names(self):
         before = sorted(self.root.iterdir())
