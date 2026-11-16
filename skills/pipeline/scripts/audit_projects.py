@@ -100,7 +100,8 @@ def scan(projects=None, *, workspace=None, since=None, limit=5, live=False):
     for root in roots:
         result = A.scan(root, limit, live=live)
         candidates = []
-        for record in result.get("runs", []):
+        records = result.get("runs", [])
+        for record in records:
             document = record.get("live") if live else record.get("audit")
             candidates.append(_row(root, record, document))
         dates = [row["snapshot_at"] for row in candidates if row["snapshot_at"] is not None]
@@ -124,6 +125,13 @@ def scan(projects=None, *, workspace=None, since=None, limit=5, live=False):
             "oldest_snapshot_at": min(dates, key=R._timestamp, default=None),
             "newest_snapshot_at": max(dates, key=R._timestamp, default=None),
         })
+        if live and result["status"] == "ok":
+            available = [record for record in records if "live" in record]
+            projects_checked[-1]["live_coverage"] = {
+                "available": len(available),
+                "without_current_snapshot": sum(record["status"] != "current" for record in available),
+                "unavailable": len(records) - len(available),
+            }
     rows.sort(key=lambda row: (R._timestamp(row["snapshot_at"]).timestamp() if row["snapshot_at"] else float("-inf"),
                                row["project"], row["run_id"] or ""), reverse=True)
     return {"status": "partial" if any(p["status"] != "ok" or p["truncated"] or p["filtered_noncurrent_candidates"]
@@ -209,6 +217,11 @@ def render(result, *, summary_only=False):
         if project["truncated"]:
             reasons = "、".join(labels[reason] for reason in project["truncation_reasons"])
             line += f" · 候选已截断（{reasons}）"
+        live_coverage = project.get("live_coverage")
+        if live_coverage is not None:
+            line += (f" · 实时摘要 {live_coverage['available']} 条"
+                     f"（无当前快照 {live_coverage['without_current_snapshot']} 条）"
+                     f" · 实时不可用 {live_coverage['unavailable']} 条")
         if project["filtered_noncurrent_candidates"]:
             line += f" · 日期筛除的非当前快照 {project['filtered_noncurrent_candidates']} 条"
         if project["error"]:

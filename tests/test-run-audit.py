@@ -292,7 +292,11 @@ class AuditTests(unittest.TestCase):
         before = self.files()
         stored, = M.scan([self.root])["runs"]
         self.assertIsNone(stored["latest_task"])
-        live, = M.scan([self.root], live=True)["runs"]
+        result = M.scan([self.root], live=True)
+        live, = result["runs"]
+        self.assertEqual(result["projects"][0]["live_coverage"], {
+            "available": 1, "without_current_snapshot": 1, "unavailable": 0,
+        })
         self.assertEqual(live["snapshot_status"], "error")
         self.assertEqual(live["latest_task"]["index"], 2)
         self.assertEqual(live["recent_anomalies"], [{"task_index": 1,
