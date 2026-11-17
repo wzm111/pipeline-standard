@@ -736,8 +736,12 @@ def scan(project_root, limit=20, *, live=False):
         root, base = R._paths(root)
         directory = _local(root, "tmp/pipeline/runs")
         identities, truncated = [], False
-        if directory.exists():
-            with os.scandir(directory) as entries:
+        try:
+            entries = os.scandir(directory)
+        except FileNotFoundError:
+            entries = None
+        if entries is not None:
+            with entries:
                 for number, entry in enumerate(entries):
                     if number >= 1000:
                         truncated = True
@@ -747,6 +751,7 @@ def scan(project_root, limit=20, *, live=False):
         identities.sort(reverse=True)
         return {"status": "ok", "runs": [audit(root, identity, live=live) for _, identity in identities[:limit]],
                 "truncated": truncated or len(identities) > limit, "limit": limit,
+                "state_directory_present": entries is not None,
                 "state_files_found": len(identities), "state_enumeration_complete": not truncated,
                 "newest_state_mtime": (datetime.fromtimestamp(identities[0][0] / 1_000_000_000, timezone.utc)
                                        .isoformat() if identities else None),
@@ -764,7 +769,8 @@ def main():
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--live", action="store_true")
     args = parser.parse_args()
-    result = audit(args.project, args.run_id, live=args.live) if args.action == "audit" else scan(args.project, args.limit)
+    result = (audit(args.project, args.run_id, live=args.live) if args.action == "audit"
+              else scan(args.project, args.limit, live=args.live))
     print(json.dumps(result, sort_keys=True))
     return int(result["status"] == "error" and "live" not in result)
 

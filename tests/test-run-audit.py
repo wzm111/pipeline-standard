@@ -70,9 +70,34 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(before, self.files())
 
     def test_no_project_created_by_empty_scan(self):
+        import audit_projects as M
+
         self.assertEqual(A.scan(self.root)["runs"], [])
         self.assertEqual(list(self.root.iterdir()), [])
         self.assertEqual(A.scan(self.root, 101)["error"], "invalid_limit")
+        absent = M.scan([self.root], live=True)
+        self.assertEqual(absent["status"], "partial")
+        self.assertIs(absent["projects"][0]["state_directory_present"], False)
+        self.assertIn("未找到本地运行状态目录", M.render(absent, summary_only=True))
+        self.assertEqual(list(self.root.iterdir()), [])
+        (self.root / "tmp/pipeline/runs").mkdir(parents=True)
+        empty = M.scan([self.root], live=True)
+        self.assertEqual(empty["status"], "ok")
+        self.assertIs(empty["projects"][0]["state_directory_present"], True)
+        self.assertIn("状态文件 0 个", M.render(empty, summary_only=True))
+
+    def test_standalone_scan_forwards_live_without_saving_snapshot(self):
+        state = R.start(self.root)
+        self.target(state).unlink()
+        before = self.files()
+        result = subprocess.check_output(
+            [sys.executable, "-B", A.__file__, "scan", "--project", str(self.root), "--live"],
+            text=True,
+        )
+        record = json.loads(result)["runs"][0]
+        self.assertEqual(record["status"], "missing")
+        self.assertEqual(record["live"]["status"], "running")
+        self.assertEqual(before, self.files())
 
     def test_bounded_scan_orders_candidates_by_state_mtime(self):
         first = R.start(self.root)

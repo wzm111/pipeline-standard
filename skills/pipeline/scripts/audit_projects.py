@@ -117,6 +117,7 @@ def scan(projects=None, *, workspace=None, since=None, limit=5, live=False):
             "truncated": result.get("truncated", False),
             "truncation_reasons": result.get("truncation_reasons", []),
             "candidates_checked": len(candidates), "rows_returned": len(visible),
+            "state_directory_present": result.get("state_directory_present"),
             "state_files_found": result.get("state_files_found"),
             "state_enumeration_complete": result.get("state_enumeration_complete"),
             "newest_state_mtime": result.get("newest_state_mtime"),
@@ -134,7 +135,8 @@ def scan(projects=None, *, workspace=None, since=None, limit=5, live=False):
             }
     rows.sort(key=lambda row: (R._timestamp(row["snapshot_at"]).timestamp() if row["snapshot_at"] else float("-inf"),
                                row["project"], row["run_id"] or ""), reverse=True)
-    return {"status": "partial" if any(p["status"] != "ok" or p["truncated"] or p["filtered_noncurrent_candidates"]
+    return {"status": "partial" if any(p["status"] != "ok" or p["state_directory_present"] is False
+                                      or p["truncated"] or p["filtered_noncurrent_candidates"]
                                       for p in projects_checked)
             or truncated or any(row["snapshot_status"] != "current" for row in rows) else "ok",
             "source": "live" if live else "stored", "since": since, "limit_per_project": limit,
@@ -210,7 +212,9 @@ def render(result, *, summary_only=False):
             span = f"{project['oldest_snapshot_at']} 至 {project['newest_snapshot_at']}"
         line = (f"{project['project']}  已查 {project['candidates_checked']} 个候选 · "
                 f"返回 {project['rows_returned']} 条 · {span} · 无日期 {project['undated_candidates']} 条")
-        if project["state_enumeration_complete"] is not None:
+        if project.get("state_directory_present") is False:
+            line += " · 未找到本地运行状态目录"
+        elif project["state_enumeration_complete"] is not None:
             enumeration = "完整" if project["state_enumeration_complete"] else "截断"
             mtime = project["newest_state_mtime"] or "无"
             line += f" · 枚举{enumeration} · 状态文件 {project['state_files_found']} 个 · 观察到的最新修改 {mtime}"
