@@ -255,6 +255,86 @@ class ReleasePlanCloseoutTests(unittest.TestCase):
         self.assertIn("no matching completed runner", error["message"])
         self.counter_is_one()
 
+    def retained_fixture(self, *, corrected_audit=False):
+        activation = self.root / "activate.py"
+        activation.write_text(activation.read_text() +
+            "print('[build-stage] source-gates started')\n"
+            "print(' ✓ tests/unit/example.test.ts (4 tests) 10ms')\n"
+            "print('[build-stage] source-gates 1.0s exit=0')\n")
+        active, _ = self.activate_and_readback()
+        binding = self.bind()["release_binding"]
+        paired = self.cli("check", "--name", "paired", "--scope", "source",
+                          "--coverage", "paired_version", "--", sys.executable, "-B", "-c",
+                          f"print('public-retail {VERSION}'); print('public-gtm GTM-EXAMPLE 32')")["report"]
+        if corrected_audit:
+            self.cli("task-start", "--task-id", "initial-audit", "--retrospective",
+                     "--review-risk", "high", "--review-reason", "review release evidence",
+                     "--goal", "audit metadata", "--accept", "original records")
+            audit = ["--", sys.executable, "-B", "-c", "print('original evidence checked')"]
+            for name, labels in [
+                ("misclassified-audit", [ACTIVATION, IDENTITY]),
+                ("corrected-audit", ["historical_" + ACTIVATION, "historical_" + IDENTITY]),
+            ]:
+                self.cli("check", "--name", name, "--scope", "source", "--intent", "check",
+                         "--coverage", *labels, *audit)
+            self.cli("task-end", "--task-id", "initial-audit")
+        self.cli("task-start", "--task-id", "historical-review", "--retrospective",
+                 "--review-risk", "high", "--review-reason", "original engineering acceptance",
+                 "--goal", "review release evidence", "--accept", "same-version evidence")
+        self.env["RELEASE_FIXTURE_SESSION"] = "later historical review"
+        self.retained = {"binding": binding, "test_groups": {"unit": {"tests/unit/example.test.ts": 4}},
+                         "paired_readback": {"report": paired, "version_marker": ["public-retail ", ""],
+                                             "paired_marker": ["public-gtm GTM-EXAMPLE ", ""],
+                                             "paired_version": "32"}}
+        return active
+
+    def retain(self, name, *, expected=0):
+        return self.cli("retain-release", "--name", name, "--json", json.dumps(self.retained), expected=expected)
+
+    def test_retains_original_tests_and_both_readbacks_from_changed_environment(self):
+        self.retained_fixture()
+        retained = self.retain("retained")
+        self.assertEqual(retained["test_files"], {"tests/unit/example.test.ts": 4})
+        self.assertEqual(retained["coverage"], sorted([ACTIVATION, IDENTITY, "live_feature", "paired_version", "unit"]))
+        self.checks = {"archive": retained["check"]}
+        self.plan = self.save_plan("retrospective")
+        self.assertTrue(self.execute("archive", "evidence-only")["reused"])
+        qa = self.qa("needs-experts", expected=1)
+        self.assertEqual(qa["missing_checks"], [])
+        self.assertEqual(qa["check_failures"], {"dual_review": "review_required_but_not_declared"})
+        self.counter_is_one()
+        source = self.root / "source"
+        source.write_text("edited paired readback scope")
+        self.assertIn("archive", self.qa("input-changed", expected=1)["check_failures"])
+        self.counter_is_one()
+
+    def test_corrected_retrospective_audit_does_not_hide_a_later_activation_failure(self):
+        self.retained_fixture(corrected_audit=True)
+        self.retain("corrected-history")
+        self.cli("check", "--name", "later-activation-failure", "--scope", "source",
+                 "--coverage", ACTIVATION, "--", sys.executable, "-B", "-c",
+                 "raise SystemExit(1)", expected=1)
+        self.assertIn("newer release evidence", self.retain("must-reject", expected=2)["message"])
+        self.counter_is_one()
+
+    def test_later_paired_failure_with_a_different_command_blocks_archive(self):
+        self.retained_fixture()
+        self.retain("first-pair")
+        self.cli("check", "--name", "new-pair-failure", "--scope", "readback.py",
+                 "--coverage", "paired_version", "--", sys.executable, "-B", "-c",
+                 "raise SystemExit(1)", expected=1)
+        self.assertIn("newer paired readback", self.retain("superseded-pair", expected=2)["message"])
+        self.counter_is_one()
+
+    def test_rejects_unconfirmed_counts_and_mismatched_paired_version(self):
+        self.retained_fixture()
+        self.retained["test_groups"]["unit"]["tests/unit/example.test.ts"] = 5
+        self.assertIn("file/count", self.retain("wrong-count", expected=2)["message"])
+        self.retained["test_groups"]["unit"]["tests/unit/example.test.ts"] = 4
+        self.retained["paired_readback"]["paired_version"] = "31"
+        self.assertIn("version does not match", self.retain("wrong-pair", expected=2)["message"])
+        self.counter_is_one()
+
     def test_readback_env_and_activation_inputs_remain_strict(self):
         self.activate_and_readback()
         self.bind()

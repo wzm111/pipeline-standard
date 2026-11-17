@@ -100,3 +100,17 @@ python3 <runner> plan-bind-release --project <root> --receipt <receipt> --plan <
 原计划已登记成功的激活项只返回仍有效的证据。环境变化导致证据失效时，`run` 和 `verify` 均拒绝重跑该激活项。若原计划的线上回读直接依赖该激活项，回读可先核验原激活的历史证据，再实际执行。其余依赖仍需当前有效证据。
 
 绑定成功后走原计划的 `qa` 和 `finish`。二者均复核绑定及最新观察。绑定失效时该激活项拒绝重放。选择的新回读必须来自原计划实际执行，补回读后重新登记绑定并重做 QA。已采用分阶段发布控制的交付仍走其原有收口。
+
+## 原 AWS 结果的回顾性发布封存
+
+原运行已经登记有效的单体发布绑定，且用户要求沿用同次 AWS 业务测试结果时，可在原运行开启同交付的 `--retrospective` 任务。该入口不执行命令，不用于判断当前线上版本，也不解除普通检查的环境约束。
+
+```sh
+python3 <runner> retain-release --receipt <原收据> --name <证据名> --json '{
+  "binding":"<原运行登记的 planned_release 引用>",
+  "test_groups":{"critical_flow":{"tests/unit/example.test.ts":4}},
+  "paired_readback":{"report":"<同 run 的原 runner 线上检查>","version_marker":["public-retail ",""],"paired_marker":["public-gtm GTM-EXAMPLE ",""],"paired_version":"32"}
+}'
+```
+
+`paired_readback` 可省略。存在配对记录时，原日志须在激活结束后读取到相同 C 端版本和指定配套版本。测试覆盖采用候选原 `source-gates` 内唯一的 Vitest 成功文件/数量行，覆盖归属由独立专家确认。工具验证原 runner 执行区间、最新观察、绑定、日志、候选输入和执行工具。历史激活及同版本回读沿用其各自原进程环境摘要，只接受已绑定的历史事实。返回的 `check` 对象直接加入当前计划，登记两份独立评审并走 `qa` 和 `finish`。阶段、凭证和任何后续失败均保留，不调用原测试或发布命令。

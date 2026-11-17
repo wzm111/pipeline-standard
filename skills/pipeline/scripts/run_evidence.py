@@ -205,6 +205,10 @@ def reusable_check(project_root, run_id, relative, *, command, environment, impa
             return {"reusable": False, "reason": "check_not_passed"}
         if payload["command"] != command or payload["environment"] != _environment(environment):
             return {"reusable": False, "reason": "command_or_environment_changed"}
+        if payload.get("observation_kind") == "retained_release":
+            import release_archive
+            release_archive.validate(Path(project_root).resolve(strict=True), state, payload)
+            return {"reusable": True, "reason": "authenticated_retained_release"}
         if fingerprint(project_root, payload["scope"], payload["environment"]) != payload["fingerprint"]:
             return {"reusable": False, "reason": "inputs_changed"}
         root = Path(project_root).resolve(strict=True)

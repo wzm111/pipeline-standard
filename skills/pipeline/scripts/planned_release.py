@@ -69,7 +69,7 @@ def _log_identity(log, source):
     return version, target
 
 
-def _source(root, state, snapshot, plan_ref, check_id, check, source, *, historical):
+def _source(root, state, snapshot, plan_ref, check_id, check, source, *, historical, retained_markers=None):
     binding_ref, binding = snapshot["bindings"].get((plan_ref, check_id), (None, {}))
     label = ACTIVATION if historical else IDENTITY
     if not binding_ref or source["binding"]["path"] != binding_ref:
@@ -87,33 +87,30 @@ def _source(root, state, snapshot, plan_ref, check_id, check, source, *, histori
     proof = D._read_reference(root, source["check"], "check")
     if (any(reference["run_id"] != run_id for reference in source.values())
             or Path(binding_ref).stem != Path(ref).stem
-            or proof != actual["payload"] or not Q._current(actual, state)
-            or not Q._current(Q._read(root, state, binding_ref, "planned_check"), state)
+            or proof != actual["payload"]
+            or (retained_markers is None and (not Q._current(actual, state)
+                or not Q._current(Q._read(root, state, binding_ref, "planned_check"), state)))
             or proof.get("inherited_from") or proof.get("observation_kind")
             or proof.get("result_class") != "success" or proof.get("inputs_stable") is not True
             or proof.get("argv") != check["argv"] or proof.get("scope") != check["scope"]
             or proof.get("intent") != check.get("intent", "test") or proof.get("cwd", ".") != check["cwd"]):
         raise ValueError("original release check identity is invalid")
-    started, finished = (R._timestamp(proof[key]) for key in ("started_at", "finished_at"))
-    task_start = Q.boundary(state)
-    if finished < started or (task_start and started < R._timestamp(task_start)):
-        raise ValueError("release check timestamps do not belong to the current task")
-    # Legacy plans already have a runner-owned operation span, independently
-    # of the report payload accepted by their older generic report command.
-    label_name = Path(ref).stem
-    recorded = R._timestamp(actual["recorded_at"])
+    started, finished, ended = executed(state, ref, actual)
+    if retained_markers is None:
+        task_start = Q.boundary(state)
+        if task_start and started < R._timestamp(task_start):
+            raise ValueError("release check timestamps do not belong to the current task")
     bound_at = R._timestamp(Q._read(root, state, binding_ref, "planned_check")["recorded_at"])
-    expected_log = f"tmp/pipeline/runs/{run_id}/artifacts/logs/{label_name}.log"
-    if (proof["log_path"] != expected_log or not any(
-            span["category"] == "verify" and span["label"] == label_name and span["status"] == "executed"
-            and R._timestamp(span["start"]) <= started <= finished <= recorded <= R._timestamp(span["end"]) <= bound_at
-            for span in state.get("operation_spans", []))):
-        raise ValueError("release proof has no matching completed runner operation")
-    if (snapshot["observations"].get(P._identity(proof)) != ref
-            or snapshot["release_observations"].get(label) != ref):
+    if ended > bound_at:
+        raise ValueError("release binding predates runner completion")
+    latest = snapshot["release_observations"].get(label)
+    if retained_markers is not None and latest != ref:
+        import release_archive
+        latest = release_archive.latest_source(root, state, snapshot, label, retained_markers)
+    if snapshot["observations"].get(P._identity(proof)) != ref or latest != ref:
         raise ValueError("newer release evidence requires a new binding")
     env = P._environment(root, state["owner_token"], check)
-    if historical:
+    if historical or retained_markers is not None:
         # Preserve the recorded process identity only for the historical fact.
         # Current executable, context, cwd, inputs and log still have to match.
         env["process_env_sha256"] = proof["environment"]["process_env_sha256"]
@@ -121,14 +118,38 @@ def _source(root, state, snapshot, plan_ref, check_id, check, source, *, histori
                                environment=env, impact_covered=True, coverage=check["coverage"])
     if not verdict["reusable"]:
         raise ValueError("release evidence is invalid: " + verdict["reason"])
+    return proof, read_log(root, proof), started, finished
+
+
+def executed(state, ref, report):
+    """Find the runner span for this original execution, independent of later tasks."""
+    proof = report["payload"]
+    started, finished = (R._timestamp(proof[key]) for key in ("started_at", "finished_at"))
+    recorded = R._timestamp(report["recorded_at"])
+    label = Path(ref).stem
+    spans = [R._timestamp(span["end"]) for span in state.get("operation_spans", [])
+             if span["category"] == "verify" and span["label"] == label and span["status"] == "executed"
+             and R._timestamp(span["start"]) <= started <= finished <= recorded <= R._timestamp(span["end"])]
+    expected_log = f"tmp/pipeline/runs/{state['run_id']}/artifacts/logs/{label}.log"
+    if len(spans) != 1 or proof["log_path"] != expected_log:
+        raise ValueError("release proof has no matching completed runner operation")
+    return started, finished, spans[0]
+
+
+def read_log(root, proof):
     log = E._local(root, proof["log_path"]).read_bytes()
     if hashlib.sha256(log).hexdigest() != proof["log_sha256"]:
         raise ValueError("release log changed during validation")
-    return proof, log.decode("utf-8"), started, finished
+    return log.decode("utf-8")
 
 
 def validate(root, state, payload, snapshot):
     """Apply the historical exception only to the selected activation check."""
+    return validated_pair(root, state, payload, snapshot)[0]
+
+
+def validated_pair(root, state, payload, snapshot, *, retained=False):
+    """Retained evidence is only used by the dedicated, already-bound archive path."""
     if "run_policy" not in state:
         raise ValueError("planned release binding requires a managed run")
     if not isinstance(payload, dict) or set(payload) != {"plan", "activation", "readback"}:
@@ -138,7 +159,7 @@ def validate(root, state, payload, snapshot):
     plan = P._read_plan(root, run_id, state["owner_token"], plan_ref, state, snapshot)
     if (payload["plan"]["run_id"] != run_id
             or payload["plan"]["sha256"] != P._cached_digest(root, plan_ref, snapshot)
-            or not Q._current(Q._read(root, state, plan_ref, "check_plan"), state)):
+            or (not retained and not Q._current(Q._read(root, state, plan_ref, "check_plan"), state))):
         raise ValueError("release binding requires the original immutable plan in this task")
     activation, readback = payload["activation"], payload["readback"]
     for side in (activation, readback):
@@ -151,10 +172,10 @@ def validate(root, state, payload, snapshot):
         raise ValueError("select an activation-only check and a separate live identity check")
     mutation, activation_log, _, activation_end = _source(
         root, state, snapshot, plan_ref, activation["id"], activate_check,
-        {key: activation[key] for key in ("binding", "check")}, historical=True)
+        {key: activation[key] for key in ("binding", "check")}, historical=True, retained_markers=activation if retained else None)
     live, live_log, live_start, _ = _source(
         root, state, snapshot, plan_ref, readback["id"], live_check,
-        {key: readback[key] for key in ("binding", "check")}, historical=False)
+        {key: readback[key] for key in ("binding", "check")}, historical=False, retained_markers=readback if retained else None)
     if live_start <= activation_end:
         raise ValueError("live readback must start after activation finished")
     version, target = _log_identity(activation_log, activation)
@@ -164,7 +185,7 @@ def validate(root, state, payload, snapshot):
             or any(proof["environment"].get("context:release_target", target) != target
                    for proof in (mutation, live))):
         raise ValueError("release version or target does not match live readback")
-    return version, target
+    return (version, target), (mutation, activation_log, activation_end), live
 
 
 def bind(root, run_id, owner, plan_ref, name, activation_id, readback_id, markers):

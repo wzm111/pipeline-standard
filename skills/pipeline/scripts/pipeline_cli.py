@@ -145,7 +145,7 @@ def parser():
     handoff.add_argument("--run-id", required=True)
     handoff.add_argument("--detail", help="read only the named detail section")
     owned = {}
-    for name in ("handoff-save", "update", "check", "report", "finish", "plan", "plan-preflight", "plan-bind", "plan-bind-release", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "expert-prepare", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
+    for name in ("handoff-save", "update", "check", "report", "finish", "plan", "plan-preflight", "plan-bind", "plan-bind-release", "retain-release", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "expert-prepare", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
@@ -174,6 +174,8 @@ def parser():
     for action in ("observe-begin", "observe-finish"):
         owned[action].add_argument("--id", required=True, dest="observation_id")
     owned["observe-begin"].add_argument("--json", required=True, dest="declaration")
+    owned["retain-release"].add_argument("--name", required=True)
+    owned["retain-release"].add_argument("--json", required=True, dest="payload")
     observe_finish = owned["observe-finish"]
     observe_finish.add_argument("--exit-code", required=True)
     observe_finish.add_argument("--log-path", required=True)
@@ -363,6 +365,9 @@ def dispatch(args):
                 "audit": _optional_audit(root, state["run_id"]), **paths()}, 0
     receipt = _receipt(root, args.receipt)
     run_id, owner = receipt["run_id"], receipt["owner_token"]
+    if args.action == "retain-release":
+        import release_archive
+        return release_archive.record(root, run_id, owner, args.name, json.loads(args.payload)), 0
     if args.action == "handoff-save":
         import agent_handoff
         raw = sys.stdin.buffer.read(agent_handoff.MAX_INPUT_BYTES + 1)

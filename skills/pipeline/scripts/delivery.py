@@ -176,6 +176,9 @@ def adopt(root, base, state, reference):
     for check in packet["checks"]:
         try:
             payload = _read_reference(root, check, "check")
+            if payload.get("observation_kind") == "retained_release":
+                skipped.append({"reference": deepcopy(check), "reason": "historical_release_not_current_execution"})
+                continue
             E.validate_lineage(root, payload)
         except (OSError, ValueError, KeyError, TypeError) as error:
             skipped.append({"reference": deepcopy(check), "reason": type(error).__name__})

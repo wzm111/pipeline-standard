@@ -49,8 +49,12 @@ def _validate(root, checks, required, owner, inherited, *, scan_inputs=True):
                     raise ValueError("declare narrow input directories, not the project root")
             env = E._environment(value.get("environment"))
             digest = env.get("host_identity_sha256")
-            if set(env) != {"host_identity_sha256"} or not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
-                raise ValueError("observed checks require the explicit host identity hash")
+            if set(env) == {"release_archive_sha256"}:
+                digest = env["release_archive_sha256"]
+            elif set(env) != {"host_identity_sha256"}:
+                raise ValueError("observed checks require the explicit evidence identity hash")
+            if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                raise ValueError("observed checks require the explicit evidence identity hash")
             if value.get("intent", "test") not in {"test", "check"}:
                 raise ValueError("only test/check host observations can be planned")
             normalized[key] = {**value, "coverage": labels, "environment": env}
@@ -163,6 +167,12 @@ def _observed_proof(root, run_id, state, check, *, allow_old=False):
         raise ValueError("observed source must be registered in this run")
     report = E.read_report(root, run_id, ref, kind="check")
     proof = report["payload"]
+    if proof.get("observation_kind") == "retained_release":
+        if (proof["environment"] != check["environment"] or proof["coverage"] != check["coverage"]
+                or proof["scope"] != check["scope"] or check.get("intent") != "check"
+                or not M._current(report, state)):
+            raise ValueError("retained release declaration must match the current archive")
+        return proof
     ticket = state.get("observed_checks", {}).get(proof.get("observation_id"), {})
     if (proof.get("observation_kind") != "host_tool" or ticket.get("status") != "completed"
             or ticket.get("report") != ref or proof.get("intent") not in {"test", "check"}
@@ -286,7 +296,7 @@ def _snapshot(root, run_id, state):
         elif "/artifacts/check/" in ref:
             p = _report(root, run_id, ref, "check", snapshot)
             snapshot["observations"][_identity(p)] = ref
-            if not p.get("inherited_from"):
+            if not p.get("inherited_from") and p.get("observation_kind") != "retained_release":
                 for label in ("release_activation", "release_identity"):
                     if label in p.get("coverage", []):
                         snapshot["release_observations"][label] = ref
@@ -406,7 +416,8 @@ def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=Fa
         ref, reason = _valid_observed(root, run_id, state, check, snapshot, allow_old=impact_covered is True)
         if ref is None:
             raise ValueError("host evidence requires actual re-observation: " + reason)
-        result = {"report": ref, "exit_code": 0, "reused": True, "observation_kind": "host_tool"}
+        result = {"report": ref, "exit_code": 0, "reused": True,
+                  "observation_kind": _report(root, run_id, ref, "check", snapshot)["observation_kind"]}
         if impact_covered is True:
             reuse = E.write_report(root, run_id, owner, "check_reuse", name,
                         {"source": ref, "coverage": check["coverage"],
