@@ -85,6 +85,12 @@ def write_report(project_root, run_id, owner_token, kind, name, payload):
             payload = progress_feedback.inspect_feedback(payload["messages"])
             if milestone is not None:
                 payload["milestone"] = milestone
+        if kind == "planned_release":
+            import check_plan
+            import planned_release
+            import run_policy
+            run_policy.require(root, state)
+            planned_release.validate(root, state, payload, check_plan._snapshot(root, run_id, state))
         if kind == "qa" and "run_policy" in state:
             import managed_qa
             payload = managed_qa.canonical(root, state, payload)
@@ -98,6 +104,10 @@ def write_report(project_root, run_id, owner_token, kind, name, payload):
         run_state._atomic(path, report)
         if relative not in state["artifacts"]:
             state["artifacts"].append(relative)
+        if kind == "planned_release":
+            bindings = state.setdefault("planned_release_bindings", {}).setdefault(payload["plan"]["path"], {})
+            bindings[payload["activation"]["id"]] = {
+                "path": relative, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
         state["updated_at"] = run_state._now()
         run_state._atomic(state_path, state)
     return relative

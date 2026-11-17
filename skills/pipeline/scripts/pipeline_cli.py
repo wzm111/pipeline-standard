@@ -144,7 +144,7 @@ def parser():
     handoff.add_argument("--run-id", required=True)
     handoff.add_argument("--detail", help="read only the named detail section")
     owned = {}
-    for name in ("handoff-save", "update", "check", "report", "finish", "plan", "plan-preflight", "plan-bind", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "expert-prepare", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
+    for name in ("handoff-save", "update", "check", "report", "finish", "plan", "plan-preflight", "plan-bind", "plan-bind-release", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "expert-prepare", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
@@ -217,12 +217,16 @@ def parser():
     report.add_argument("--json", required=True, dest="payload")
     owned["plan"].add_argument("--name", required=True)
     owned["plan"].add_argument("--json", required=True, dest="payload", help="agent-maintained checks and required_checks")
-    for action in ("run", "qa", "verify", "plan-preflight", "plan-bind"):
+    for action in ("run", "qa", "verify", "plan-preflight", "plan-bind", "plan-bind-release"):
         if action != "verify":
             owned[action].add_argument("--plan", required=True)
         owned[action].add_argument("--name", required=True)
     owned["plan-bind"].add_argument("--id", required=True, dest="check_id")
     owned["plan-bind"].add_argument("--check", required=True, dest="check_ref")
+    owned["plan-bind-release"].add_argument("--id", required=True, dest="check_id")
+    owned["plan-bind-release"].add_argument("--readback-id", required=True)
+    owned["plan-bind-release"].add_argument("--json", required=True, dest="markers",
+                                            help="literal version and target log markers for both checks")
     owned["run"].add_argument("--id", required=True, dest="check_id")
     owned["run"].add_argument("--impact-covered", action="store_true")
     owned["qa"].add_argument("--summary", default="")
@@ -424,7 +428,7 @@ def dispatch(args):
             state = T.resume_work(root, run_id, owner, evidence=args.evidence)
         return {**_public(state), "handoff": {key: state["continuity_wait"].get(key)
                 for key in ("status", "reason", "action", "verify")}}, 0
-    if args.action in {"plan", "plan-preflight", "plan-bind", "run", "qa", "verify"}:
+    if args.action in {"plan", "plan-preflight", "plan-bind", "plan-bind-release", "run", "qa", "verify"}:
         import check_plan as P
         if args.action == "plan-preflight":
             result = P.preflight_plan(root, run_id, owner, args.plan, args.name)
@@ -460,6 +464,11 @@ def dispatch(args):
             return result, 0
         if args.action == "plan-bind":
             return P.bind_check(root, run_id, owner, args.plan, args.check_id, args.name, args.check_ref), 0
+        if args.action == "plan-bind-release":
+            import planned_release
+            ref = planned_release.bind(root, run_id, owner, args.plan, args.name, args.check_id,
+                                       args.readback_id, json.loads(args.markers))
+            return {"run_id": run_id, "release_binding": ref}, 0
         if args.action == "run":
             result = P.run_planned(root, run_id, owner, args.plan, args.check_id, args.name,
                                    impact_covered=args.impact_covered)
@@ -468,7 +477,7 @@ def dispatch(args):
         ref = P.qa_from_plan(root, run_id, owner, args.plan, args.name, summary=args.summary)
         payload = E.read_report(root, run_id, ref, kind="qa")["payload"]
         return {"run_id": run_id, "report": ref, **{k: payload[k] for k in
-                ("gate", "required_checks", "missing_checks", "check_failures", "environment_diagnostics")}}, 0 if payload["gate"] == "PASS" else 1
+                ("gate", "required_checks", "missing_checks", "check_failures", "environment_diagnostics", "release_bindings") if k in payload}}, 0 if payload["gate"] == "PASS" else 1
     if args.action == "update":
         changes = {key: value for key in ("stage", "activity", "next") if (value := getattr(args, key)) is not None}
         if not changes:
@@ -501,6 +510,8 @@ def dispatch(args):
             impact_covered=args.impact_covered, cwd=args.cwd, protected_paths=args.protected_path)
         return result, 0 if result["exit_code"] == 0 else 1
     if args.action == "report":
+        if args.kind in {"check", "planned_check", "planned_release"}:
+            raise ValueError("use the check, run, observe or plan binding command to register runner evidence")
         submitted = json.loads(args.payload)
         relative = E.write_report(root, run_id, owner, args.kind, args.name, submitted)
         if args.kind == "qa" and "run_policy" in R.status(root, run_id)["state"]:

@@ -274,6 +274,10 @@ def _ordered(checks):
 def _snapshot(root, run_id, state):
     # One operation-local index; never reuse across a later execution or QA.
     snapshot = {"reports": {}, "digests": {}, "bindings": {}, "observations": {},
+                "release_bindings": {(plan, key): ref
+                                     for plan, bindings in state.get("planned_release_bindings", {}).items()
+                                     for key, ref in bindings.items()},
+                "release_observations": {},
                 "positions": {ref: i for i, ref in enumerate(state["artifacts"])}}
     for ref in state["artifacts"]:
         if "/artifacts/planned_check/" in ref:
@@ -282,6 +286,10 @@ def _snapshot(root, run_id, state):
         elif "/artifacts/check/" in ref:
             p = _report(root, run_id, ref, "check", snapshot)
             snapshot["observations"][_identity(p)] = ref
+            if not p.get("inherited_from"):
+                for label in ("release_activation", "release_identity"):
+                    if label in p.get("coverage", []):
+                        snapshot["release_observations"][label] = ref
     return snapshot
 
 
@@ -333,6 +341,11 @@ def bind_check(root, run_id, owner, plan_ref, check_id, name, check_ref):
     return {**result, "plan_ref": plan_ref, "check_id": check_id, "planned_report": ref}
 
 
+def _successful_activation(check, binding):
+    return (binding is not None and "release_activation" in check["coverage"]
+            and binding["result"]["exit_code"] == 0)
+
+
 def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=False):
     state = _owned(root, run_id, owner)
     snapshot = _snapshot(root, run_id, state)
@@ -351,6 +364,12 @@ def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=Fa
             continue
         try:
             ref, _ = _valid(root, run_id, owner, state, plan_ref, key, plan["checks"][key], snapshot)
+            if (ref is None and key in check.get("depends_on", []) and "argv" in check
+                    and "release_identity" in check["coverage"]
+                    and "release_activation" not in check["coverage"]):
+                import planned_release
+                planned_release.readback_prerequisite(root, state, snapshot, plan_ref, key, plan["checks"][key])
+                continue
         except (OSError, ValueError, KeyError, TypeError):
             ref = None
         if ref is None:
@@ -364,12 +383,25 @@ def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=Fa
         raise ValueError(message + ", ".join(blocked[:8])
                          + (f" (+{len(blocked) - 8} more)" if len(blocked) > 8 else ""))
     binding_ref, binding = snapshot["bindings"].get((plan_ref, check_id), (None, None))
+    release = snapshot["release_bindings"].get((plan_ref, check_id))
+    if release:
+        ref, reason = _valid(root, run_id, owner, state, plan_ref, check_id, check, snapshot)
+        if ref is None:
+            raise ValueError("bound release evidence is no longer valid: " + reason)
+        return {"report": ref, "exit_code": 0, "reused": True, "plan_ref": plan_ref,
+                "check_id": check_id, "planned_report": binding_ref, "release_binding": release["path"]}
     if binding and binding.get("evidence_only"):
         ref, reason = _valid(root, run_id, owner, state, plan_ref, check_id, check, snapshot)
         if ref is None:
             raise ValueError("bound evidence is no longer valid: " + reason)
         return {**binding["result"], "plan_ref": plan_ref, "check_id": check_id,
                 "planned_report": binding_ref}
+    if _successful_activation(check, binding):
+        ref, reason = _valid(root, run_id, owner, state, plan_ref, check_id, check, snapshot)
+        if ref is None:
+            raise ValueError("recorded release activation cannot be rerun; inspect readback evidence: " + reason)
+        return {"report": ref, "exit_code": 0, "reused": True, "plan_ref": plan_ref,
+                "check_id": check_id, "planned_report": binding_ref}
     if "observed_ref" in check:
         ref, reason = _valid_observed(root, run_id, state, check, snapshot, allow_old=impact_covered is True)
         if ref is None:
@@ -406,6 +438,18 @@ def _valid(root, run_id, owner, state, plan_ref, check_id, check, snapshot=None)
     snapshot = snapshot if snapshot is not None else _snapshot(root, run_id, state)
     if "observed_ref" in check:
         return _valid_observed(root, run_id, state, check, snapshot)
+    release = snapshot["release_bindings"].get((plan_ref, check_id))
+    if release:
+        import planned_release
+        try:
+            ref = release["path"]
+            if ref not in state["artifacts"] or _cached_digest(root, ref, snapshot) != release["sha256"]:
+                return None, "historical_release_binding_changed"
+            payload = _report(root, run_id, ref, "planned_release", snapshot)
+            planned_release.validate(Path(root).resolve(strict=True), state, payload, snapshot)
+            return payload["activation"]["check"]["path"], None
+        except (OSError, ValueError, KeyError, TypeError):
+            return None, "historical_release_binding_invalid"
     latest = snapshot["bindings"].get((plan_ref, check_id), (None, None))[1]
     if latest is None:
         return None, "not_executed"
@@ -496,7 +540,7 @@ def inspect_state(root, run_id, owner, plan_ref, state, summary="", *, snapshot=
     """Original strict judgment using an already-owned snapshot; no write lock."""
     snapshot = snapshot if snapshot is not None else _snapshot(root, run_id, state)
     plan = _read_plan(root, run_id, owner, plan_ref, state, snapshot)
-    checks, failures, diagnostics = [], {}, {}
+    checks, failures, diagnostics, releases = [], {}, {}, {}
     for check_id, check in plan["checks"].items():
         try:
             ref, reason = _valid(root, run_id, owner, state, plan_ref, check_id, check, snapshot)
@@ -504,6 +548,9 @@ def inspect_state(root, run_id, owner, plan_ref, state, summary="", *, snapshot=
             ref, reason = None, "unconfirmed_evidence"
         if ref:
             checks.append(ref)
+            release = snapshot["release_bindings"].get((plan_ref, check_id))
+            if release:
+                releases[check_id] = release
         else:
             failures[check_id] = reason
             if reason in {"command_or_environment_changed", "superseded_observation"}:
@@ -529,7 +576,8 @@ def inspect_state(root, run_id, owner, plan_ref, state, summary="", *, snapshot=
     return {"gate": "CONCERNS" if failures or missing else "PASS", "plan_ref": plan_ref,
             "required_checks": required, "missing_checks": missing,
             "checks": checks, "check_failures": failures,
-            "environment_diagnostics": diagnostics, "summary": summary}
+            "environment_diagnostics": diagnostics, "summary": summary,
+            **({"release_bindings": releases} if releases else {})}
 
 
 def qa_from_plan(root, run_id, owner, plan_ref, name, summary=""):
@@ -617,6 +665,23 @@ def preflight_plan(root, run_id, owner, plan_ref, name, *, include_reuse=True):
                 fail(key, "attempt", "attempt_name_already_used")
         except (OSError, ValueError, TypeError):
             fail(key, "attempt", "invalid_attempt_name")
+        if (plan_ref, key) in snapshot["release_bindings"]:
+            ref, reason = _valid(root, run_id, owner, state, plan_ref, key, check, snapshot)
+            if include_reuse:
+                reuse[key] = {"reusable": ref is not None, "reason": reason or "valid_historical_release"}
+            if ref is None:
+                fail(key, "evidence", reason)
+            elif not include_reuse:
+                fail(key, "evidence", "bound_release_requires_plan_qa")
+            continue
+        _, binding = snapshot["bindings"].get((plan_ref, key), (None, None))
+        if _successful_activation(check, binding):
+            ref, reason = _valid(root, run_id, owner, state, plan_ref, key, check, snapshot)
+            if include_reuse:
+                reuse[key] = {"reusable": ref is not None, "reason": reason or "valid_recorded_activation"}
+            if ref is None:
+                fail(key, "evidence", reason)
+            continue
         if "observed_ref" in check:
             ref, reason = _valid_observed(root, run_id, state, check, snapshot)
             if ref is None:

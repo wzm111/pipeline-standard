@@ -83,3 +83,20 @@ Python对应接口：`check_plan.save_plan`、`run_planned`、`qa_from_plan`、�
 候选产物上的定向快检可标记 `layer: "candidate"`，通过 `depends_on` 指定实际候选构建及其必要依赖。执行顺序为 quick、候选所需前置、候选快检、剩余终验。候选快检失败时停在当前结果，修复后复用仍有效的前置证据。候选依赖里只放真实前置，避免把本可后置的全量检查拖入关键路径。
 
 高风险任务补跑前先看同一份 `plan-preflight` 的 `review`、`unplanned_checks` 和 `reuse`。它们分别显示方案记录是否对应本计划、哪些当前检查未纳入计划，以及当前环境下各检查的复用判定。方案引用变化时返回已有差量。静态 `ready` 只表示执行入口可用，QA 仍独立核验方案和结果。
+
+
+## 计划化单体发布的跨进程封存
+
+部署已成功、原计划同时有独立的 `release_activation` 和 `release_identity` 检查时，沿用原 run、receipt 和原计划。先核对原激活日志，再在同一当前执行环境补必要的只读检查和线上回读。回读命令应实际请求发布目标，校验业务路径和在线版本，并记录实际读取的目标与版本。激活检查的覆盖必须仅为 `release_activation`。不要用 `run` 重跑激活，也不要用 `verify` 自动补缺项。
+
+```sh
+python3 <runner> plan-bind-release --project <root> --receipt <receipt> --plan <original-plan> \
+  --id <activation-check-id> --readback-id <live-check-id> --name <new-binding-name> \
+  --json '{"activation":{"version_marker":["Released ","，"],"target_marker":["Published ","；"]},"readback":{"version_marker":["Live version ",""],"target_marker":["Live target ",""]}}'
+```
+
+每个标记由真实日志中行首的字面前缀和后置分隔符构成。线上回读使用空分隔符，值必须完整写到行尾。原激活可使用日志中实际存在的分隔符，必须以空格、全角冒号、全角逗号或全角分号开头。前缀也必须以其中一个字符结束。两份日志各需一条唯一版本行和一条唯一目标行，精确值必须一致。已有 `release_target` 上下文也必须匹配。只采用原任务/原计划下最新的真实、成功、未复用 runner 结果；回读必须在激活结束后启动且符合当前完整环境。绑定固化两份报告和原执行登记的摘要，仅对历史激活免除进程环境哈希的当前比较，继续核验命令、工具、输入及日志。
+
+原计划已登记成功的激活项只返回仍有效的证据。环境变化导致证据失效时，`run` 和 `verify` 均拒绝重跑该激活项。若原计划的线上回读直接依赖该激活项，回读可先核验原激活的历史证据，再实际执行。其余依赖仍需当前有效证据。
+
+绑定成功后走原计划的 `qa` 和 `finish`。二者均复核绑定及最新观察。绑定失效时该激活项拒绝重放。选择的新回读必须来自原计划实际执行，补回读后重新登记绑定并重做 QA。已采用分阶段发布控制的交付仍走其原有收口。
