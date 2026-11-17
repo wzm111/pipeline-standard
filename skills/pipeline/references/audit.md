@@ -22,6 +22,7 @@
 python3 <runner> scan --project <项目目录>
 python3 <runner> audit --project <项目目录> --run-id <明确的run_id>
 # 需要当前登记元数据时，额外使用只读 --live
+python3 <runner> scan --project <项目目录> --live
 python3 <runner> audit --project <项目目录> --run-id <明确的run_id> --live
 # 面向用户的本地预览，默认文本；不传run-id时优先当前run，否则最近记录
 python3 <runner> preview --project <项目目录>

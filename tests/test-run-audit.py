@@ -86,17 +86,19 @@ class AuditTests(unittest.TestCase):
         self.assertIs(empty["projects"][0]["state_directory_present"], True)
         self.assertIn("状态文件 0 个", M.render(empty, summary_only=True))
 
-    def test_standalone_scan_forwards_live_without_saving_snapshot(self):
+    def test_scan_entry_points_forward_live_without_saving_snapshot(self):
         state = R.start(self.root)
         self.target(state).unlink()
         before = self.files()
-        result = subprocess.check_output(
-            [sys.executable, "-B", A.__file__, "scan", "--project", str(self.root), "--live"],
-            text=True,
-        )
-        record = json.loads(result)["runs"][0]
-        self.assertEqual(record["status"], "missing")
-        self.assertEqual(record["live"]["status"], "running")
+        for entry in (Path(A.__file__), Path(A.__file__).with_name("pipeline_cli.py")):
+            with self.subTest(entry=entry.name):
+                argv = [sys.executable, "-B", str(entry), "scan", "--project", str(self.root)]
+                stored = json.loads(subprocess.check_output(argv, text=True))["runs"][0]
+                record = json.loads(subprocess.check_output([*argv, "--live"], text=True))["runs"][0]
+                self.assertEqual(stored["status"], "missing")
+                self.assertNotIn("live", stored)
+                self.assertEqual(record["status"], "missing")
+                self.assertEqual(record["live"]["status"], "running")
         self.assertEqual(before, self.files())
 
     def test_bounded_scan_orders_candidates_by_state_mtime(self):

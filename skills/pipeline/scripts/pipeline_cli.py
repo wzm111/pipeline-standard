@@ -68,6 +68,7 @@ def parser():
     scan = sub.add_parser("scan", help="bounded read-only existing audit discovery, no repair")
     scan.add_argument("--project", default=".")
     scan.add_argument("--limit", type=int, default=20)
+    scan.add_argument("--live", action="store_true", help="read registered metadata without saving snapshots")
     multi_scan = sub.add_parser("scan-projects", help="read-only local index across project audit directories")
     source = multi_scan.add_mutually_exclusive_group(required=True)
     source.add_argument("--project", action="append", help="project root, repeat to include more projects")
@@ -254,7 +255,8 @@ def dispatch(args):
         return paths(args.project), 0
     if args.action in {"audit", "scan"}:
         import run_audit as A
-        result = A.audit(args.project, args.run_id, live=args.live) if args.action == "audit" else A.scan(args.project, args.limit)
+        result = (A.audit(args.project, args.run_id, live=args.live) if args.action == "audit"
+                  else A.scan(args.project, args.limit, live=args.live))
         return result, int(result["status"] == "error" and "live" not in result)
     if args.action == "preview":
         import audit_preview as V
