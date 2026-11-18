@@ -278,6 +278,41 @@ class AuditTests(unittest.TestCase):
         self.assertIsNone(rows["first"]["latest_task"]["release_command_seconds"])
         self.assertEqual(self.files(), before)
 
+    def test_workspace_scan_retains_unsafe_project_as_incomplete_coverage(self):
+        import audit_projects as M
+
+        unsafe = self.root / "unsafe-project"
+        pipeline = unsafe / "tmp/pipeline"
+        pipeline.mkdir(parents=True)
+        (pipeline / "runs").symlink_to(self.root, target_is_directory=True)
+        before = self.files()
+        command = [sys.executable, "-B", str(SCRIPTS / "pipeline_cli.py"),
+                   "scan-projects", "--workspace", str(self.root)]
+        result = json.loads(subprocess.check_output(command, text=True))
+        self.assertEqual(result["status"], "partial")
+        project, = result["projects"]
+        self.assertEqual(project["project"], unsafe.name)
+        self.assertEqual(project["status"], "error")
+        self.assertEqual(project["error"], "unsafe_path")
+        self.assertEqual(result["runs"], [])
+        self.assertIn("unsafe_path", M.render(result, summary_only=True))
+        self.assertEqual(before, self.files())
+
+    def test_workspace_scan_retains_invalid_runs_file_as_incomplete_coverage(self):
+        project = self.root / "invalid-project"
+        pipeline = project / "tmp/pipeline"
+        pipeline.mkdir(parents=True)
+        (pipeline / "runs").write_text("invalid run directory")
+        command = [sys.executable, "-B", str(SCRIPTS / "pipeline_cli.py"),
+                   "scan-projects", "--workspace", str(self.root), "--live"]
+        before = self.files()
+        result = json.loads(subprocess.check_output(command, text=True))
+        self.assertEqual(result["status"], "partial")
+        row, = result["projects"]
+        self.assertEqual(row["status"], "error")
+        self.assertEqual(result["runs"], [])
+        self.assertEqual(before, self.files())
+
     def test_cross_project_text_distinguishes_undated_diagnostics_from_matches(self):
         import audit_projects as M
 

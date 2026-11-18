@@ -39,10 +39,11 @@ def _roots(projects, workspace):
             if not entry.name.startswith(".") and entry.is_dir(follow_symlinks=False):
                 root = Path(entry.path)
                 try:
-                    if A._local(root, "tmp/pipeline/runs").is_dir():
+                    if A._local(root, "tmp/pipeline/runs").exists():
                         roots.append(root)
                 except (OSError, A.AuditError):
-                    continue
+                    # Let the safe project scanner report unreadable coverage.
+                    roots.append(root)
     roots.sort()
     return roots[:MAX_PROJECTS], truncated or len(roots) > MAX_PROJECTS
 
