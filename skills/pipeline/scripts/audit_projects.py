@@ -39,8 +39,11 @@ def _roots(projects, workspace):
             if not entry.name.startswith(".") and entry.is_dir(follow_symlinks=False):
                 root = Path(entry.path)
                 try:
-                    if A._local(root, "tmp/pipeline/runs").exists():
-                        roots.append(root)
+                    # exists() suppresses permission errors on newer Python.
+                    A._local(root, "tmp/pipeline/runs").stat()
+                    roots.append(root)
+                except FileNotFoundError:
+                    continue
                 except (OSError, A.AuditError):
                     # Let the safe project scanner report unreadable coverage.
                     roots.append(root)

@@ -313,6 +313,30 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(result["runs"], [])
         self.assertEqual(before, self.files())
 
+    def test_workspace_scan_retains_permission_denied_coverage(self):
+        project = self.root / "unreadable-project"
+        directory = project / "tmp"
+        (directory / "pipeline/runs").mkdir(parents=True)
+        directory.chmod(0)
+        try:
+            try:
+                (directory / "pipeline/runs").stat()
+            except PermissionError:
+                pass
+            else:
+                self.skipTest("filesystem does not enforce directory permissions for this user")
+            command = [sys.executable, "-B", str(SCRIPTS / "pipeline_cli.py"),
+                       "scan-projects", "--workspace", str(self.root)]
+            result = json.loads(subprocess.check_output(command, text=True))
+            self.assertEqual(result["status"], "partial")
+            row, = result["projects"]
+            self.assertEqual(row["project"], project.name)
+            self.assertEqual(row["status"], "error")
+            self.assertEqual(row["error"], "permission_denied")
+            self.assertEqual(result["runs"], [])
+        finally:
+            directory.chmod(0o700)
+
     def test_cross_project_text_distinguishes_undated_diagnostics_from_matches(self):
         import audit_projects as M
 
