@@ -31,6 +31,7 @@ class TaskRoutingTests(unittest.TestCase):
         expected = {"routine_planning": {"planner"}, "routine_review": {"scope_guardian"},
                     "scoped_fix": {"developer"}, "ui_validation": {"tester"},
                     "high_risk_verification": {"tester"}, "high_risk_implementation": {"developer"},
+                    "complex_implementation": {"developer"},
                     "release_summary": {"releaser"}}
         self.assertEqual(MODELS.TASK_KINDS, expected)
         for task_kind, roles in expected.items():
@@ -41,7 +42,8 @@ class TaskRoutingTests(unittest.TestCase):
                 if other_role == role:
                     MODELS.validate_document(document)
                     risk = "high" if task_kind.startswith("high_risk_") else "low"
-                    result = MODELS.select_task_route(role, config, task_kind=task_kind, risk=risk, complexity="simple")
+                    complexity = "complex" if task_kind == "complex_implementation" else "simple"
+                    result = MODELS.select_task_route(role, config, task_kind=task_kind, risk=risk, complexity=complexity)
                     self.assertEqual(result["preference"], {"model": "light"})
                 else:
                     with self.assertRaises(ValueError):
@@ -71,6 +73,21 @@ class TaskRoutingTests(unittest.TestCase):
                                  risk=risk, complexity="complex")
             self.assertEqual(result["routing"]["applied"], risk == "high")
             self.assertEqual(result["preference"]["model"], "expert" if risk == "high" else "base")
+
+    def test_complex_implementation_requires_explicit_complexity_and_known_nonhigh_risk(self):
+        preference = {"model": "base", "effort": "medium", "task_routes": {
+            "complex_implementation": {"model": "expert", "effort": "medium"},
+            "high_risk_implementation": {"model": "expert", "effort": "high"}}}
+        for risk in ("low", "medium", "high", "unknown"):
+            for complexity in ("simple", "moderate", "complex", "unknown"):
+                with self.subTest(risk=risk, complexity=complexity):
+                    result = self.choose(preference, task_kind="complex_implementation",
+                                         risk=risk, complexity=complexity)
+                    applied = risk in {"low", "medium"} and complexity == "complex"
+                    self.assertEqual(result["routing"]["applied"], applied)
+                    self.assertEqual(result["preference"]["model"], "expert" if applied else "base")
+        high = self.choose(preference, task_kind="high_risk_implementation", risk="high", complexity="complex")
+        self.assertEqual(high["preference"], {"model": "expert", "effort": "high"})
 
     def test_unknown_medium_high_and_complex_tasks_keep_base(self):
         for risk in ("low", "medium", "high", "unknown"):

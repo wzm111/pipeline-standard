@@ -43,7 +43,7 @@ model 必须是非空字符串。effort 可省略，表示使用选定模型/运
 
 ### 本地可靠工具（不启动模型）
 
-角色可选task_routes支持按任务分流，详见[任务模型路由](model-routing.md)。先解析配置优先级，再根据显式任务分类选择；项目固定角色会屏蔽低层路由。智能体传--task-kind/--risk/--complexity，不要求用户填写；只在明确low/simple时使用匹配路线，返回routing用于审计。原命令不加新参数时输出保持兼容，仍须对最终型号做宿主预检。
+角色可选task_routes支持按任务分流，详见[任务模型路由](model-routing.md)。先解析配置优先级，再根据显式任务分类选择；项目固定角色会屏蔽低层路由。智能体传--task-kind/--risk/--complexity，不要求用户填写。常规分流要求明确low/simple，complex_implementation要求明确complex且风险low或medium，高风险实现和验证使用各自要求risk=high的路线。返回routing用于审计。原命令不加新参数时输出保持兼容，仍须对最终型号做宿主预检。
 
 `scripts/model_config.py` 只用 Python 标准库。CLI 仍然只读：`--read` 返回项目文档及 revision；`--temporary '{"tester":{"model":"inherit"}}'` 添加本次覆盖，不写文件。临时覆盖采用当前运行时的角色对象，完整替换对应角色配置。
 

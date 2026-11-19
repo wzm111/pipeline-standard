@@ -6,22 +6,25 @@
 
 model/effort仍为角色基础方案，可选task_routes表示用户允许的分流。先按“本次 > 项目 > 本机 > 模板”选中整个角色，再在该角色内选择路线。项目固定角色没有task_routes时，不继承本机路由；明确inherit同样屏蔽低层方案。
 
-常规路线仅在 risk=low、complexity=simple 时应用。高风险实现或修复使用 developer 的 high_risk_implementation 路线，独立验证使用 tester 的 high_risk_verification 路线。两条路线均须明确 risk=high 且有对应配置才应用。其余分类沿用基础模型。类型不认识、跨角色或配置非法时报错；未传任务上下文的旧调用保持原结果。
+常规路线仅在 risk=low、complexity=simple 时应用。developer 的 complex_implementation 路线用于明确 complexity=complex 且 risk=low 或 medium 的实现与诊断。风险为 high 时优先选 high_risk_implementation，独立验证选 tester 的 high_risk_verification，两条高风险路线均须明确 risk=high 且有对应配置才应用。风险或复杂度尚未判明时继续核对已有范围，未匹配的分类沿用基础模型。类型不认识、跨角色或配置非法时报错；未传任务上下文的旧调用保持原结果。
 
 | 角色 | 内部任务类型 | 明确低风险简单任务 | 基础方案 |
 | --- | --- | --- | --- |
 | planner | routine_planning | Sol中：范围已定的简单拆解 | Astra中 |
 | scope_guardian | routine_review | Sol中：常规范围核对 | Astra高 |
-| developer | scoped_fix | Terra中：目标明确的小修复 | Sol中 |
+| developer | scoped_fix | Sol中：目标明确的小修复 | Sol中 |
 | tester | ui_validation | Terra中：截图及界面操作验收 | Sol中 |
 | releaser | release_summary | Terra低：已验证事实的摘要整理 | 保留原Sol方案 |
 
-高风险方案专家沿用 scope_guardian 的基础配置。本仓库将验证专家配置为 GPT-6.1 Sol 高强度，普通 tester 继续用原配置。项目和本机可各自配置，通用安装模板保留 inherit。Claude可独立配置宿主支持的型号，不套用Codex型号；未配置路线保持旧行为。这是选择策略，不是模型质量或提速已验证的结论。
+本仓库复杂实现路线使用 GPT-6.2 Astra 中强度，高风险实现与方案专家使用 GPT-6.2 Astra 高强度，独立高风险验证使用 GPT-6.2 Sol 高强度。普通 developer、tester 使用 GPT-6.2 Sol 中强度。项目和本机可各自配置，通用安装模板保留 inherit。Claude可独立配置宿主支持的型号，不套用Codex型号；未配置路线保持旧行为。这是选择策略，不是模型质量或提速已验证的结论。
+
+保存 complex_implementation 偏好前，确认本机各宿主使用的 Pipeline 入口已支持该类型。旧版本解析器会拒绝含新类型的配置；回退入口版本时应同时恢复对应的模型配置。
 
 ## 分类边界
 
 - 架构不明、跨系统、支付/权限/安全、数据一致性、迁移、公开接口和生产部署等不能因描述短、文件少就判为low/simple。缺信息使用unknown。
 - scoped_fix必须有明确范围和回归；ui_validation只针对视觉/操作，代码回归与故障分析用基础tester。
+- 跨模块约束、根因不明且需要多假设验证的复杂实现或诊断，选 complex_implementation；先核对风险，高风险任务选 high_risk_implementation。反复失败后的专家指导继续使用 expert-advice.md 的证据与次数预算，不通过改分类绕过 QA 上限。
 - release_summary仅整理已通过验收的事实，不包含部署判断、实际提交、回滚或异常处理；这些使用基础releaser并遵守权限。
 - 用户明确指定本次模型时传完整临时角色覆盖，不能再叠加其他路线。
 

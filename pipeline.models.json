@@ -7,12 +7,16 @@
         "effort": "medium",
         "task_routes": {
           "scoped_fix": {
-            "model": "gpt-6.1-terra",
+            "model": "gpt-6.2-sol",
             "effort": "medium"
           },
           "high_risk_implementation": {
             "model": "gpt-6.2-astra",
             "effort": "high"
+          },
+          "complex_implementation": {
+            "model": "gpt-6.2-astra",
+            "effort": "medium"
           }
         }
       },

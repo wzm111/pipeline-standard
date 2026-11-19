@@ -66,6 +66,22 @@ class RoutingCLITests(unittest.TestCase):
             self.assertFalse(result.stdout)
             self.assertNotIn("Traceback", result.stderr)
 
+    def test_complex_developer_route_reaches_native_launch_parameters(self):
+        self.project.write_text(json.dumps({"schema_version": 1, "runtimes": {"codex": {"developer": {
+            "model": "base", "effort": "high", "task_routes": {
+                "complex_implementation": {"model": "light", "effort": "medium"},
+                "high_risk_implementation": {"model": "base", "effort": "high"}}}}}}))
+        for task, risk, model, effort in (
+                ("complex_implementation", "medium", "light", "medium"),
+                ("high_risk_implementation", "high", "base", "high")):
+            result = self.run_cli("--role", "developer", "--task-kind", task, "--risk", risk,
+                                  "--complexity", "complex", "--host-evidence", str(self.host))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            row = json.loads(result.stdout)
+            self.assertTrue(row["routing"]["applied"])
+            self.assertEqual(row["launch_plan"]["parameters"]["model"], model)
+            self.assertEqual(row["launch_plan"]["parameters"]["reasoning_effort"], effort)
+
     def test_routed_model_failure_is_not_hidden_by_available_base(self):
         host = json.loads(self.host.read_text())
         host["models"].pop("light")
