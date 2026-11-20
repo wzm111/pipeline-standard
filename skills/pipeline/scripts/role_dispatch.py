@@ -27,8 +27,8 @@ def _progress(state):
             "task": {key: task.get(key) for key in ("task_id", "status", "started_at", "ended_at")} if task else None}
 
 
-def _transition(state, stage, activity, now):
-    if (state.get("stage"), state.get("activity", "execution")) != (stage, activity):
+def _transition(state, stage, activity, now, *, force=False):
+    if force or (state.get("stage"), state.get("activity", "execution")) != (stage, activity):
         state.update(stage=stage, activity=activity)
         state["history"].append(R._event(state, "transition", now))
 
@@ -105,11 +105,13 @@ def _parameters(value, model, effort):
 
 
 def begin(project_root, run_id, owner_token, role, *, executor_id=None, requested_model=None, requested_effort=None,
-          native_parameters=None, workflow_phase=None, work_item=None, advice_case=None):
+          native_parameters=None, workflow_phase=None, work_item=None, advice_case=None, routing_runtime=None):
     """Before native spawn/follow-up: one compact attempt, no invented creation."""
     M._validate(role, executor_id or "new-executor", "reused" if executor_id else "created")
     model, effort = _model(requested_model), _effort(requested_effort)
     parameters = _parameters(native_parameters, model, effort)
+    if routing_runtime not in (None, "codex", "claude"):
+        raise ValueError("unsupported dispatch routing runtime")
     if workflow_phase is not None and workflow_phase not in WORKFLOW_PHASES:
         raise ValueError("workflow phase must be implementation or verification")
     if any(owner_token in text for text in (model, effort, executor_id or "")):
@@ -120,9 +122,10 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
         path, state = _owned(base, run_id, owner_token)
         import run_policy
         run_policy.require(project_root, state)
-        if workflow_phase == "verification" and state.get("stage") != "verification":
+        if workflow_phase == "verification":
             import progress_feedback
-            progress_feedback.require_transition(project_root, state, "verification_started")
+            if state.get("stage") != "verification" or not progress_feedback.entered_verification(state):
+                progress_feedback.require_transition(project_root, state, "verification_started")
         if workflow_phase == "implementation":
             import review_control
             review_control.validate_development(project_root, state)
@@ -157,6 +160,8 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
         item.update(binding)
         if parameters is not None:
             item["native_parameters"] = parameters
+        if routing_runtime is not None:
+            item["routing_runtime"] = routing_runtime
         if workflow_phase is not None:
             item.update(workflow_phase=workflow_phase, workflow_origin=_progress(state))
         state.setdefault("role_dispatches", []).append(item)
@@ -211,27 +216,46 @@ def accepted(project_root, run_id, owner_token, dispatch_id, executor_id, *, act
                                         and not _human_wait(state) and not _checking(state))
             if item["workflow_applied"]:
                 phase = item["workflow_phase"]
+                first_verification = False
+                check_feedback = False
+                if phase == "verification":
+                    import progress_feedback
+                    first_verification = bool(state.get("supervision_from")) and not progress_feedback.entered_verification(state)
+                    check_feedback = state.get("stage") != "verification" or first_verification
+                    if check_feedback:
+                        progress_feedback.require_transition(project_root, state, "verification_started")
                 if phase == "implementation":
                     import review_control
                     review_control.validate_development(project_root, state)
-                _transition(state, phase, WORKFLOW_PHASES[phase], now)
+                _transition(state, phase, WORKFLOW_PHASES[phase], now, force=first_verification)
+                if check_feedback and state.get("supervision_from"):
+                    state["history"][-1]["verification_feedback_checked"] = True
         state["updated_at"] = now
         R._atomic(path, state)
         return deepcopy(item)
 
 
-def complete(project_root, run_id, owner_token, dispatch_id, *, executors_stopped=False, stop_evidence=None, outcome="completed"):
+def complete(project_root, run_id, owner_token, dispatch_id, *, executors_stopped=False, stop_evidence=None,
+             outcome="completed", actual_model=None, actual_effort=None):
     """Observe completion/failure after checking the host; never stops it itself."""
     R._stopped(executors_stopped, stop_evidence)
     if outcome not in {"completed", "failed", "interrupted"}:
         raise ValueError("invalid dispatch outcome")
+    observed = {key: value for key, value in
+                (("actual_model", _model(actual_model)), ("actual_effort", _effort(actual_effort)))
+                if value != "unknown"}
+    if any(owner_token in value or value == "inherit" for value in observed.values()):
+        raise ValueError("completion feedback must contain actual host model or effort")
     with R._write_guard(project_root) as base:
         path, state = _owned(base, run_id, owner_token)
         item = _ticket(state, dispatch_id)
         if item["status"] in {"completed", "failed", "interrupted"}:
-            if item["status"] != outcome:
+            if item["status"] != outcome or any(item[key] != value for key, value in observed.items()):
                 raise ValueError("cannot rewrite a closed dispatch outcome")
             return deepcopy(item)
+        if observed and (item["status"] != "working" or any(
+                item[key] not in {"unknown", value} for key, value in observed.items())):
+            raise ValueError("completion feedback conflicts with host acceptance")
         if item["status"] == "dispatching" and outcome == "completed":
             raise ValueError("unaccepted dispatch cannot be completed")
         now = R._now()
@@ -239,7 +263,7 @@ def complete(project_root, run_id, owner_token, dispatch_id, *, executors_stoppe
             raise ValueError("dispatch clock moved backwards")
         if item["status"] == "working":
             _record(state, item["role"], item["executor_id"], "stopped", now)
-        item.update(status=outcome, completed_at=now)
+        item.update(observed, status=outcome, completed_at=now)
         waiting = state.get("role_wait")
         if (waiting and dispatch_id in waiting["dispatch_ids"] and not _human_wait(state) and not _checking(state)
                 and waiting["progress"] == _progress(state)

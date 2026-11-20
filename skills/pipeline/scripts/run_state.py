@@ -226,7 +226,10 @@ def update(project_root, run_id, owner_token, changes):
             review_control.validate_development(project_root, state)
         previous = (state.get("stage"), state.get("activity", "execution"))
         import progress_feedback
-        if changes.get("stage") == "verification" and previous[0] != "verification":
+        verification_entry = changes.get("stage") == "verification" and (
+            previous[0] != "verification" or
+            (state.get("supervision_from") and not progress_feedback.entered_verification(state)))
+        if verification_entry:
             progress_feedback.require_transition(project_root, state, "verification_started")
         if changes.get("activity") == "human_wait" and previous[1] != "human_wait":
             if state.get("supervision_from"):
@@ -236,8 +239,10 @@ def update(project_root, run_id, owner_token, changes):
             # Explicit same-value main updates also supersede pending role bindings.
             state["progress_revision"] = state.get("progress_revision", 0) + 1
         state["updated_at"] = _now()
-        if previous != (state.get("stage"), state.get("activity", "execution")):
+        if verification_entry or previous != (state.get("stage"), state.get("activity", "execution")):
             state["history"].append(_event(state, "transition", state["updated_at"]))
+            if verification_entry and state.get("supervision_from"):
+                state["history"][-1]["verification_feedback_checked"] = True
         _atomic(path, state)
         return deepcopy(state)
 
@@ -292,6 +297,8 @@ def finish(project_root, run_id, owner_token, outcome, *, executors_stopped=Fals
             if "run_policy" in state:
                 import managed_qa
                 managed_qa.validate_finish(project_root, state)
+            import process_compliance
+            process_compliance.require(project_root, state)
         if outcome == "completed":
             import delivery
             try:

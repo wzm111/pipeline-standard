@@ -143,6 +143,11 @@ def end(root, run_id, owner, task_id, *, outcome="execution_ended", report_refs=
             if ref not in state.get("artifacts", []):
                 raise ValueError("task report must already be registered in this run")
             E.read_report(root, run_id, ref)
+        if outcome == "execution_ended":
+            import process_compliance
+            if process_compliance.require(root, state):
+                import managed_qa
+                managed_qa.validate_finish(root, state)
         now = _clock(state)
         item.update(status=outcome, ended_at=now, report_refs=deepcopy(refs))
         state["updated_at"] = now

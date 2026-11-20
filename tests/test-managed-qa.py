@@ -12,6 +12,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "skills/pipeline/scripts"
 sys.path.insert(0, str(SCRIPTS))
 import check_plan as P
 import managed_qa as Q
+import process_compliance as PC
 import review_control as RC
 import release_checks as F
 import delivery as Delivery
@@ -383,6 +384,74 @@ class ManagedQaTests(unittest.TestCase):
         report("verification_review", "new-failure", {"gate": "FAIL"})
         with self.assertRaises(ValueError):
             self.finish()
+
+    def test_supervised_high_risk_requires_current_phase_and_observed_routing_at_closeout(self):
+        configured = {"schema_version": 1, "runtimes": {"codex": {
+            "scope_guardian": {"model": "test-expert", "effort": "high"},
+            "tester": {"model": "test-default", "task_routes": {
+                "high_risk_verification": {"model": "test-verifier", "effort": "high"}}},
+        }}}
+        (self.root / "pipeline.models.json").write_text(json.dumps(configured))
+        self.cli("task-start", "--receipt", str(self.receipt), "--task-id", "audit",
+                 "--goal", "audit", "--accept", "checks", "--review-risk", "high",
+                 "--review-reason", "sensitive evidence", "--retrospective")
+
+        def report(kind, name, payload):
+            return E.write_report(*self.args, kind, name, payload)
+
+        def dispatch(role, host, request, actual, *, returned=None):
+            ticket = D.begin(*self.args, role, routing_runtime="codex", requested_model=request,
+                             requested_effort="high",
+                             native_parameters={"model": request, "reasoning_effort": "high"})
+            D.accepted(*self.args, ticket["id"], host, host_executor_id="native-" + host,
+                       actual_model=actual, actual_effort="high")
+            D.complete(*self.args, ticket["id"], executors_stopped=True, stop_evidence="fixture returned",
+                       actual_model=returned)
+            return ticket["id"]
+
+        requirement = report("dual_review", "required", {})
+        plan = P.save_plan(*self.args, "plan", {"unit": self.spec})
+        solution = report("solution_review", "solution", {
+            "gate": "PASS", "requirement_ref": requirement, "plan_ref": plan,
+            "dispatch_id": dispatch("scope_guardian", "expert", "test-expert", "test-expert"),
+        })
+        self.assertEqual(PC.assess(self.root, R.status(self.root)["state"])["workflow_issues"]["verification"],
+                         "missing_current_verification_stage")
+        report("progress_feedback", "verification", {"milestone": "verification_started",
+               "messages": [{"text": "🔵 **[进行中]** 开始验证，下一步检查行为。"}]})
+        R.update(*self.args, {"stage": "verification"})
+        P.run_planned(*self.args, plan, "unit", "unit")
+        args = ("qa", "--receipt", str(self.receipt), "--plan", plan, "--name")
+        pending = self.cli(*args, "pending", expected=1)
+        self.assertEqual(pending["engineering_gate"], "PASS")
+        self.assertEqual(pending["gate"], "CONCERNS")
+        verification = {"gate": "PASS", "solution_ref": solution,
+                        "checks": self.payload(pending["report"])["checks"]}
+        for name, actual, issue in [
+            ("unknown", None, "missing_actual_model_or_effort"),
+            ("wrong", "test-default", "model_route_mismatch"),
+        ]:
+            report("verification_review", name, verification | {
+                "dispatch_id": dispatch("tester", name, "test-verifier", actual)})
+            result = self.cli(*args, "qa-" + name)
+            self.assertEqual(result["engineering_gate"], "PASS")
+            self.assertEqual(result["supervision"]["process_compliance"]["dispatch_issues"], {"tester": issue})
+            with self.assertRaisesRegex(ValueError, issue):
+                T.end(*self.args, "audit")
+        report("verification_review", "correct", verification | {
+            "dispatch_id": dispatch("tester", "correct", "test-verifier", None, returned="test-verifier")})
+        result = self.cli(*args, "qa-correct")
+        self.assertEqual(result["supervision"]["process_compliance"]["gate"], "PASS")
+        self.assertEqual(PC.assess(self.root, R.status(self.root)["state"])["gate"], "PASS")
+        self.assertEqual(T.end(*self.args, "audit")["status"], "execution_ended")
+        route = configured["runtimes"]["codex"]["tester"]["task_routes"]["high_risk_verification"]
+        route["model"] = "new-verifier"
+        (self.root / "pipeline.models.json").write_text(json.dumps(configured))
+        with self.assertRaisesRegex(ValueError, "tester: model_route_mismatch"):
+            self.finish()
+        route["model"] = "test-verifier"
+        (self.root / "pipeline.models.json").write_text(json.dumps(configured))
+        self.assertEqual(self.finish()["status"], "completed")
 
     def test_plan_canonicalizes_forged_pass_and_keeps_required_union(self):
         other = self.spec | {"coverage": ["other"], "argv": [sys.executable, "-B", "-c", "print('other')"]}

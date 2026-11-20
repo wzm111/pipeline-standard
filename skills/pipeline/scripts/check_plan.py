@@ -782,8 +782,8 @@ def verify_plan(root, run_id, owner, plan_ref, name, summary=""):
             payload = E.read_report(root, run_id, ref, kind="qa")["payload"]
         return {"run_id": run_id, "plan_ref": plan_ref, "report": ref,
                 "results": [], "skipped_checks": ordered, "preflight": preflight,
-                **{key: payload[key] for key in ("gate", "required_checks", "missing_checks",
-                                                 "check_failures", "environment_diagnostics")}}
+                **{key: payload[key] for key in ("gate", "engineering_gate", "required_checks", "missing_checks",
+                                                 "check_failures", "environment_diagnostics") if key in payload}}
     results = []
     for check_id, attempt in attempts:
         result = run_planned(root, run_id, owner, plan_ref, check_id, attempt, impact_covered=True)
@@ -795,6 +795,6 @@ def verify_plan(root, run_id, owner, plan_ref, name, summary=""):
     payload = E.read_report(root, run_id, ref, kind="qa")["payload"]
     return {"run_id": run_id, "plan_ref": plan_ref, "report": ref,
             "results": results, "skipped_checks": ordered[len(results):],
-            **{key: payload[key] for key in ("gate", "required_checks", "missing_checks",
-                                             "check_failures", "environment_diagnostics")},
+            **{key: payload[key] for key in ("gate", "engineering_gate", "required_checks", "missing_checks",
+                                             "check_failures", "environment_diagnostics") if key in payload},
             "notice": "Plan evidence judgment only; independent business QA and original completion guards still apply."}

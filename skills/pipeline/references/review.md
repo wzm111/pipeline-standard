@@ -59,6 +59,8 @@
 
 新 CLI start 和 task-start 必须提供 --review-risk low|medium|high|unknown 和 --review-reason。high/unknown 自动保留双专家义务，即使漏写 dual_review 也不能验收通过。旧 Python 调用保持兼容，已有义务在未作新范围决策时继续继承。明确同交付承接使用 --continuation-of <同 run 已结束任务>；旧任务的要求继续生效。真正无关的新目标用 --independent-goal 及独立风险决策和理由建立新任务；省略该标志会继续保留原义务。delivery_from 承接也保留双专家义务；可复用原检查，当前阶段仍需独立专家核对。
 
+新 CLI 运行及新任务明确按 high 分类时，QA 的 `engineering_gate` 记录检查及视觉证据的工程结果，`supervision.process_compliance` 单独报告阶段、评审、派发与模型路由缺项。保留原有 QA gate 的涵义。正式验证阶段、当前独立评审或有效派发及模型证据缺失时，`task-end --outcome execution_ended` 与 `finish` 的完成路径拒绝收口，已记录的工程结果继续可查。补证据后重新生成当前 QA，可以复用仍然有效的工程检查。暂停和中止仍可如实登记。
+
 开发派发或显式进入 implementation 前必须已有本任务方案 PASS。收口复查方案早于首次开发记录；对已实现成果的补充审查，task-start 显式加 --retrospective，不能将其宣传为开发前评审，该模式仅供只读复核。
 
 activate 前检查发布前必验类别及独立验证结论，并在登记 attempt 的锁内再次核对。发布后 smoke 仍留到上线后验证。缺少独立结论时不能启动激活命令，smoke 和恢复诊断仍可用于补充证据。

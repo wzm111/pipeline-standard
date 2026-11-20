@@ -11,6 +11,17 @@ LABEL = re.compile(r'^\s*(🔵|✅|🟠|⏳|🔴|🔎)\s*\*\*\[(进行中|已完
 MAX_BYTES = 262144
 MILESTONES = ("start", "solution_returned", "verification_started", "blocked")
 
+
+def entered_verification(state):
+    """Whether the verification stage has been entered for the supervised task."""
+    import run_state as R
+    boundary = state.get("supervision_from")
+    return boundary is not None and any(
+        event.get("verification_feedback_checked") is True
+        and R._timestamp(event["at"]) >= R._timestamp(boundary)
+        for event in state["history"])
+
+
 def require_transition(root, state, milestone):
     """Require a newly registered valid message before a managed transition."""
     boundary = state.get("supervision_from")

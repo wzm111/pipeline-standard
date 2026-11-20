@@ -259,12 +259,19 @@ def _supervision(root, run_id, checkpoint):
     try:
         progress = run_progress.snapshot(root, run_id)
         feedback = progress["feedback_audit"]
+        if checkpoint == "qa":
+            import process_compliance
+            process = process_compliance.assess(root, R.status(root, run_id)["state"] or {})
+        else:
+            process = None
         incomplete = bool(feedback["missing"] or feedback["invalid"] or progress["truncated"]
-                          or progress["unavailable_records"])
+                          or progress["unavailable_records"]
+                          or (process is not None and process["gate"] != "PASS"))
         return {"checkpoint": checkpoint, "status": "review_needed" if incomplete else "no_feedback_gap",
                 "feedback_missing": feedback["missing"], "feedback_invalid": feedback["invalid"],
                 "allocation_mode": progress["allocation"].get("mode"),
                 "host_dispatch": "requires_host_crosscheck",
+                **({"process_compliance": process} if process is not None else {}),
                 "next_action": ("record_sent_start_feedback_and_check_allocation" if checkpoint == "startup"
                                 else "reconcile_current_task_with_host_before_acceptance")}
     except (OSError, ValueError, KeyError, TypeError):
@@ -511,7 +518,7 @@ def dispatch(args):
         payload = E.read_report(root, run_id, ref, kind="qa")["payload"]
         return {"run_id": run_id, "report": ref, "supervision": _supervision(root, run_id, "qa"),
                 **{k: payload[k] for k in
-                ("gate", "required_checks", "missing_checks", "check_failures", "environment_diagnostics", "release_bindings") if k in payload}}, 0 if payload["gate"] == "PASS" else 1
+                ("gate", "engineering_gate", "required_checks", "missing_checks", "check_failures", "environment_diagnostics", "release_bindings") if k in payload}}, 0 if payload["gate"] == "PASS" else 1
     if args.action == "update":
         changes = {key: value for key in ("stage", "activity", "next") if (value := getattr(args, key)) is not None}
         if not changes:
@@ -555,7 +562,7 @@ def dispatch(args):
         if args.kind == "qa" and "run_policy" in R.status(root, run_id)["state"]:
             judgment = E.read_report(root, run_id, relative, kind="qa")["payload"]
             result = {"run_id": run_id, "report": relative, "supervision": _supervision(root, run_id, "qa"),
-                      **{key: judgment[key] for key in ("gate", "required_checks", "missing_checks", "check_failures") if key in judgment}}
+                      **{key: judgment[key] for key in ("gate", "engineering_gate", "required_checks", "missing_checks", "check_failures") if key in judgment}}
             requested_acceptance = submitted.get("gate") == "PASS" or (
                 submitted.get("gate") not in {"CONCERNS", "FAIL"} and submitted.get("plan_ref") is not None)
             return result, int(requested_acceptance and judgment.get("gate") != "PASS")
