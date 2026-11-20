@@ -171,6 +171,30 @@ class PipelineCliTests(unittest.TestCase):
         self.assertEqual(self.cli("start", "--review-risk", "low", "--review-reason", "fixture scoped change", expected=2)["error"], "ValueError")
         self.assertEqual(Path(self.receipt).read_bytes(), before)
 
+    def test_supervision_automatically_tracks_current_task_at_cli_checkpoints(self):
+        start = self.cli("start", "--compact", "--review-risk", "low", "--review-reason", "fixture")
+        self.receipt = start["receipt"]
+        self.assertEqual(start["supervision"]["feedback_missing"], ["start"])
+        self.cli("policy-ack", "--receipt", self.receipt, "--revision", start["policy"]["revision"])
+        task = self.cli("task-start", "--receipt", self.receipt, "--task-id", "fixture",
+                        "--goal", "Verify supervision", "--accept", "Current evidence is listed",
+                        "--review-risk", "low", "--review-reason", "isolated fixture")
+        self.assertEqual(task["supervision"]["checkpoint"], "startup")
+        feedback = {"milestone": "start", "messages": [
+            {"text": "🔵 **[进行中]** 正在运行本地检查。"}]}
+        self.cli("report", "--receipt", self.receipt, "--kind", "progress_feedback",
+                 "--name", "start", "--json", json.dumps(feedback))
+        stage = self.cli("update", "--receipt", self.receipt, "--stage", "verification")
+        self.assertEqual(stage["supervision"]["feedback_missing"], ["verification_started"])
+        self.assertEqual(stage["supervision"]["host_dispatch"], "requires_host_crosscheck")
+        check = self.check("unit-supervision", "print('fixture check passed')")
+        qa = self.cli("report", "--receipt", self.receipt, "--kind", "qa", "--name", "accepted",
+                      "--json", json.dumps({"gate": "PASS", "checks": [check["report"]],
+                                            "required_checks": ["unit-fixture"]}))
+        self.assertEqual(qa["gate"], "PASS")
+        self.assertEqual(qa["supervision"]["checkpoint"], "qa")
+        self.assertEqual(qa["supervision"]["feedback_missing"], ["verification_started"])
+
     def test_attempt_names_change_but_stable_semantic_coverage_reuses_real_check(self):
         self.start()
         first = self.check("first")

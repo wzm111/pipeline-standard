@@ -252,6 +252,26 @@ def parser():
     return cli
 
 
+def _supervision(root, run_id, checkpoint):
+    """Automatic, advisory evidence check at managed CLI boundaries."""
+    import run_progress
+
+    try:
+        progress = run_progress.snapshot(root, run_id)
+        feedback = progress["feedback_audit"]
+        incomplete = bool(feedback["missing"] or feedback["invalid"] or progress["truncated"]
+                          or progress["unavailable_records"])
+        return {"checkpoint": checkpoint, "status": "review_needed" if incomplete else "no_feedback_gap",
+                "feedback_missing": feedback["missing"], "feedback_invalid": feedback["invalid"],
+                "allocation_mode": progress["allocation"].get("mode"),
+                "host_dispatch": "requires_host_crosscheck",
+                "next_action": ("record_sent_start_feedback_and_check_allocation" if checkpoint == "startup"
+                                else "reconcile_current_task_with_host_before_acceptance")}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"checkpoint": checkpoint, "status": "unavailable",
+                "next_action": "recheck_current_task_progress"}
+
+
 def dispatch(args):
     if args.action == "paths":
         return paths(args.project), 0
@@ -361,6 +381,7 @@ def dispatch(args):
         R._atomic(receipt, {**{k: state[k] for k in ("schema_version", "run_id", "owner_token")}, "project_root": str(root)})
         import run_policy
         return {**_public(state), "receipt": str(receipt), "policy": run_policy.inspect(root, state),
+                "supervision": _supervision(root, state["run_id"], "startup"),
                 "next_action": "policy-ack --receipt <receipt> --revision <policy.revision>; caller acknowledgement only",
                 "audit": _optional_audit(root, state["run_id"]), **paths()}, 0
     receipt = _receipt(root, args.receipt)
@@ -425,7 +446,10 @@ def dispatch(args):
                            independent_goal=args.independent_goal)
         else:
             item = T.end(root, run_id, owner, args.task_id, outcome=args.outcome, report_refs=args.report_refs)
-        return {"run_id": run_id, "task": item, "notice": T.NOTICE}, 0
+        result = {"run_id": run_id, "task": item, "notice": T.NOTICE}
+        if args.action == "task-start":
+            result["supervision"] = _supervision(root, run_id, "startup")
+        return result, 0
     if args.action in {"wait", "continue"}:
         import run_continuity as T
         if args.action == "wait":
@@ -454,6 +478,7 @@ def dispatch(args):
                 plan_ref = P.save_plan(root, run_id, owner, args.name, payload.get("checks"),
                                        payload.get("required_checks"))
             result = P.verify_plan(root, run_id, owner, plan_ref, args.name, summary=args.summary)
+            result["supervision"] = _supervision(root, run_id, "qa")
             if result["gate"] != "PASS":
                 return result, 1
             if args.finish:
@@ -483,13 +508,18 @@ def dispatch(args):
         R.update(root, run_id, owner, {"stage": "acceptance", "activity": "testing"})
         ref = P.qa_from_plan(root, run_id, owner, args.plan, args.name, summary=args.summary)
         payload = E.read_report(root, run_id, ref, kind="qa")["payload"]
-        return {"run_id": run_id, "report": ref, **{k: payload[k] for k in
+        return {"run_id": run_id, "report": ref, "supervision": _supervision(root, run_id, "qa"),
+                **{k: payload[k] for k in
                 ("gate", "required_checks", "missing_checks", "check_failures", "environment_diagnostics", "release_bindings") if k in payload}}, 0 if payload["gate"] == "PASS" else 1
     if args.action == "update":
         changes = {key: value for key in ("stage", "activity", "next") if (value := getattr(args, key)) is not None}
         if not changes:
             raise ValueError("update needs a changed stage, activity or next action")
-        return _public(R.update(root, run_id, owner, changes)), 0
+        state = R.update(root, run_id, owner, changes)
+        result = _public(state)
+        if "run_policy" in state and changes.get("stage") in {"verification", "acceptance"}:
+            result["supervision"] = _supervision(root, run_id, "verification")
+        return result, 0
     if args.action in {"observe-begin", "observe-finish"}:
         import observed_checks as H
         if args.action == "observe-begin":
@@ -523,7 +553,7 @@ def dispatch(args):
         relative = E.write_report(root, run_id, owner, args.kind, args.name, submitted)
         if args.kind == "qa" and "run_policy" in R.status(root, run_id)["state"]:
             judgment = E.read_report(root, run_id, relative, kind="qa")["payload"]
-            result = {"run_id": run_id, "report": relative,
+            result = {"run_id": run_id, "report": relative, "supervision": _supervision(root, run_id, "qa"),
                       **{key: judgment[key] for key in ("gate", "required_checks", "missing_checks", "check_failures") if key in judgment}}
             requested_acceptance = submitted.get("gate") == "PASS" or (
                 submitted.get("gate") not in {"CONCERNS", "FAIL"} and submitted.get("plan_ref") is not None)
@@ -585,7 +615,7 @@ def _compact_response(action, value, code):
         return value
     if action == "start":
         return {key: value[key] for key in
-                ("run_id", "status", "stage", "activity", "receipt", "policy", "next_action")}
+                ("run_id", "status", "stage", "activity", "receipt", "policy", "next_action", "supervision")}
     if action == "finish":
         return {key: item for key, item in value.items() if key != "audit"}
     if action == "verify":

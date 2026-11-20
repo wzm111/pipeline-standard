@@ -51,7 +51,9 @@ class CompactCliTests(unittest.TestCase):
 
     def test_compact_start_receipt_policy_ack_and_saved_audit(self):
         started = self.start()
-        self.assertEqual(set(started), {"run_id", "status", "stage", "activity", "receipt", "policy", "next_action"})
+        self.assertEqual(set(started), {"run_id", "status", "stage", "activity", "receipt", "policy",
+                                        "next_action", "supervision"})
+        self.assertEqual(started["supervision"]["feedback_missing"], ["start"])
         receipt = Path(self.receipt)
         self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
         self.assertNotIn(json.loads(receipt.read_text())["owner_token"], json.dumps(started))
