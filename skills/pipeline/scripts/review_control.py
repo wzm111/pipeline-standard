@@ -1,5 +1,6 @@
 """Explicit review obligations across tasks and accepted deliveries."""
 from copy import deepcopy
+from pathlib import Path
 
 import run_evidence as E
 import run_state as R
@@ -15,6 +16,31 @@ def required(state):
     if state.get("inherited_review") and not state.get("tasks"):
         return True
     return current["required"] if "required" in current else bool(state.get("inherited_review"))
+
+
+def supervised_high_risk(state):
+    return bool(state.get("supervision_from")) and decision(state).get("risk") == "high"
+
+
+def implementation_entered(state):
+    return any(event.get("implementation_review_checked") is True
+               and R._timestamp(event["at"]) >= R._timestamp(state["supervision_from"])
+               for event in state["history"])
+
+
+def require_source_write(root, state, paths):
+    """Check the current task before a host writes project source."""
+    if not supervised_high_risk(state):
+        return
+    root = Path(root).resolve()
+    relative = [(root / path).resolve().relative_to(root) for path in paths]
+    if all(path.parts[:2] == ("tmp", "pipeline") for path in relative):
+        return
+    validate_development(root, state)
+    if state["stage"] != "implementation" or not implementation_entered(state):
+        raise ValueError("enter implementation for the current high-risk task before writing project files")
+    if state.get("continuity_wait", {}).get("status") == "waiting":
+        raise ValueError("resolve the registered human wait before writing project files")
 
 
 def task_decision(root, state, risk, reason, continuation, retrospective, independent_goal=False):

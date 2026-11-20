@@ -221,9 +221,12 @@ def update(project_root, run_id, owner_token, changes):
         path, state = _load_owned(base, run_id, owner_token)
         if state.get("status") != "running":
             raise ValueError("only a running run can be updated")
+        implementation_entry = False
         if changes.get("stage") == "implementation":
             import review_control
             review_control.validate_development(project_root, state)
+            implementation_entry = review_control.supervised_high_risk(state) and (
+                state["stage"] != "implementation" or not review_control.implementation_entered(state))
         previous = (state.get("stage"), state.get("activity", "execution"))
         import progress_feedback
         verification_entry = changes.get("stage") == "verification" and (
@@ -239,8 +242,10 @@ def update(project_root, run_id, owner_token, changes):
             # Explicit same-value main updates also supersede pending role bindings.
             state["progress_revision"] = state.get("progress_revision", 0) + 1
         state["updated_at"] = _now()
-        if verification_entry or previous != (state.get("stage"), state.get("activity", "execution")):
+        if verification_entry or implementation_entry or previous != (state.get("stage"), state.get("activity", "execution")):
             state["history"].append(_event(state, "transition", state["updated_at"]))
+            if implementation_entry:
+                state["history"][-1]["implementation_review_checked"] = True
             if verification_entry and state.get("supervision_from"):
                 state["history"][-1]["verification_feedback_checked"] = True
         _atomic(path, state)

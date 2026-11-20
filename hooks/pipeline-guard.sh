@@ -152,6 +152,28 @@ if [ -z "$GUARD" ]; then
   exit 2
 fi
 
+check_implementation() {
+  python3 -B - "$0" "$CWD" "$REL" <<'PYEOF'
+import sys
+from pathlib import Path
+
+hook, root, target = sys.argv[1:]
+sys.path.insert(0, str(Path(hook).resolve().parents[1] / "skills/pipeline/scripts"))
+import review_control
+import run_state
+
+try:
+    snapshot = run_state.status(root)
+    state, marker = snapshot["state"], snapshot["active"]
+    if state is not None and review_control.supervised_high_risk(state):
+        run_state._owned(marker, state["run_id"], state["owner_token"])
+        review_control.require_source_write(root, state, [target])
+except (OSError, ValueError, KeyError, TypeError) as error:
+    print(f"[pipeline-guard] {error}", file=sys.stderr)
+    sys.exit(2)
+PYEOF
+}
+
 MODE=$(printf '%s\n' "$GUARD" | head -1)
 PATTERNS=$(printf '%s\n' "$GUARD" | tail -n +2)
 
@@ -167,7 +189,7 @@ match() {
 }
 
 if [ "$MODE" = "allow-write" ]; then
-  if match "$REL"; then exit 0; fi
+  if match "$REL"; then check_implementation; exit $?; fi
   echo "[pipeline-guard] 拦截:流水线期间只允许写白名单目录,目标 $REL 不在其中。" >&2
   echo "[pipeline-guard] 白名单见 PIPELINE.md ⑤ 的 pipeline-guard:allow-write 块;确需写其他位置,请先向调度员/用户申请。" >&2
   exit 2
@@ -176,5 +198,6 @@ else
     echo "[pipeline-guard] 拦截:$REL 命中 PIPELINE.md ⑤ 声明的禁区。" >&2
     exit 2
   fi
-  exit 0
+  check_implementation
+  exit $?
 fi

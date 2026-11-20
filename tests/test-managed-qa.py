@@ -385,6 +385,36 @@ class ManagedQaTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.finish()
 
+    def test_high_risk_project_write_requires_review_and_current_implementation(self):
+        (self.root / "PIPELINE.md").write_text("<!-- pipeline-guard:allow-write\ninput\ntmp/\n-->")
+        V.acknowledge(*self.args, V.snapshot(self.root)["revision"])
+        self.cli("task-start", "--receipt", str(self.receipt), "--task-id", "repair",
+                 "--goal", "repair", "--accept", "checks", "--review-risk", "high",
+                 "--review-reason", "sensitive behavior")
+
+        def hook(path):
+            payload = {"cwd": str(self.root), "tool_name": "Edit", "tool_input": {"file_path": path}}
+            return subprocess.run(["bash", str(SCRIPTS.parents[2] / "hooks/pipeline-guard.sh")],
+                                  input=json.dumps(payload), capture_output=True, text=True)
+
+        args = ("write-preflight", "--receipt", str(self.receipt), "--path")
+        self.assertIn("solution review", self.cli(*args, "input", expected=2)["message"])
+        self.assertEqual(hook("input").returncode, 2)
+        self.assertEqual(hook("tmp/pipeline/context.md").returncode, 0)
+        self.assertTrue(self.cli(*args, "tmp/pipeline/context.md")["ready"])
+        requirement = E.write_report(*self.args, "dual_review", "required", {})
+        plan = P.save_plan(*self.args, "plan", {"unit": self.spec})
+        ticket = D.begin(*self.args, "scope_guardian")
+        D.accepted(*self.args, ticket["id"], "reviewer", host_executor_id="native-reviewer")
+        D.complete(*self.args, ticket["id"], executors_stopped=True, stop_evidence="fixture returned")
+        E.write_report(*self.args, "solution_review", "solution",
+                       {"gate": "PASS", "requirement_ref": requirement, "plan_ref": plan,
+                        "dispatch_id": ticket["id"]})
+        self.assertIn("enter implementation", self.cli(*args, "input", expected=2)["message"])
+        R.update(*self.args, {"stage": "implementation"})
+        self.assertTrue(self.cli(*args, "input")["ready"])
+        self.assertEqual(hook("input").returncode, 0)
+
     def test_supervised_high_risk_requires_current_phase_and_observed_routing_at_closeout(self):
         configured = {"schema_version": 1, "runtimes": {"codex": {
             "scope_guardian": {"model": "test-expert", "effort": "high"},

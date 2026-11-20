@@ -218,6 +218,7 @@ def accepted(project_root, run_id, owner_token, dispatch_id, executor_id, *, act
                 phase = item["workflow_phase"]
                 first_verification = False
                 check_feedback = False
+                implementation_entry = False
                 if phase == "verification":
                     import progress_feedback
                     first_verification = bool(state.get("supervision_from")) and not progress_feedback.entered_verification(state)
@@ -227,7 +228,11 @@ def accepted(project_root, run_id, owner_token, dispatch_id, executor_id, *, act
                 if phase == "implementation":
                     import review_control
                     review_control.validate_development(project_root, state)
-                _transition(state, phase, WORKFLOW_PHASES[phase], now, force=first_verification)
+                    implementation_entry = review_control.supervised_high_risk(state) and (
+                        state["stage"] != "implementation" or not review_control.implementation_entered(state))
+                _transition(state, phase, WORKFLOW_PHASES[phase], now, force=first_verification or implementation_entry)
+                if implementation_entry:
+                    state["history"][-1]["implementation_review_checked"] = True
                 if check_feedback and state.get("supervision_from"):
                     state["history"][-1]["verification_feedback_checked"] = True
         state["updated_at"] = now
