@@ -277,7 +277,7 @@ class ReleasePlanCloseoutTests(unittest.TestCase):
             ]:
                 self.cli("check", "--name", name, "--scope", "source", "--intent", "check",
                          "--coverage", *labels, *audit)
-            self.cli("task-end", "--task-id", "initial-audit")
+            self.cli("task-end", "--task-id", "initial-audit", "--outcome", "paused")
         self.cli("task-start", "--task-id", "historical-review", "--retrospective",
                  "--review-risk", "high", "--review-reason", "original engineering acceptance",
                  "--goal", "review release evidence", "--accept", "same-version evidence")

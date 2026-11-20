@@ -98,7 +98,9 @@ def canonical(root, state, payload):
     if not isinstance(payload, dict):
         raise ValueError("managed QA requires structured evidence")
     if payload.get("plan_ref") is None and payload.get("gate") in {"CONCERNS", "FAIL"}:
-        return payload  # Failure recording never grants acceptance or needs a refreshed ack.
+        # Failure recording needs no refreshed ack. A caller cannot supply its
+        # own independent engineering verdict through this path.
+        return {key: value for key, value in payload.items() if key != "engineering_gate"}
     run_policy.require(root, state)
     if payload.get("scope") == "engineering_release; pending external outcomes are not passed":
         import release_checks
@@ -147,7 +149,10 @@ def canonical(root, state, payload):
         mode = "single"
     result["machine_validation"] = {"schema": 1, "mode": mode, "task_started_at": boundary(state)}
     import visual_evidence
-    return _apply_expert_reviews(root, state, visual_evidence.apply(root, state, result))
+    result = visual_evidence.apply(root, state, result)
+    if state.get("supervision_from") and review_control.decision(state).get("risk") == "high":
+        result["engineering_gate"] = result["gate"]
+    return _apply_expert_reviews(root, state, result)
 
 
 def validate_finish(root, state):

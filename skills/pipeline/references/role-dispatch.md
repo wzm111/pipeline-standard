@@ -34,6 +34,10 @@ python3 -B <runner> allocation-decide --project <root> --receipt <receipt> \
 
 需要核对模型是否真正传参时，begin可加`native_parameters={"model": "实际传值", "reasoning_effort": "实际传值", "fork_turns": "none"}`；Claude使用其原生effort字段，省略宿主未传字段。只记录模型/强度/上下文继承方式，不存prompt或凭据。显式请求与提供的原生参数必须相符；旧调用不传该字段仍兼容，但不能据此声称已验证传参。accepted可加`host_executor_id="宿主实际返回的ID"`关联本run短别名，续用保持映射不变。登记是调度员记录，仍需实际原生调用与返回证据，不能将记录本身当宿主证明。
 
-role_dispatch.summary只读输出请求/实际反馈、尝试状态与role_metrics的区间并集。未知实际模型和token保持unknown，不根据API单价或请求推算。finish只对接入本适配器且尚未闭合的派发拒绝收口，不能据此声称所有宿主工具都已被强制拦截。
+新 CLI 高风险任务的方案专家、验证专家及实现开发者在 begin 登记 `routing_runtime="codex"` 或 `"claude"`，accepted 登记实际宿主 ID 和实际模型反馈。收口会按项目、本机和 skill 配置重新解析该角色的高风险路线。显式模型需与请求、原生传参和实际反馈一致。路线配置了推理强度时也按同样方式核对。续用显式路线时，可沿用本 run 内同一宿主角色已完成的原生创建参数，本轮仍需登记实际反馈。实际型号不可见时保留待核实，不能把请求写成实际结果。
+
+宿主在返回时才提供实际型号或强度时，可在 `complete` 补充 `actual_model` 或 `actual_effort`，只补先前未知的字段或确认同值。
+
+role_dispatch.summary只读输出请求/实际反馈、尝试状态与role_metrics的区间并集。未知实际模型和token保持unknown，不根据API单价或请求推算。收口检查只覆盖已接入本适配器的派发和证据，不能拦截任意宿主调用。
 
 当前会话全程直做、没有真实委派时，结束前`confirm_direct(root, run_id, owner_token)`；摘要将角色统计标not_applicable，不报漏事件。有角色事件/派发历史时不能改写为直做。旧上下文只用底层role_metrics的历史继续保留，缺的派发边界不事后补造。
