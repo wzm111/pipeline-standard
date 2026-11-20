@@ -403,14 +403,19 @@ class ManagedQaTests(unittest.TestCase):
                  "--goal", "repair", "--accept", "checks", "--review-risk", "high",
                  "--review-reason", "sensitive behavior")
 
-        def hook(path):
-            payload = {"cwd": str(self.root), "tool_name": "Edit", "tool_input": {"file_path": path}}
+        def hook(path, cwd=None):
+            payload = {"cwd": str(cwd or self.root), "tool_name": "Edit", "tool_input": {"file_path": path}}
             return subprocess.run(["bash", str(SCRIPTS.parents[2] / "hooks/pipeline-guard.sh")],
                                   input=json.dumps(payload), capture_output=True, text=True)
 
         args = ("write-preflight", "--receipt", str(self.receipt), "--path")
         self.assertIn("solution review", self.cli(*args, "input", expected=2)["message"])
         self.assertEqual(hook("input").returncode, 2)
+        subdirectory = self.root / "src"
+        subdirectory.mkdir()
+        self.assertEqual(hook("../input", cwd=subdirectory).returncode, 2)
+        with self.assertRaisesRegex(ValueError, "solution review"):
+            self.check(write_paths=["input"])
         self.assertEqual(hook("tmp/pipeline/context.md").returncode, 0)
         self.assertTrue(self.cli(*args, "tmp/pipeline/context.md")["ready"])
         requirement = E.write_report(*self.args, "dual_review", "required", {})
@@ -430,8 +435,13 @@ class ManagedQaTests(unittest.TestCase):
         self.assertIn("native developer", self.cli(*args, "input", expected=2)["message"])
         W.decide(*self.args, mode="serial", reason="dependency_chain",
                  assignments=[{"id": "repair", "executor_id": "dev", "write_paths": ["input"], "depends_on": []}])
+        (self.root / "input").write_text("direct edit after entry")
+        with self.assertRaisesRegex(ValueError, "changed before"):
+            D.begin(*self.args, "developer", work_item="repair")
+        (self.root / "input").write_text("fixture source")
         developer = D.begin(*self.args, "developer", work_item="repair")
         D.accepted(*self.args, developer["id"], "dev", host_executor_id="native-dev")
+        self.assertIn("assigned paths", self.cli(*args, "elsewhere", expected=2)["message"])
         self.assertTrue(self.cli(*args, "input")["ready"])
         self.assertEqual(hook("input").returncode, 0)
 

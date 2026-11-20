@@ -170,6 +170,9 @@ def _claim_state(root, run_id, state, name, write_paths, *, testing=True, activa
     R.require_not_waiting(state)
     import run_policy
     run_policy.require(root, state)
+    if write_paths:
+        import review_control
+        review_control.require_source_write(root, state, write_paths)
     if activation:
         import release_blockers
         release_blockers.require_clear(root, state)

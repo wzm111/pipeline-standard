@@ -201,6 +201,9 @@ def accepted(project_root, run_id, owner_token, dispatch_id, executor_id, *, act
             return deepcopy(item)
         if item["status"] != "dispatching" or (item["mode"] == "reuse" and item["executor_id"] != executor_id):
             raise ValueError("dispatch acceptance does not match request")
+        if item["role"] == "developer":
+            import review_control
+            review_control.require_implementation_entry(project_root, state)
         actors = M._actors(state.get("role_events", []))
         if executor_id in actors and (item["mode"] == "create" or actors[executor_id]["entries"][-1]["event"] != "stopped"):
             raise ValueError("executor is already observed working or was previously created")

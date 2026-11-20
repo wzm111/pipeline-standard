@@ -32,9 +32,25 @@ FP=$(printf '%s' "$INPUT" | python3 -c 'import sys,json; d=json.load(sys.stdin);
 
 if [ -z "${CWD:-}" ]; then CWD="$(pwd)"; fi
 
-# --- 无激活标记 = 非流水线会话,放行 ---
-MARKER="$CWD/tmp/pipeline/.active"
-if [ ! -f "$MARKER" ]; then exit 0; fi
+# Relative tool paths are relative to the original cwd, even when the active
+# project is an ancestor. Absolute targets also cover edits from another cwd.
+if [ -n "${FP:-}" ] && [[ "$FP" != /* ]]; then FP="$CWD/$FP"; fi
+CWD=$(python3 -B - "$CWD" "$FP" <<'PYEOF'
+from pathlib import Path
+import sys
+
+cwd, target = sys.argv[1:]
+starts = [Path(cwd).resolve()]
+if target:
+    starts.append(Path(target).parent.resolve())
+for start in starts:
+    root = next((p for p in (start, *start.parents) if (p / "tmp/pipeline/.active").is_file()), None)
+    if root is not None:
+        print(root)
+        break
+PYEOF
+)
+if [ -z "$CWD" ]; then exit 0; fi
 
 # --- Bash 命令:流水线期间禁止写/删/改操作 ---
 if [ "$TOOL_NAME" = "Bash" ]; then
