@@ -82,6 +82,56 @@ class ReleaseChecksTests(unittest.TestCase):
                 self.activate()
         self.assertEqual(self.plan()["attempts"], before)
 
+    def declare_project_activation_gate(self):
+        (self.root / "pipeline.release.json").write_text(
+            json.dumps({"activation_guard": "guard.py", "inputs": ["guard-input"]}))
+        (self.root / "guard-input").write_text("gate dependency")
+        (self.root / "guard.py").write_text(
+            "import hashlib, json, subprocess, sys\n"
+            "ctx = json.loads(sys.argv[1])\n"
+            "assert ctx['candidate_assets'] == ['artifact'] and sys.argv[2] == '--'\n"
+            "assert ctx['candidate_asset_sha256']['artifact'] == hashlib.sha256(b'verified-output').hexdigest()\n"
+            "assert ctx['project_guard_input_sha256']['guard-input'] == hashlib.sha256(b'gate dependency').hexdigest()\n"
+            "assert ctx['environment']['pipeline_release_candidate'] == ctx['candidate_id']\n"
+            "if ctx['environment'].get('test_decision') != 'allow':\n"
+            "    raise SystemExit(2)\n"
+            "raise SystemExit(subprocess.run(sys.argv[3:], check=False).returncode)\n")
+
+    def test_project_gate_wraps_real_activation_and_blocks_other_runner_paths(self):
+        self.declare_project_activation_gate()
+        self.prechecks()
+        self.build()
+        command = [sys.executable, "-c", "from pathlib import Path; Path('switched').touch()"]
+        with self.assertRaisesRegex(ValueError, "requires release_checks activate"):
+            C.execute_check(*self.args, "direct", argv=command,
+                            scope=["source.py"], coverage=["release_activation"])
+        import observed_checks
+        with self.assertRaisesRegex(ValueError, "requires release_checks activate"):
+            observed_checks.begin(*self.args, "native", command="fixture-native", scope=["source.py"],
+                                  environment={"scope": "test"}, coverage=["release_activation"])
+        self.assertFalse((self.root / "switched").exists())
+        rejected = self.execute("guard-rejected", "activate", command, environment={"test_decision": "deny"})
+        self.assertFalse(rejected["release_accepted"])
+        self.assertFalse((self.root / "switched").exists())
+        accepted = self.execute("guard-approved", "activate", command, environment={"test_decision": "allow"})
+        self.assertTrue(accepted["release_accepted"])
+        self.assertTrue((self.root / "switched").exists())
+
+    def test_missing_or_changed_project_gate_is_not_allowed_to_activate(self):
+        self.declare_project_activation_gate()
+        with self.assertRaisesRegex(ValueError, "was not prepared"):
+            C.execute_check(*self.args, "unprepared", argv=self.build_argv,
+                            scope=["source.py"], coverage=["release_activation"])
+        self.prechecks()
+        self.build()
+        (self.root / "guard-input").write_text("changed")
+        with self.assertRaisesRegex(ValueError, "gate changed after release preparation"):
+            self.activate()
+        (self.root / "pipeline.release.json").unlink()
+        with self.assertRaisesRegex(ValueError, "gate changed after release preparation"):
+            self.activate()
+        self.assertFalse(any(a["phase"] == "activate" for a in self.plan()["attempts"]))
+
     def test_fail_fast_before_build_when_runner_compatibility_has_not_passed(self):
         self.execute("preflight", "preflight")
         bad=self.execute("compatibility", "compatibility", [sys.executable,"-c","raise SystemExit(1)"])

@@ -155,23 +155,28 @@ def _environment(root, argv, child_env, context, *, project_root=None):
     return result
 
 
-def _claim(root, run_id, owner, name, write_paths, *, testing=True, activation=False):
+def _claim(root, run_id, owner, name, write_paths, *, testing=True, activation=False, activation_context=None):
     with R._write_guard(root) as base:
         path, state = R._load_owned(base, run_id, owner)
-        _claim_state(root, run_id, state, name, write_paths, testing=testing, activation=activation)
+        command = _claim_state(root, run_id, state, name, write_paths, testing=testing, activation=activation,
+                               activation_context=activation_context)
         state["updated_at"] = R._now()
         R._atomic(path, state)
+        return command
 
 
-def _claim_state(root, run_id, state, name, write_paths, *, testing=True, activation=False):
+def _claim_state(root, run_id, state, name, write_paths, *, testing=True, activation=False, activation_context=None):
     """Shared claim mutation; caller holds the owned run's write guard."""
     if state["status"] != "running":
         raise ValueError("check requires an active owned run")
     import run_policy
     run_policy.require(root, state)
+    command = None
     if activation:
+        import project_release_gate
         import release_blockers
         release_blockers.require_clear(root, state)
+        command = project_release_gate.activation_command(root, state, name, activation_context)
     E.write_paths_conflict(root, write_paths, [])
     claims = state.setdefault("running_checks", [])
     if any(c["name"] == name or E.write_paths_conflict(root, write_paths, c["write_paths"]) for c in claims):
@@ -185,6 +190,7 @@ def _claim_state(root, run_id, state, name, write_paths, *, testing=True, activa
         state.update(stage="checking", activity="testing")
         state["history"].append(R._event(state, "transition", R._now()))
     claims.append({"name": name, "write_paths": write_paths, "started_at": R._now()})
+    return command
 
 
 def _release_state(state, name):
@@ -361,8 +367,10 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
                 "exit_code": 0, "result_class": "success", "seconds": 0.0, "reuse_decision": decision}
     if not inspect_resources(root, write_paths, protected_paths)["safe_to_execute"]:
         raise ValueError("declared resources only: protected paths conflict or check write paths are unknown")
-    _claim(root, run_id, owner_token, name, write_paths, testing=intent not in {"search", "locate"},
-           activation="release_activation" in coverage)
+    activation = "release_activation" in coverage
+    guarded_command = _claim(root, run_id, owner_token, name, write_paths,
+                             testing=intent not in {"search", "locate"}, activation=activation,
+                             activation_context={"argv": argv, "cwd": cwd or ".", "environment": environment} if activation else None)
     process, interrupted = None, None
     try:
         relative = f"tmp/pipeline/runs/{run_id}/artifacts/logs/{name}.log"
@@ -372,7 +380,7 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
         error = None
         with log.open("x", encoding="utf-8") as stream:
             try:
-                process = subprocess.Popen(argv, cwd=directory, env=child_env, stdin=subprocess.DEVNULL,
+                process = subprocess.Popen(guarded_command or argv, cwd=directory, env=child_env, stdin=subprocess.DEVNULL,
                                            stdout=stream, stderr=subprocess.STDOUT, start_new_session=os.name == "posix")
                 try:
                     exit_code = process.wait(timeout=timeout)

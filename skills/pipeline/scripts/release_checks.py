@@ -13,6 +13,7 @@ if __name__ == "__main__":
     sys.dont_write_bytecode = True
 
 import delivery as D
+import project_release_gate as G
 import run_checks as C
 import run_evidence as E
 import run_state as R
@@ -118,9 +119,14 @@ def prepare(root, run_id, owner_token, *, required_before=None, required_after=N
     with R._write_guard(root) as base:
         path, state = _owned(base, run_id, owner_token)
         previous = state.get("release_plan", {})
+        gate = G.snapshot(Path(root).resolve(strict=True))
+        if previous.get("project_activation_gate") is not None and previous["project_activation_gate"] != gate:
+            raise ValueError("project release gate changed after release preparation")
         plan = {**previous, "required_before": sorted(set(before) | set(previous.get("required_before", []))),
                 "required_after": sorted(set(after) | set(previous.get("required_after", []))),
                 "attempts": previous.get("attempts", [])}
+        if gate is not None:
+            plan["project_activation_gate"] = gate
         if not previous:
             plan["prepared_at"] = R._now()
         if plan != previous:
@@ -268,6 +274,10 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
             raise ValueError("activation recovery limit reached or activation running; stop and report blocker")
         attempt = {"name": name, "phase": phase, "candidate_id": identity, "status": "running", "report": None,
                    "started_at": R._now()}
+        if phase == "activate" and current["release_plan"].get("project_activation_gate") is not None:
+            attempt["guarded_command"] = G.command_identity({
+                "argv": options["argv"], "cwd": options.get("cwd") or ".", "environment": options["environment"],
+            })
         if any(a["name"] == name for a in attempts):
             raise ValueError("release attempt name already exists")
         attempts.append(attempt)
@@ -279,10 +289,13 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
         result = C.execute_check(root, run_id, owner_token, name, coverage=labels, **options)
         passed = result["exit_code"] == 0 and result.get("inputs_stable", result.get("reused") is True) is True
         if phase == "build" and passed:
-            assets = [{"path": p, "fingerprint": E.fingerprint(root, [p])} for p in artifact_paths]
-            if any(not E._local(Path(root).resolve(strict=True), p).exists() for p in artifact_paths):
+            base = Path(root).resolve(strict=True)
+            if any(not E._local(base, p).exists() for p in artifact_paths):
                 raise ValueError("build did not produce the declared artifacts")
-            check = D._reference(Path(root).resolve(strict=True), run_id, result["report"])
+            assets = [{"path": p, "fingerprint": E.fingerprint(base, [p]),
+                       **(G.candidate_file_hash(base, p) if plan.get("project_activation_gate") else {})}
+                      for p in artifact_paths]
+            check = D._reference(base, run_id, result["report"])
             candidate = {"check": check, "assets": assets}
             payload = E.read_report(root, run_id, result["report"], kind="check")["payload"]
             identity = {"assets": assets, **{k: payload[k] for k in ("command", "fingerprint", "environment")}}
