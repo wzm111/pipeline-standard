@@ -145,7 +145,7 @@ def status(project_root, run_id=None):
     return {"active": active, "state": state}
 
 
-def start(project_root, initial=None, *, managed=False, review_risk=None, review_reason=None):
+def start(project_root, initial=None, *, managed=False, review_risk=None, review_reason=None, supervised=False):
     if review_risk is not None:
         if review_risk not in {"low", "medium", "high", "unknown"} or not isinstance(review_reason, str) or not review_reason.strip():
             raise ValueError("review decision requires a valid risk and reason")
@@ -162,6 +162,10 @@ def start(project_root, initial=None, *, managed=False, review_risk=None, review
                  "stage": "start", "activity": "execution", "batches": [], "pending": [], "next": None,
                  "artifacts": [], "created_at": now, "history": [], "updated_at": now}
         state.update(initial)
+        if supervised:
+            if state["stage"] == "verification" or state["activity"] == "human_wait":
+                raise ValueError("start execution before registering feedback for verification or human wait")
+            state["supervision_from"] = now
         if review_risk is not None:
             state["run_review_decision"] = {"risk": review_risk, "reason": review_reason,
                                            "required": review_risk in {"high", "unknown"}, "retrospective": False}
@@ -221,6 +225,12 @@ def update(project_root, run_id, owner_token, changes):
             import review_control
             review_control.validate_development(project_root, state)
         previous = (state.get("stage"), state.get("activity", "execution"))
+        import progress_feedback
+        if changes.get("stage") == "verification" and previous[0] != "verification":
+            progress_feedback.require_transition(project_root, state, "verification_started")
+        if changes.get("activity") == "human_wait" and previous[1] != "human_wait":
+            if state.get("supervision_from"):
+                raise ValueError("use wait to register an actionable human wait and its progress feedback")
         state.update(deepcopy(changes))
         if {"stage", "activity"} & changes.keys():
             # Explicit same-value main updates also supersede pending role bindings.

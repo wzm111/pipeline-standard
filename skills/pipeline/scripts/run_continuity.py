@@ -136,6 +136,8 @@ def wait_for_user(project_root, run_id, owner_token, *, reason, action, verify):
             if all(previous.get(key) == value for key, value in details.items()) and state.get("activity") == "human_wait":
                 return deepcopy(state)
             raise ValueError("resolve the existing human wait before replacing it")
+        import progress_feedback
+        progress_feedback.require_transition(project_root, state, "blocked")
         now = R._now()
         state["continuity_wait"] = {"status": "waiting", **details, "started_at": now,
                                     "previous_next": deepcopy(state.get("next"))}

@@ -11,6 +11,31 @@ LABEL = re.compile(r'^\s*(🔵|✅|🟠|⏳|🔴|🔎)\s*\*\*\[(进行中|已完
 MAX_BYTES = 262144
 MILESTONES = ("start", "solution_returned", "verification_started", "blocked")
 
+def require_transition(root, state, milestone):
+    """Require a newly registered valid message before a managed transition."""
+    boundary = state.get("supervision_from")
+    if boundary is None:
+        return
+    import run_evidence as E
+    import run_state as R
+
+    # Use a fresh message for each entry, including a second wait in one task.
+    for event in reversed(state["history"]):
+        if ((milestone == "blocked" and event.get("activity") == "human_wait")
+                or (milestone == "verification_started" and event.get("stage") == "verification")):
+            boundary = max(boundary, event["at"], key=R._timestamp)
+            break
+    for ref in reversed(state["artifacts"]):
+        if "/artifacts/progress_feedback/" not in ref:
+            continue
+        report = E.read_report(root, state["run_id"], ref, kind="progress_feedback")
+        payload = report["payload"]
+        if payload.get("milestone") == milestone and R._timestamp(report["recorded_at"]) > R._timestamp(boundary):
+            if payload.get("format_valid") is True:
+                return
+            break
+    raise ValueError(f"register valid current progress_feedback for {milestone} before transitioning")
+
 
 def milestone_audit(required, reports):
     samples = {report.get("milestone"): report.get("format_valid") for report in reports}

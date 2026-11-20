@@ -122,6 +122,9 @@ class PolicyTests(unittest.TestCase):
         self.start(acknowledge=True)
         H.begin(*self.args, "host", **self.host)
         span = O.begin(*self.args, "verify", "observed-operation")
+        self.cli("report", "--receipt", self.receipt, "--kind", "progress_feedback",
+                 "--name", "wait-feedback", "--json", json.dumps({"milestone": "blocked", "messages": [
+                     {"text": "🔴 **[需你处理]** 请选择后继续核验。"}]}))
         (self.root / "AGENTS.md").write_text("changed rules")
         (self.root / "host.log").write_text("actual fixture return")
         H.finish(*self.args, "host", exit_code=1, log_path="host.log", host_stopped=True,

@@ -120,6 +120,9 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
         path, state = _owned(base, run_id, owner_token)
         import run_policy
         run_policy.require(project_root, state)
+        if workflow_phase == "verification" and state.get("stage") != "verification":
+            import progress_feedback
+            progress_feedback.require_transition(project_root, state, "verification_started")
         if workflow_phase == "implementation":
             import review_control
             review_control.validate_development(project_root, state)

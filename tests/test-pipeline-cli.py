@@ -184,8 +184,11 @@ class PipelineCliTests(unittest.TestCase):
             {"text": "🔵 **[进行中]** 正在运行本地检查。"}]}
         self.cli("report", "--receipt", self.receipt, "--kind", "progress_feedback",
                  "--name", "start", "--json", json.dumps(feedback))
+        denied = self.cli("update", "--receipt", self.receipt, "--stage", "verification", expected=2)
+        self.assertIn("verification_started", denied["message"])
+        self.record_feedback("verification_started", "🔵 **[进行中]** 开始验证。")
         stage = self.cli("update", "--receipt", self.receipt, "--stage", "verification")
-        self.assertEqual(stage["supervision"]["feedback_missing"], ["verification_started"])
+        self.assertEqual(stage["supervision"]["feedback_missing"], [])
         self.assertEqual(stage["supervision"]["host_dispatch"], "requires_host_crosscheck")
         check = self.check("unit-supervision", "print('fixture check passed')")
         qa = self.cli("report", "--receipt", self.receipt, "--kind", "qa", "--name", "accepted",
@@ -193,7 +196,11 @@ class PipelineCliTests(unittest.TestCase):
                                             "required_checks": ["unit-fixture"]}))
         self.assertEqual(qa["gate"], "PASS")
         self.assertEqual(qa["supervision"]["checkpoint"], "qa")
-        self.assertEqual(qa["supervision"]["feedback_missing"], ["verification_started"])
+        self.assertEqual(qa["supervision"]["feedback_missing"], [])
+
+    def record_feedback(self, milestone, text):
+        self.cli("report", "--receipt", self.receipt, "--kind", "progress_feedback",
+                 "--name", milestone, "--json", json.dumps({"milestone": milestone, "messages": [{"text": text}]}))
 
     def test_attempt_names_change_but_stable_semantic_coverage_reuses_real_check(self):
         self.start()
@@ -265,6 +272,10 @@ class PipelineCliTests(unittest.TestCase):
         started = self.start()
         self.cli("update", "--receipt", self.receipt, "--next", "finish original acceptance")
         proof = self.check("before-wait")
+        denied = self.cli("wait", "--receipt", self.receipt, "--reason", "platform login required",
+                         "--action", "log in", "--verify", "check receipt", expected=2)
+        self.assertIn("blocked", denied["message"])
+        self.record_feedback("blocked", "🔴 **[需你处理]** 请登录平台，登录后核对收件。")
         waited = self.cli("wait", "--receipt", self.receipt, "--reason", "platform login required",
                           "--action", "log in to the platform console", "--verify", "verify server receipt and dedup")
         self.assertEqual(waited["activity"], "human_wait")
@@ -275,6 +286,8 @@ class PipelineCliTests(unittest.TestCase):
                  "--stop-evidence", "fixture stopped", expected=2)
         self.assertIsNotNone(R.status(self.root)["active"])
         resumed = self.cli("continue", "--receipt", self.receipt, "--evidence", "user reports login complete")
+        self.cli("wait", "--receipt", self.receipt, "--reason", "another login",
+                 "--action", "log in again", "--verify", "check receipt", expected=2)
         self.assertEqual(resumed["next"], "verify server receipt and dedup")
         state = R.status(self.root)["state"]
         self.assertIn(proof["report"], state["artifacts"])

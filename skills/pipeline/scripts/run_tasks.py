@@ -115,6 +115,8 @@ def start(root, run_id, owner, task_id, goal, acceptance, *, require_managed=Fal
         if require_managed or "work_allocation" in state:
             import work_allocation
             work_allocation.initialize(state, task_id)
+        if require_managed:
+            state["supervision_from"] = now
         state["updated_at"] = now
         R._atomic(path, state)
         return deepcopy(item)

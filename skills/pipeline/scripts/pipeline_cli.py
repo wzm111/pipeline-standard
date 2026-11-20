@@ -373,7 +373,8 @@ def dispatch(args):
         initial = {"stage": args.stage}
         if args.delivery_from:
             initial["delivery_from"] = args.delivery_from
-        state = R.start(root, initial, managed=True, review_risk=args.review_risk, review_reason=args.review_reason)
+        state = R.start(root, initial, managed=True, supervised=True,
+                        review_risk=args.review_risk, review_reason=args.review_reason)
         # NamedTemporaryFile in _atomic gives 0600. No token is printed, passed
         # as argv, or inferred from a different task's active marker.
         receipt = E._local(root, f"tmp/pipeline/runs/{state['run_id']}/receipt.json")
