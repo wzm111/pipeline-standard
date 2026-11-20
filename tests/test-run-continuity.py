@@ -15,6 +15,9 @@ import role_dispatch as D
 import release_checks as F
 import run_evidence as E
 import run_checks
+import check_plan as P
+import observed_checks as H
+import run_tasks as T
 
 
 class ContinuityTests(unittest.TestCase):
@@ -235,12 +238,45 @@ class ContinuityTests(unittest.TestCase):
             self.assertIsNone(observed["known_idle_seconds"])
             self.assertEqual(observed["timing"]["tracked_seconds"], 70)
 
+    def test_registered_wait_blocks_verification_even_if_legacy_activity_says_testing(self):
+        args = self.root, self.run, self.owner
+        (self.root / "input").write_text("fixture")
+        check = {"argv": [sys.executable, "-B", "-c",
+                          "from pathlib import Path; Path('ran').touch()"],
+                 "scope": ["input"], "coverage": ["unit"]}
+        plan = P.save_plan(*args, "fixture", {"unit": check})
+        self.at(10)
+        self.wait()
+        with R._write_guard(self.root) as base:
+            path, state = R._load_owned(base, self.run, self.owner)
+            state.update(stage="verification", activity="testing")
+            R._atomic(path, state)
+        calls = [
+            lambda: R.update(*args, {"stage": "verification", "activity": "testing"}),
+            lambda: run_checks.execute_check(*args, "direct", **check),
+            lambda: P.verify_plan(*args, plan, "verify"),
+            lambda: H.begin(*args, "browser", command="observed browser", scope=["input"], environment={"scope": "fixture"}),
+            lambda: D.begin(*args, "tester", workflow_phase="verification"),
+            lambda: T.start(*args, "next", "next", ["done"]),
+        ]
+        before = R.status(self.root)
+        for call in calls:
+            with self.assertRaisesRegex(ValueError, "registered human wait.*continue"):
+                call()
+        self.assertEqual(R.status(self.root), before)
+        self.assertFalse((self.root / "ran").exists())
+        self.at(20)
+        C.resume_work(*args, evidence="observed the required user action")
+        self.assertEqual(P.verify_plan(*args, plan, "verify")["gate"], "PASS")
+        self.assertTrue((self.root / "ran").exists())
+
     def test_pause_resume_preserves_explicit_wait_and_legacy_completion(self):
         self.at(10)
         self.wait()
         R.finish(self.root, self.run, self.owner, "paused", executors_stopped=True, stop_evidence="stopped")
         self.at(20)
-        R.resume(self.root, self.run, self.owner, executors_stopped=True, stop_evidence="stopped")
+        owned = R.resume(self.root, self.run, self.owner, executors_stopped=True, stop_evidence="stopped")
+        self.assertEqual(owned["activity"], "human_wait")
         with self.assertRaisesRegex(ValueError, "registered human wait"):
             R.finish(self.root, self.run, self.owner, "completed", executors_stopped=True, stop_evidence="stopped")
         C.resume_work(self.root, self.run, self.owner, evidence="manual action completed; verification pending")

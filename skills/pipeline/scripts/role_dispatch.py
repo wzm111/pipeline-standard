@@ -122,6 +122,7 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
         path, state = _owned(base, run_id, owner_token)
         import run_policy
         run_policy.require(project_root, state)
+        R.require_not_waiting(state)
         if workflow_phase == "verification":
             import progress_feedback
             if state.get("stage") != "verification" or not progress_feedback.entered_verification(state):

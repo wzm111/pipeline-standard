@@ -100,6 +100,7 @@ def start(root, run_id, owner, task_id, goal, acceptance, *, require_managed=Fal
             return deepcopy(existing)
         if require_managed and "run_policy" not in state:
             raise ValueError("new CLI tasks require managed adoption; inspect policy then policy-ack --receipt <current receipt> --revision <current revision>")
+        R.require_not_waiting(state)
         run_policy.require_new_task(root, state)
         if any(item["status"] == "running" for item in tasks):
             raise ValueError("end the current task explicitly before starting another")
@@ -146,6 +147,7 @@ def end(root, run_id, owner, task_id, *, outcome="execution_ended", report_refs=
                 raise ValueError("task report must already be registered in this run")
             E.read_report(root, run_id, ref)
         if outcome == "execution_ended":
+            R.require_not_waiting(state)
             import process_compliance
             if process_compliance.require(root, state):
                 import managed_qa

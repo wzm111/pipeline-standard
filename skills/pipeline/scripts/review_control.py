@@ -65,8 +65,7 @@ def require_source_write(root, state, paths):
     validate_development(root, state)
     if state["stage"] != "implementation" or not implementation_entered(state):
         raise ValueError("enter implementation for the current high-risk task before writing project files")
-    if state.get("continuity_wait", {}).get("status") == "waiting":
-        raise ValueError("resolve the registered human wait before writing project files")
+    R.require_not_waiting(state)
     since = R._timestamp(state["supervision_from"])
     if not any(item.get("role") == "developer" and item.get("status") == "working"
                and item.get("host_executor_id") and R._timestamp(item["requested_at"]) >= since

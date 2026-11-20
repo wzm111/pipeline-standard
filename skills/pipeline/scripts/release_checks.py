@@ -247,6 +247,7 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
         options["environment"] = {**environment, "pipeline_release_candidate": candidate["id"]}
     with R._write_guard(root) as base:
         path, current = _owned(base, run_id, owner_token)
+        R.require_not_waiting(current)
         if phase == "activate":
             import review_control
             review_control.validate_pre_activation(root, current)

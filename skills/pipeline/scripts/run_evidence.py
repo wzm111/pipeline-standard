@@ -71,6 +71,8 @@ def write_report(project_root, run_id, owner_token, kind, name, payload):
         state_path, state = run_state._load_owned(base, run_id, owner_token)
         if state["status"] != "running":
             raise ValueError("only active runs can record reports")
+        if kind == "check_reuse":
+            run_state.require_not_waiting(state)
         root = Path(project_root).resolve(strict=True)
         if kind == "release_blocker":
             import release_blockers

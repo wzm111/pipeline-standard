@@ -218,12 +218,19 @@ def _load_owned(base, run_id, owner_token, *, require_active=True):
     return path, state
 
 
+def require_not_waiting(state):
+    if state.get("continuity_wait", {}).get("status") == "waiting":
+        raise ValueError("resolve the registered human wait with continue before proceeding")
+
+
 def update(project_root, run_id, owner_token, changes):
     _validate_changes(changes)
     with _write_guard(project_root) as base:
         path, state = _load_owned(base, run_id, owner_token)
         if state.get("status") != "running":
             raise ValueError("only a running run can be updated")
+        if "stage" in changes or ("activity" in changes and changes["activity"] != "human_wait"):
+            require_not_waiting(state)
         implementation_entry = False
         if changes.get("stage") == "implementation":
             import review_control
@@ -279,8 +286,7 @@ def _finish_readiness(project_root, state, outcome):
     if any(item.get("status") in {"dispatching", "working"} for item in state.get("role_dispatches", [])):
         raise ValueError("close observed role dispatches after host stop before finishing")
     if outcome == "completed":
-        if state.get("continuity_wait", {}).get("status") == "waiting":
-            raise ValueError("resolve the registered human wait before completing")
+        require_not_waiting(state)
         if state.get("release_plan"):
             import release_checks
             release_checks.validate_closeout(project_root, state)
@@ -340,9 +346,9 @@ def resume(project_root, run_id, owner_token, *, executors_stopped=False, stop_e
             raise ValueError("completed or unknown state cannot resume")
         state["status"] = "running"
         state["updated_at"] = _now()
-        # Resumption defaults to execution; an earlier human/role wait does not
-        # silently continue after the caller has explicitly resumed work.
-        state["activity"] = "execution"
+        # Ownership recovery does not acknowledge the user's pending action.
+        state["activity"] = ("human_wait" if state.get("continuity_wait", {}).get("status") == "waiting"
+                             else "execution")
         # Resume requires fresh evidence that all previous executors stopped.
         state.pop("running_checks", None)
         state.pop("check_previous_progress", None)

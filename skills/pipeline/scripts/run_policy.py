@@ -106,6 +106,7 @@ def require_owned(project_root, run_id, owner):
     root, base = R._paths(project_root)
     _, state = R._load_owned(base, run_id, owner)
     require(root, state)
+    return state
 
 
 def require_new_task(project_root, state):

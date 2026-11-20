@@ -358,6 +358,7 @@ def _successful_activation(check, binding):
 
 def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=False):
     state = _owned(root, run_id, owner)
+    R.require_not_waiting(state)
     snapshot = _snapshot(root, run_id, state)
     plan = _read_plan(root, run_id, owner, plan_ref, state, snapshot)
     check = plan["checks"][check_id]
@@ -764,6 +765,7 @@ def verify_plan(root, run_id, owner, plan_ref, name, summary=""):
     This records evidence, not independent business acceptance or run completion.
     """
     E._label(name)
+    R.require_not_waiting(_owned(root, run_id, owner, read_only=True))
     preflight = preflight_plan(root, run_id, owner, plan_ref, name, include_reuse=False)
     plan = read_plan(root, run_id, owner, plan_ref)
     ordered = _ordered(plan["checks"])
