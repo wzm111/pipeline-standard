@@ -129,6 +129,7 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
         if workflow_phase == "implementation":
             import review_control
             review_control.validate_development(project_root, state)
+            review_control.require_implementation_entry(project_root, state)
         binding = {}
         if advice_case is not None:
             import expert_advice
@@ -136,6 +137,8 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
         if role == "developer":
             import review_control
             review_control.validate_development(project_root, state)
+            if workflow_phase != "implementation":
+                review_control.require_implementation_entry(project_root, state)
             import work_allocation
             binding = work_allocation.require_dispatch(state, work_item=work_item, executor_id=executor_id)
         elif work_item is not None:
@@ -228,6 +231,7 @@ def accepted(project_root, run_id, owner_token, dispatch_id, executor_id, *, act
                 if phase == "implementation":
                     import review_control
                     review_control.validate_development(project_root, state)
+                    review_control.require_implementation_entry(project_root, state)
                     implementation_entry = review_control.supervised_high_risk(state) and (
                         state["stage"] != "implementation" or not review_control.implementation_entered(state))
                 _transition(state, phase, WORKFLOW_PHASES[phase], now, force=first_verification or implementation_entry)

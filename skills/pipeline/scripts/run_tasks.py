@@ -117,6 +117,8 @@ def start(root, run_id, owner, task_id, goal, acceptance, *, require_managed=Fal
             work_allocation.initialize(state, task_id)
         if require_managed:
             state["supervision_from"] = now
+            state["implementation_baseline"] = (
+                review_control.implementation_fingerprint(root) if review_control.supervised_high_risk(state) else None)
         state["updated_at"] = now
         R._atomic(path, state)
         return deepcopy(item)

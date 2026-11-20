@@ -192,6 +192,9 @@ def start(project_root, initial=None, *, managed=False, review_risk=None, review
         if state.get("stage") == "implementation":
             import review_control
             review_control.validate_development(project_root, state)
+        if supervised and review_risk == "high":
+            import review_control
+            state["implementation_baseline"] = review_control.implementation_fingerprint(project_root)
         path = _state_path(base, state["run_id"])
         if path.exists():
             raise ValueError("run_id collision")
@@ -225,6 +228,7 @@ def update(project_root, run_id, owner_token, changes):
         if changes.get("stage") == "implementation":
             import review_control
             review_control.validate_development(project_root, state)
+            review_control.require_implementation_entry(project_root, state)
             implementation_entry = review_control.supervised_high_risk(state) and (
                 state["stage"] != "implementation" or not review_control.implementation_entered(state))
         previous = (state.get("stage"), state.get("activity", "execution"))

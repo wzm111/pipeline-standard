@@ -7,7 +7,7 @@ import run_state as R
 
 
 def assess(root, state):
-    if not state.get("supervision_from") or review_control.decision(state).get("risk") != "high":
+    if not review_control.supervised_high_risk(state):
         return None
     import managed_qa as Q
 
@@ -21,8 +21,9 @@ def assess(root, state):
         observed = Q._review_executor(state, reports, role, state["supervision_from"]) if reports else None
         required[role] = [observed] if observed else []
     developers = [item for item in dispatches if item["role"] == "developer" and item["status"] == "completed"]
-    if developers or any(event.get("stage") == "implementation" and R._timestamp(event["at"]) >= since
-                         for event in state["history"]):
+    entered = review_control.implementation_entered(state)
+    changed = review_control.implementation_changed(root, state)
+    if developers or entered or changed is True:
         required["developer"] = developers
 
     project = Path(root).resolve() / "pipeline.models.json"
@@ -74,6 +75,12 @@ def assess(root, state):
                 issues[role] = "model_route_mismatch"
                 break
     workflow = {}
+    if changed is None:
+        workflow["implementation"] = "missing_verifiable_git_baseline"
+    elif changed and not entered:
+        workflow["implementation"] = "project_changes_without_implementation_entry"
+    elif changed and review_control.decision(state).get("retrospective"):
+        workflow["implementation"] = "retrospective_task_changed_project_files"
     import progress_feedback
     if not progress_feedback.entered_verification(state):
         workflow["verification"] = "missing_current_verification_stage"

@@ -22,6 +22,7 @@ import run_evidence as E
 import run_policy as V
 import run_state as R
 import run_tasks as T
+import work_allocation as W
 
 
 class ManagedQaTests(unittest.TestCase):
@@ -61,6 +62,15 @@ class ManagedQaTests(unittest.TestCase):
         self.assertFalse(result.stderr)
         self.assertNotIn(self.args[2], result.stdout)
         return json.loads(result.stdout)
+
+    def git(self, *args):
+        subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", *args],
+                       cwd=self.root, capture_output=True, check=True)
+
+    def initialize_source_baseline(self):
+        self.git("init")
+        self.git("add", "input", "PIPELINE.md")
+        self.git("commit", "-m", "fixture input")
 
     def test_plain_pass_names_missing_and_wrong_refs_never_create_acceptance(self):
         checked = self.check()
@@ -387,6 +397,7 @@ class ManagedQaTests(unittest.TestCase):
 
     def test_high_risk_project_write_requires_review_and_current_implementation(self):
         (self.root / "PIPELINE.md").write_text("<!-- pipeline-guard:allow-write\ninput\ntmp/\n-->")
+        self.initialize_source_baseline()
         V.acknowledge(*self.args, V.snapshot(self.root)["revision"])
         self.cli("task-start", "--receipt", str(self.receipt), "--task-id", "repair",
                  "--goal", "repair", "--accept", "checks", "--review-risk", "high",
@@ -411,9 +422,37 @@ class ManagedQaTests(unittest.TestCase):
                        {"gate": "PASS", "requirement_ref": requirement, "plan_ref": plan,
                         "dispatch_id": ticket["id"]})
         self.assertIn("enter implementation", self.cli(*args, "input", expected=2)["message"])
+        (self.root / "input").write_text("direct edit before entry")
+        with self.assertRaisesRegex(ValueError, "changed before"):
+            R.update(*self.args, {"stage": "implementation"})
+        (self.root / "input").write_text("fixture source")
         R.update(*self.args, {"stage": "implementation"})
+        self.assertIn("native developer", self.cli(*args, "input", expected=2)["message"])
+        W.decide(*self.args, mode="serial", reason="dependency_chain",
+                 assignments=[{"id": "repair", "executor_id": "dev", "write_paths": ["input"], "depends_on": []}])
+        developer = D.begin(*self.args, "developer", work_item="repair")
+        D.accepted(*self.args, developer["id"], "dev", host_executor_id="native-dev")
         self.assertTrue(self.cli(*args, "input")["ready"])
         self.assertEqual(hook("input").returncode, 0)
+
+    def test_closeout_detects_unregistered_source_changes_even_after_commit(self):
+        self.initialize_source_baseline()
+        self.cli("task-start", "--receipt", str(self.receipt), "--task-id", "repair",
+                 "--goal", "repair", "--accept", "checks", "--review-risk", "high",
+                 "--review-reason", "sensitive behavior")
+        state = R.status(self.root)["state"]
+        (self.root / "tmp/pipeline/technical-note.md").write_text("normal work record")
+        self.assertFalse(RC.implementation_changed(self.root, state))
+        self.assertNotIn("developer", PC.assess(self.root, state)["dispatch_issues"])
+        (self.root / "input").write_text("direct edit")
+        self.assertTrue(RC.implementation_changed(self.root, state))
+        self.git("add", "input")
+        self.git("commit", "-m", "bypassed entry")
+        compliance = PC.assess(self.root, R.status(self.root)["state"])
+        self.assertEqual(compliance["dispatch_issues"]["developer"], "missing_completed_host_dispatch")
+        self.assertEqual(compliance["workflow_issues"]["implementation"], "project_changes_without_implementation_entry")
+        with self.assertRaisesRegex(ValueError, "project_changes_without_implementation_entry"):
+            T.end(*self.args, "repair")
 
     def test_supervised_high_risk_requires_current_phase_and_observed_routing_at_closeout(self):
         configured = {"schema_version": 1, "runtimes": {"codex": {
@@ -422,6 +461,7 @@ class ManagedQaTests(unittest.TestCase):
                 "high_risk_verification": {"model": "test-verifier", "effort": "high"}}},
         }}}
         (self.root / "pipeline.models.json").write_text(json.dumps(configured))
+        self.initialize_source_baseline()
         self.cli("task-start", "--receipt", str(self.receipt), "--task-id", "audit",
                  "--goal", "audit", "--accept", "checks", "--review-risk", "high",
                  "--review-reason", "sensitive evidence", "--retrospective")

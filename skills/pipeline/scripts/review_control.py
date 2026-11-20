@@ -28,6 +28,32 @@ def implementation_entered(state):
                for event in state["history"])
 
 
+def implementation_fingerprint(root):
+    """Git tree plus staged, unstaged and untracked worktree fingerprints."""
+    from agent_handoff import _git_state
+    snapshot = _git_state(root, implementation=True)
+    if snapshot and snapshot["content_complete"]:
+        return {key: snapshot[key] for key in ("tree", "fingerprint")}
+    return None
+
+
+def implementation_changed(root, state):
+    before = state.get("implementation_baseline")
+    if before is None:
+        return None
+    after = implementation_fingerprint(root)
+    return None if after is None else before != after
+
+
+def require_implementation_entry(root, state):
+    if supervised_high_risk(state) and not implementation_entered(state):
+        changed = implementation_changed(root, state)
+        if changed is None:
+            raise ValueError("current high-risk task has no verifiable Git implementation baseline")
+        if changed:
+            raise ValueError("project files changed before the current high-risk implementation entry")
+
+
 def require_source_write(root, state, paths):
     """Check the current task before a host writes project source."""
     if not supervised_high_risk(state):
@@ -41,6 +67,11 @@ def require_source_write(root, state, paths):
         raise ValueError("enter implementation for the current high-risk task before writing project files")
     if state.get("continuity_wait", {}).get("status") == "waiting":
         raise ValueError("resolve the registered human wait before writing project files")
+    since = R._timestamp(state["supervision_from"])
+    if not any(item.get("role") == "developer" and item.get("status") == "working"
+               and item.get("host_executor_id") and R._timestamp(item["requested_at"]) >= since
+               for item in state.get("role_dispatches", [])):
+        raise ValueError("current high-risk project writes require an accepted native developer dispatch")
 
 
 def task_decision(root, state, risk, reason, continuation, retrospective, independent_goal=False):

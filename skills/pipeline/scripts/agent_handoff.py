@@ -21,10 +21,13 @@ def _git(root, *args):
                           check=True, capture_output=True, timeout=10).stdout
 
 
-def _git_state(root):
+def _git_state(root, *, implementation=False):
     scope = ("--", ".", ":(exclude).pipeline.models.lock")
+    if implementation:
+        scope += (":(exclude)tmp/pipeline/",)
     try:
         head = _git(root, "rev-parse", "HEAD").decode().strip()
+        tree = _git(root, "rev-parse", "HEAD^{tree}").decode().strip() if implementation else None
         branch = _git(root, "rev-parse", "--abbrev-ref", "HEAD").decode().strip()
         prefix = _git(root, "rev-parse", "--show-prefix").removesuffix(b"\n")
         status = _git(root, "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all", *scope)
@@ -61,7 +64,8 @@ def _git_state(root):
         except (OSError, ValueError, UnicodeError):
             complete = False
     return {"head": head, "branch": branch, "dirty": bool(status),
-            "fingerprint": digest.hexdigest(), "content_complete": complete}
+            "fingerprint": digest.hexdigest(), "content_complete": complete,
+            **({"tree": tree} if implementation else {})}
 
 
 def _path(root, run_id):
