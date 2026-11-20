@@ -118,9 +118,9 @@ def _live_actors(state):
     for item in state.get("role_dispatches", []):
         if item.get("status") in {"dispatching", "working"}:
             live.add(item.get("executor_id") or "dispatch:" + item["id"])
-    release_running = sum(attempt.get("status") == "running"
-                          for attempt in state.get("release_plan", {}).get("attempts", []))
-    return len(live) + len(state.get("running_checks", [])) + release_running
+    # Release takes the ordinary check claim before launching its subprocess.
+    # Its attempt record can outlive the executor during ownership recovery.
+    return len(live) + len(state.get("running_checks", []))
 
 
 def wait_for_user(project_root, run_id, owner_token, *, reason, action, verify):

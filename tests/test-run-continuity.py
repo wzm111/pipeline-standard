@@ -286,6 +286,21 @@ class ContinuityTests(unittest.TestCase):
                         executors_stopped=True, stop_evidence="legacy stop")
         self.assertEqual(done["status"], "completed")
 
+    def test_wait_keeps_crashed_release_attempt_after_executor_recovery(self):
+        args = self.root, self.run, self.owner
+        attempt = {"status": "running", "recovery_hold": {"status": "held"}}
+        with R._write_guard(self.root) as base:
+            path, state = R._load_owned(base, self.run, self.owner)
+            state["release_plan"] = {"attempts": [attempt]}
+            state["running_checks"] = [{"name": "release"}]
+            R._atomic(path, state)
+        with self.assertRaisesRegex(ValueError, "live checks"):
+            self.wait()
+        R.resume(*args, executors_stopped=True, stop_evidence="local executor confirmed stopped")
+        waiting = self.wait()
+        self.assertEqual(waiting["activity"], "human_wait")
+        self.assertEqual(waiting["release_plan"]["attempts"], [attempt])
+
 
 if __name__ == "__main__":
     unittest.main()
