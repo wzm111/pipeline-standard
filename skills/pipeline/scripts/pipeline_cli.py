@@ -145,10 +145,11 @@ def parser():
     handoff.add_argument("--run-id", required=True)
     handoff.add_argument("--detail", help="read only the named detail section")
     owned = {}
-    for name in ("handoff-save", "update", "check", "report", "finish", "plan", "plan-preflight", "plan-bind", "plan-bind-release", "retain-release", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "expert-prepare", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
+    for name in ("handoff-save", "update", "write-preflight", "check", "report", "finish", "plan", "plan-preflight", "plan-bind", "plan-bind-release", "retain-release", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "expert-prepare", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
+    owned["write-preflight"].add_argument("--path", action="append", required=True)
     owned["policy-ack"].add_argument("--revision", required=True)
     owned["allocation-review"].add_argument("--change-id", required=True, help="stable id of a meaningful authorized scope change")
     owned["allocation-decide"].add_argument("--json", required=True, dest="allocation_payload",
@@ -394,6 +395,12 @@ def dispatch(args):
                 "audit": _optional_audit(root, state["run_id"]), **paths()}, 0
     receipt = _receipt(root, args.receipt)
     run_id, owner = receipt["run_id"], receipt["owner_token"]
+    if args.action == "write-preflight":
+        import review_control
+        with R._write_guard(root) as base:
+            _, state = R._load_owned(base, run_id, owner)
+            review_control.require_source_write(root, state, args.path)
+        return {"run_id": run_id, "ready": True}, 0
     if args.action == "retain-release":
         import release_archive
         return release_archive.record(root, run_id, owner, args.name, json.loads(args.payload)), 0

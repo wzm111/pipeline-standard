@@ -122,6 +122,7 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
         path, state = _owned(base, run_id, owner_token)
         import run_policy
         run_policy.require(project_root, state)
+        R.require_not_waiting(state)
         if workflow_phase == "verification":
             import progress_feedback
             if state.get("stage") != "verification" or not progress_feedback.entered_verification(state):
@@ -129,6 +130,7 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
         if workflow_phase == "implementation":
             import review_control
             review_control.validate_development(project_root, state)
+            review_control.require_implementation_entry(project_root, state)
         binding = {}
         if advice_case is not None:
             import expert_advice
@@ -136,6 +138,8 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
         if role == "developer":
             import review_control
             review_control.validate_development(project_root, state)
+            if workflow_phase != "implementation":
+                review_control.require_implementation_entry(project_root, state)
             import work_allocation
             binding = work_allocation.require_dispatch(state, work_item=work_item, executor_id=executor_id)
         elif work_item is not None:
@@ -197,6 +201,9 @@ def accepted(project_root, run_id, owner_token, dispatch_id, executor_id, *, act
             return deepcopy(item)
         if item["status"] != "dispatching" or (item["mode"] == "reuse" and item["executor_id"] != executor_id):
             raise ValueError("dispatch acceptance does not match request")
+        if item["role"] == "developer":
+            import review_control
+            review_control.require_implementation_entry(project_root, state)
         actors = M._actors(state.get("role_events", []))
         if executor_id in actors and (item["mode"] == "create" or actors[executor_id]["entries"][-1]["event"] != "stopped"):
             raise ValueError("executor is already observed working or was previously created")
@@ -218,6 +225,7 @@ def accepted(project_root, run_id, owner_token, dispatch_id, executor_id, *, act
                 phase = item["workflow_phase"]
                 first_verification = False
                 check_feedback = False
+                implementation_entry = False
                 if phase == "verification":
                     import progress_feedback
                     first_verification = bool(state.get("supervision_from")) and not progress_feedback.entered_verification(state)
@@ -227,7 +235,12 @@ def accepted(project_root, run_id, owner_token, dispatch_id, executor_id, *, act
                 if phase == "implementation":
                     import review_control
                     review_control.validate_development(project_root, state)
-                _transition(state, phase, WORKFLOW_PHASES[phase], now, force=first_verification)
+                    review_control.require_implementation_entry(project_root, state)
+                    implementation_entry = review_control.supervised_high_risk(state) and (
+                        state["stage"] != "implementation" or not review_control.implementation_entered(state))
+                _transition(state, phase, WORKFLOW_PHASES[phase], now, force=first_verification or implementation_entry)
+                if implementation_entry:
+                    state["history"][-1]["implementation_review_checked"] = True
                 if check_feedback and state.get("supervision_from"):
                     state["history"][-1]["verification_feedback_checked"] = True
         state["updated_at"] = now

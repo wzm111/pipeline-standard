@@ -1,5 +1,6 @@
 """Explicit review obligations across tasks and accepted deliveries."""
 from copy import deepcopy
+from pathlib import Path
 
 import run_evidence as E
 import run_state as R
@@ -15,6 +16,75 @@ def required(state):
     if state.get("inherited_review") and not state.get("tasks"):
         return True
     return current["required"] if "required" in current else bool(state.get("inherited_review"))
+
+
+def supervised_high_risk(state):
+    return bool(state.get("supervision_from")) and decision(state).get("risk") == "high"
+
+
+def implementation_entered(state):
+    return any(event.get("implementation_review_checked") is True
+               and R._timestamp(event["at"]) >= R._timestamp(state["supervision_from"])
+               for event in state["history"])
+
+
+def implementation_fingerprint(root):
+    """Git tree plus staged, unstaged and untracked worktree fingerprints."""
+    from agent_handoff import _git_state
+    snapshot = _git_state(root, implementation=True)
+    if snapshot and snapshot["content_complete"]:
+        return {key: snapshot[key] for key in ("tree", "fingerprint")}
+    return None
+
+
+def implementation_changed(root, state):
+    before = state.get("implementation_baseline")
+    if before is None:
+        return None
+    after = implementation_fingerprint(root)
+    return None if after is None else before != after
+
+
+def _current_developers(state):
+    since = R._timestamp(state["supervision_from"])
+    return [item for item in state.get("role_dispatches", [])
+            if item.get("role") == "developer" and item.get("host_executor_id")
+            and R._timestamp(item["requested_at"]) >= since]
+
+
+def require_implementation_entry(root, state):
+    if supervised_high_risk(state) and (
+            not implementation_entered(state) or not _current_developers(state)):
+        changed = implementation_changed(root, state)
+        if changed is None:
+            raise ValueError("current high-risk task has no verifiable Git implementation baseline")
+        if changed:
+            raise ValueError("project files changed before authorized high-risk implementation and developer dispatch")
+
+
+def require_source_write(root, state, paths):
+    """Check the current task before a host writes project source."""
+    if not supervised_high_risk(state):
+        return
+    root = Path(root).resolve()
+    targets = [(root / path).resolve().relative_to(root) for path in paths]
+    targets = [path for path in targets if path.parts[:2] != ("tmp", "pipeline")]
+    if not targets:
+        return
+    validate_development(root, state)
+    if state["stage"] != "implementation" or not implementation_entered(state):
+        raise ValueError("enter implementation for the current high-risk task before writing project files")
+    R.require_not_waiting(state)
+    developers = [item for item in _current_developers(state) if item["status"] == "working"]
+    if not developers:
+        raise ValueError("current high-risk project writes require an accepted native developer dispatch")
+    decisions = state.get("work_allocation", {}).get("decisions", [])
+    bindings = {(decision["revision"], item["id"]): item["write_paths"]
+                for decision in decisions for item in decision["assignments"]}
+    assigned = [(root / path).resolve() for item in developers
+                for path in bindings.get((item.get("allocation_revision"), item.get("work_item")), [])]
+    if not all(any((root / target).is_relative_to(path) for path in assigned) for target in targets):
+        raise ValueError("high-risk project writes must be within an accepted developer's assigned paths")
 
 
 def task_decision(root, state, risk, reason, continuation, retrospective, independent_goal=False):

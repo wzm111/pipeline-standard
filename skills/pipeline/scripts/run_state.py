@@ -192,6 +192,9 @@ def start(project_root, initial=None, *, managed=False, review_risk=None, review
         if state.get("stage") == "implementation":
             import review_control
             review_control.validate_development(project_root, state)
+        if supervised and review_risk == "high":
+            import review_control
+            state["implementation_baseline"] = review_control.implementation_fingerprint(project_root)
         path = _state_path(base, state["run_id"])
         if path.exists():
             raise ValueError("run_id collision")
@@ -215,15 +218,26 @@ def _load_owned(base, run_id, owner_token, *, require_active=True):
     return path, state
 
 
+def require_not_waiting(state):
+    if state.get("continuity_wait", {}).get("status") == "waiting":
+        raise ValueError("resolve the registered human wait with continue before proceeding")
+
+
 def update(project_root, run_id, owner_token, changes):
     _validate_changes(changes)
     with _write_guard(project_root) as base:
         path, state = _load_owned(base, run_id, owner_token)
         if state.get("status") != "running":
             raise ValueError("only a running run can be updated")
+        if "stage" in changes or ("activity" in changes and changes["activity"] != "human_wait"):
+            require_not_waiting(state)
+        implementation_entry = False
         if changes.get("stage") == "implementation":
             import review_control
             review_control.validate_development(project_root, state)
+            review_control.require_implementation_entry(project_root, state)
+            implementation_entry = review_control.supervised_high_risk(state) and (
+                state["stage"] != "implementation" or not review_control.implementation_entered(state))
         previous = (state.get("stage"), state.get("activity", "execution"))
         import progress_feedback
         verification_entry = changes.get("stage") == "verification" and (
@@ -239,8 +253,10 @@ def update(project_root, run_id, owner_token, changes):
             # Explicit same-value main updates also supersede pending role bindings.
             state["progress_revision"] = state.get("progress_revision", 0) + 1
         state["updated_at"] = _now()
-        if verification_entry or previous != (state.get("stage"), state.get("activity", "execution")):
+        if verification_entry or implementation_entry or previous != (state.get("stage"), state.get("activity", "execution")):
             state["history"].append(_event(state, "transition", state["updated_at"]))
+            if implementation_entry:
+                state["history"][-1]["implementation_review_checked"] = True
             if verification_entry and state.get("supervision_from"):
                 state["history"][-1]["verification_feedback_checked"] = True
         _atomic(path, state)
@@ -270,8 +286,7 @@ def _finish_readiness(project_root, state, outcome):
     if any(item.get("status") in {"dispatching", "working"} for item in state.get("role_dispatches", [])):
         raise ValueError("close observed role dispatches after host stop before finishing")
     if outcome == "completed":
-        if state.get("continuity_wait", {}).get("status") == "waiting":
-            raise ValueError("resolve the registered human wait before completing")
+        require_not_waiting(state)
         if state.get("release_plan"):
             import release_checks
             release_checks.validate_closeout(project_root, state)
@@ -331,9 +346,9 @@ def resume(project_root, run_id, owner_token, *, executors_stopped=False, stop_e
             raise ValueError("completed or unknown state cannot resume")
         state["status"] = "running"
         state["updated_at"] = _now()
-        # Resumption defaults to execution; an earlier human/role wait does not
-        # silently continue after the caller has explicitly resumed work.
-        state["activity"] = "execution"
+        # Ownership recovery does not acknowledge the user's pending action.
+        state["activity"] = ("human_wait" if state.get("continuity_wait", {}).get("status") == "waiting"
+                             else "execution")
         # Resume requires fresh evidence that all previous executors stopped.
         state.pop("running_checks", None)
         state.pop("check_previous_progress", None)

@@ -166,17 +166,19 @@ class TaskTests(unittest.TestCase):
 
     def test_end_does_not_stop_roles_clear_wait_pending_or_manufacture_qa(self):
         path = self.root / "tmp/pipeline/runs" / (self.run + ".json")
+        self.start()
         state = R.status(self.root)["state"]
         state.update(continuity_wait={"status": "waiting"}, qa_rounds=3,
                      role_dispatches=[{"status": "working"}], check_plans={"existing": {}})
         R._atomic(path, state)
-        self.start()
-        self.end()
-        self.start("followup")
-        self.end("followup")
+        with self.assertRaisesRegex(ValueError, "registered human wait"):
+            self.end()
+        self.end(outcome="paused")
+        with self.assertRaisesRegex(ValueError, "registered human wait"):
+            self.start("followup")
         after = R.status(self.root)["state"]
         self.assertEqual({key: value for key, value in after.items() if key not in {"tasks", "updated_at"}},
-                         {key: value for key, value in state.items() if key != "updated_at"})
+                         {key: value for key, value in state.items() if key not in {"tasks", "updated_at"}})
         with self.assertRaisesRegex(ValueError, "role dispatches"):
             R.finish(self.root, self.run, self.owner, "completed",
                      executors_stopped=True, stop_evidence="observed")

@@ -118,6 +118,8 @@ def _live_actors(state):
     for item in state.get("role_dispatches", []):
         if item.get("status") in {"dispatching", "working"}:
             live.add(item.get("executor_id") or "dispatch:" + item["id"])
+    # Release takes the ordinary check claim before launching its subprocess.
+    # Its attempt record can outlive the executor during ownership recovery.
     return len(live) + len(state.get("running_checks", []))
 
 
