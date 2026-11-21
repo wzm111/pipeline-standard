@@ -159,6 +159,29 @@ class ReleaseRecoveryTests(unittest.TestCase):
         self.assertEqual(self.count(), count)
         self.assertTrue(self.execute("valid", "activate")["release_accepted"])
 
+    def test_stopped_recovery_closes_legacy_and_unlaunched_attempts(self):
+        self.execute("build", "build")
+        before = self.count()
+        with R._write_guard(self.root) as base:
+            path, state = R._load_owned(base, *self.args[1:])
+            state["release_plan"]["attempts"].extend([
+                {"name": "legacy", "phase": "activate", "status": "running", "candidate_id": state["release_plan"]["candidate"]["id"]},
+                {"name": "not-launched", "phase": "build", "status": "running", "launch_possible": False},
+            ])
+            R._atomic(path, state)
+        with self.assertRaisesRegex(ValueError, "confirm all executors stopped"):
+            R.resume(*self.args)
+        self.assertEqual(self.attempt("legacy")["status"], "running")
+        R.resume(*self.args, executors_stopped=True, stop_evidence="fixture host executor confirmed stopped")
+        self.assertEqual(self.attempt("legacy")["status"], "failed")
+        self.assertEqual(self.attempt("legacy")["recovery_hold"]["status"], "held")
+        self.assertNotIn("recovery_hold", self.attempt("not-launched"))
+        with self.assertRaisesRegex(ValueError, "hold"):
+            self.execute("blocked", "activate")
+        self.assertEqual(self.count(), before)
+        self.assertFalse(self.reconcile("legacy", "safe-remote-readback")["recovery_blocked"])
+        self.assertTrue(self.execute("retry-after-recovery", "activate")["release_accepted"])
+
     def test_late_cancel_preserves_raw_exit_zero_without_passing_build_or_activation(self):
         original = F.C.execute_check
         def cancel_after_command(*args, **kwargs):

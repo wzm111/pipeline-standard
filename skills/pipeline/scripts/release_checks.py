@@ -71,6 +71,18 @@ def _hold(attempt, reason):
         attempt["recovery_hold"] = {"status": "held", "held_at": R._now(), "reason": reason}
 
 
+def close_stopped_attempts(state, now):
+    """Called under the ownership lock after explicit executor stop confirmation."""
+    plan = state.get("release_plan", {})
+    for attempt in plan.get("attempts", []):
+        if attempt["status"] != "running":
+            continue
+        if attempt["phase"] in {"build", "activate"} and attempt.get("launch_possible", True):
+            _hold(attempt, "execution_interrupted")
+        attempt.update(status="failed", finished_at=now, interrupted_at=now)
+        plan.pop("closeout", None)
+
+
 def _mark_launch_possible(root, run_id, owner, name):
     with R._write_guard(root) as base:
         path, state = _owned(base, run_id, owner)
@@ -146,11 +158,16 @@ def prepare(root, run_id, owner_token, *, required_before=None, required_after=N
         return deepcopy(plan)
 
 
+def _effective_attempts(plan):
+    return [attempt for attempt in plan.get("attempts", [])
+            if attempt["status"] != "failed" or attempt.get("launch_possible", True)]
+
+
 def _coverage(root, state, required):
     """Newest failed command blocks older PASS even if its labels differ."""
     sources, seen, blocked = {}, set(), set()
     plan = state.get("release_plan", {})
-    latest_phases = {a["phase"]: a for a in plan.get("attempts", [])}
+    latest_phases = {a["phase"]: a for a in _effective_attempts(plan)}
     failed_labels = {PHASES[p] for p, attempt in latest_phases.items() if attempt["status"] != "passed"}
     candidate_id = plan.get("candidate", {}).get("id")
     post_labels = set(plan.get("required_after", [])) | {"release_activation"}
@@ -202,8 +219,7 @@ def _candidate(root, state, coverage=None):
     candidate = state.get("release_plan", {}).get("candidate")
     if not candidate:
         return None
-    builds = [a for a in state["release_plan"].get("attempts", []) if a["phase"] == "build"
-              and (a["status"] != "failed" or a.get("launch_possible", True))]
+    builds = [a for a in _effective_attempts(state["release_plan"]) if a["phase"] == "build"]
     if not builds or builds[-1]["status"] != "passed" or builds[-1]["report"] != candidate["check"]["path"]:
         return None
     try:
@@ -283,8 +299,8 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
             if (current_coverage["missing"] or (latest_candidate or {}).get("id") != (candidate or {}).get("id")):
                 raise ValueError("release prechecks or candidate changed while registering")
         identity = candidate["id"] if candidate else None
-        related = [a for a in attempts if a["phase"] == "activate" and a["candidate_id"] == identity
-                   and (a["status"] != "failed" or a.get("launch_possible", True))]
+        related = [a for a in _effective_attempts(current["release_plan"])
+                   if a["phase"] == "activate" and a["candidate_id"] == identity]
         if phase == "activate" and any(a["status"] == "passed" for a in related):
             raise ValueError("candidate already activated; continue smoke and closeout")
         if phase == "activate" and (any(a["status"] == "running" for a in related) or len(related) >= 2):
@@ -327,6 +343,8 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
         with R._write_guard(root) as base:
             path, current = _owned(base, run_id, owner_token)
             recorded = next(a for a in current["release_plan"]["attempts"] if a["name"] == name)
+            if recorded["status"] != "running":
+                raise ValueError("release attempt already closed during ownership recovery")
             if phase in {"build", "activate"}:
                 if recorded.get("launch_possible", True) and (
                         not completed_normally or result is None or result.get("exit_code") in {124, 130, 137, 143, 255}
@@ -361,9 +379,8 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
 
 
 def _activated(plan, candidate):
-    relevant = [a for a in plan.get("attempts", [])
-                if candidate and a["candidate_id"] == candidate["id"] and a["phase"] == "activate"
-                and (a["status"] != "failed" or a.get("launch_possible", True))]
+    relevant = [a for a in _effective_attempts(plan)
+                if candidate and a["candidate_id"] == candidate["id"] and a["phase"] == "activate"]
     return bool(relevant and relevant[-1]["status"] == "passed")
 
 

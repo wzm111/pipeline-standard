@@ -143,6 +143,8 @@ SSH断连、超时、取消只说明当前观察或调用结束，远端进程�
 
 已采用`release_checks.execute`时，build/activate的断连类退出、超时或执行中断会登记recovery_hold，阻止换名重跑、激活和closeout/finish。`cancel_attempt(root, run_id, owner_token, name, reason=...)`仅登记取消与阻塞，实际安全停止仍由项目入口执行；已取消尝试即使晚到exit 0也不能成为合格候选。原退出码和失败记录保留。
 
+本地参数错误在登记尝试前拒绝。已登记且确认未走到启动边界的失败不消耗切流次数。显式恢复归属时，确认执行器停止才结束遗留的 running 尝试。可能已启动的切流或构建仍保留恢复锁，须核对远端状态并登记新鲜证据后才能重试。
+
 核验后由当前owner保存本run已注册的`kind=release_recovery`报告，payload为`{attempt: 原name, executors_stopped: true, stop_evidence: 具体停止证据, remote_state: "not_activated"或"safely_rolled_back"}`，再把`{run_id, path, sha256}`引用交给`reconcile(..., name, evidence=引用)`。记录时间须晚于hold，仍有原执行者、远端状态未知/仍激活、引用跨run/过时/被改均拒绝解除；已解除的证据仍复核。它只允许后续按原规则恢复，不改旧失败为PASS、不重置激活次数、不替代现场观察或自动执行回退。用户无需填写该报告。
 
 ### 发布耗时归因

@@ -355,6 +355,9 @@ def resume(project_root, run_id, owner_token, *, executors_stopped=False, stop_e
         for ticket in state.get("observed_checks", {}).values():
             if ticket.get("status") == "running":
                 ticket.update(status="closed", stop_evidence=stop_evidence)
+        if state.get("release_plan"):
+            import release_checks
+            release_checks.close_stopped_attempts(state, state["updated_at"])
         state["history"].append(_event(state, "resumed", state["updated_at"], stop_evidence=stop_evidence))
         # Keep ownership stable so a crash between state and marker writes can
         # be retried with the same explicit ownership and fresh stop evidence.

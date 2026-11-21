@@ -288,7 +288,8 @@ class ContinuityTests(unittest.TestCase):
 
     def test_wait_keeps_crashed_release_attempt_after_executor_recovery(self):
         args = self.root, self.run, self.owner
-        attempt = {"status": "running", "recovery_hold": {"status": "held"}}
+        attempt = {"name": "release", "phase": "activate", "status": "running",
+                   "recovery_hold": {"status": "held", "reason": "fixture interruption"}}
         with R._write_guard(self.root) as base:
             path, state = R._load_owned(base, self.run, self.owner)
             state["release_plan"] = {"attempts": [attempt]}
@@ -299,7 +300,10 @@ class ContinuityTests(unittest.TestCase):
         R.resume(*args, executors_stopped=True, stop_evidence="local executor confirmed stopped")
         waiting = self.wait()
         self.assertEqual(waiting["activity"], "human_wait")
-        self.assertEqual(waiting["release_plan"]["attempts"], [attempt])
+        recovered = waiting["release_plan"]["attempts"][0]
+        self.assertEqual(recovered["status"], "failed")
+        self.assertIn("interrupted_at", recovered)
+        self.assertEqual(recovered["recovery_hold"], attempt["recovery_hold"])
 
 
 if __name__ == "__main__":
