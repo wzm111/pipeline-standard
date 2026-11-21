@@ -3,6 +3,7 @@ import hashlib
 import json
 import sys
 
+from input_fingerprint import fingerprint_details
 import run_evidence as E
 
 
@@ -26,23 +27,23 @@ def snapshot(root):
     sources = [script, *extra]
     if any(not E._local(root, source).is_file() for source in sources):
         raise ValueError("project release gate input missing")
-    return {"script": script, "fingerprint": E.fingerprint(root, [DECLARATION, *sources]),
-            "input_sha256": {source: candidate_file_hash(root, source)["sha256"] for source in extra}}
+    digest, entries = fingerprint_details(root, [DECLARATION, *sources], narrow=True)
+    return {"script": script, "fingerprint": digest,
+            "input_sha256": {source: entries[E._local(root, source).relative_to(root).as_posix()]["sha256"]
+                             for source in extra}}
 
 
 def command_identity(context):
     return hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest()
 
 
-def candidate_file_hash(root, relative):
-    path = E._local(root, relative)
-    if not path.is_file():
-        return {}
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return {"sha256": digest.hexdigest()}
+def candidate_asset(root, relative):
+    digest, entries = fingerprint_details(root, [relative], narrow=True)
+    metadata = entries[E._local(root, relative).relative_to(root).as_posix()]
+    if metadata.get("missing"):
+        raise ValueError("build did not produce the declared artifacts")
+    return {"path": relative, "fingerprint": digest,
+            **({"sha256": metadata["sha256"]} if "sha256" in metadata else {})}
 
 
 def activation_command(root, state, name, context):

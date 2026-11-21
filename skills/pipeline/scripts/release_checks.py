@@ -222,7 +222,7 @@ def _coverage(root, state, required):
             "complete": not missing, "sources": sources}
 
 
-def _candidate(root, state, coverage=None):
+def _candidate(root, state, coverage=None, *, verify_assets=True):
     candidate = state.get("release_plan", {}).get("candidate")
     if not candidate:
         return None
@@ -234,7 +234,8 @@ def _candidate(root, state, coverage=None):
         coverage = coverage if coverage is not None else _coverage(root, state, ["build"])
         if check not in coverage["sources"].get("build", []):
             return None
-        if any(E.fingerprint(root, [a["path"]]) != a["fingerprint"] for a in candidate["assets"]):
+        if verify_assets and any(E.fingerprint(root, [a["path"]]) != a["fingerprint"]
+                                 for a in candidate["assets"]):
             return None
         return candidate
     except (OSError, ValueError, KeyError, TypeError):
@@ -302,7 +303,10 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
             if any(a["phase"] in {"build", "activate"} and a["status"] == "running" for a in attempts):
                 raise ValueError("build or activation already running")
             current_coverage = _coverage(root, current, current["release_plan"]["required_before"])
-            latest_candidate = _candidate(root, current, current_coverage)
+            # A configured guard rechecks all asset bytes at the final launch
+            # claim. Here we still bind the current build and precheck evidence.
+            guarded_activation = phase == "activate" and bool(current["release_plan"].get("project_activation_gate"))
+            latest_candidate = _candidate(root, current, current_coverage, verify_assets=not guarded_activation)
             if (current_coverage["missing"] or (latest_candidate or {}).get("id") != (candidate or {}).get("id")):
                 raise ValueError("release prechecks or candidate changed while registering")
         identity = candidate["id"] if candidate else None
@@ -336,9 +340,8 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
             base = Path(root).resolve(strict=True)
             if any(not E._local(base, p).exists() for p in artifact_paths):
                 raise ValueError("build did not produce the declared artifacts")
-            assets = [{"path": p, "fingerprint": E.fingerprint(base, [p]),
-                       **(G.candidate_file_hash(base, p) if plan.get("project_activation_gate") else {})}
-                      for p in artifact_paths]
+            assets = [G.candidate_asset(base, p) if plan.get("project_activation_gate")
+                      else {"path": p, "fingerprint": E.fingerprint(base, [p])} for p in artifact_paths]
             check = D._reference(base, run_id, result["report"])
             candidate = {"check": check, "assets": assets}
             payload = E.read_report(root, run_id, result["report"], kind="check")["payload"]

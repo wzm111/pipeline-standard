@@ -23,6 +23,10 @@ def _identity(value):
 
 
 def fingerprint(project_root, paths, environment=None, *, narrow=False, profile=None):
+    return fingerprint_details(project_root, paths, environment, narrow=narrow, profile=profile)[0]
+
+
+def fingerprint_details(project_root, paths, environment=None, *, narrow=False, profile=None):
     """Scan once with shared safety checks; retain the two established encodings.
 
     Supplying environment uses the workflow digest envelope. Omitting it uses
@@ -99,7 +103,7 @@ def fingerprint(project_root, paths, environment=None, *, narrow=False, profile=
     else:
         value = {key: ("missing" if entry.get("missing") else "directory" if entry.get("directory")
                        else [entry["sha256"], entry["mode"]]) for key, entry in entries.items()}
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest(), entries
 
 
 def _strict_object(pairs):

@@ -113,9 +113,38 @@ class ReleaseChecksTests(unittest.TestCase):
         rejected = self.execute("guard-rejected", "activate", command, environment={"test_decision": "deny"})
         self.assertFalse(rejected["release_accepted"])
         self.assertFalse((self.root / "switched").exists())
-        accepted = self.execute("guard-approved", "activate", command, environment={"test_decision": "allow"})
+        fingerprint = E.fingerprint
+        opened = Path.open
+        dependency_reads = []
+
+        def count_dependency_reads(path, mode="r", *args, **kwargs):
+            if path == self.root / "guard-input" and mode == "rb":
+                dependency_reads.append(path)
+            return opened(path, mode, *args, **kwargs)
+
+        with patch.object(E, "fingerprint", wraps=fingerprint) as observed, patch.object(Path, "open", count_dependency_reads):
+            accepted = self.execute("guard-approved", "activate", command, environment={"test_decision": "allow"})
+        self.assertEqual(sum(call.args[1] == ["artifact"] for call in observed.call_args_list), 2)
+        self.assertEqual(len(dependency_reads), 2)
         self.assertTrue(accepted["release_accepted"])
         self.assertTrue((self.root / "switched").exists())
+
+    def test_last_guard_check_rejects_candidate_change_after_attempt_registration(self):
+        self.declare_project_activation_gate()
+        self.prechecks()
+        self.build()
+        execute_check = C.execute_check
+
+        def changed_before_launch(*args, **kwargs):
+            (self.root / "artifact").write_text("changed after release preflight")
+            return execute_check(*args, **kwargs)
+
+        command = [sys.executable, "-c", "from pathlib import Path; Path('switched').touch()"]
+        with patch.object(C, "execute_check", side_effect=changed_before_launch):
+            with self.assertRaisesRegex(ValueError, "candidate changed before activation"):
+                self.execute("activate", "activate", command, environment={"test_decision": "allow"})
+        self.assertFalse((self.root / "switched").exists())
+        self.assertNotIn("recovery_hold", self.plan()["attempts"][-1])
 
     def test_missing_or_changed_project_gate_is_not_allowed_to_activate(self):
         self.declare_project_activation_gate()
