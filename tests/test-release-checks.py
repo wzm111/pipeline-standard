@@ -256,6 +256,38 @@ class ReleaseChecksTests(unittest.TestCase):
                 self.execute("activate", "activate", environment={"test_decision": "allow"})
         self.assertEqual(rejected.exception.missing, ["runner_compatibility"])
 
+    def test_valid_local_compatibility_reuses_latest_release_evidence(self):
+        command = [sys.executable, "-c",
+                   "from pathlib import Path; p=Path('compat-count'); p.write_text(p.read_text()+'x' if p.exists() else 'x')"]
+        first = self.execute("first-compat", "compatibility", command)
+        reused = self.execute("retry-compat", "compatibility", command)
+        self.assertTrue(reused["reused"])
+        self.assertEqual(reused["report"], first["report"])
+        self.assertEqual((self.root / "compat-count").read_text(), "x")
+        changed = self.execute("changed-compat", "compatibility", command, environment={"scope": "changed runner"})
+        self.assertFalse(changed["reused"])
+        self.assertEqual((self.root / "compat-count").read_text(), "xx")
+        failed = self.execute("failed-compat", "compatibility", [sys.executable, "-c", "raise SystemExit(1)"])
+        self.assertFalse(failed["release_accepted"])
+        observed = self.execute("fresh-compat", "compatibility", command)
+        self.assertFalse(observed["reused"])
+        self.assertEqual((self.root / "compat-count").read_text(), "xxx")
+
+    def test_compatibility_selects_latest_attempt_under_lock(self):
+        self.prechecks()
+        original = F._execute_prepared
+
+        def fail_after_prepare(*args, **kwargs):
+            if args[3] == "retry":
+                failed = self.execute("concurrent-failure", "compatibility", [sys.executable, "-c", "raise SystemExit(1)"])
+                self.assertFalse(failed["release_accepted"])
+            return original(*args, **kwargs)
+
+        with patch.object(F, "_execute_prepared", side_effect=fail_after_prepare):
+            result = self.execute("retry", "compatibility")
+        self.assertFalse(result["reused"])
+        self.assertTrue(result["release_accepted"])
+
     def test_last_guard_check_rejects_candidate_change_after_attempt_registration(self):
         self.declare_project_activation_gate()
         self.prechecks()

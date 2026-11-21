@@ -378,6 +378,12 @@ def _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_pat
             import review_control
             review_control.validate_pre_activation(root, current)
         attempts = current["release_plan"]["attempts"]
+        if phase == "compatibility":
+            previous = next((a for a in reversed(attempts) if a["phase"] == phase), None)
+            if previous and previous["status"] == "running":
+                raise ValueError("runner compatibility already running")
+            if previous and previous["status"] == "passed" and previous.get("report"):
+                options.update(impact_covered=True, reuse_from=previous["report"])
         readiness_binding = None
         if phase in {"build", "activate"}:
             if _recovery_blocked(root, current):
