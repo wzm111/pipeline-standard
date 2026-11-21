@@ -413,8 +413,13 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
                     # A foreground check must not leave descendants holding its resources.
                     _stop(process)
             except OSError as exc:
-                stream.write(f"Launch failed: {type(exc).__name__}\n")
-                exit_code, error = 127, "command_unavailable"
+                if process is None:
+                    stream.write(f"Launch failed: {type(exc).__name__}\n")
+                    exit_code, error = 127, "command_unavailable"
+                else:
+                    stream.write(f"Process observation failed: {type(exc).__name__}\n")
+                    exit_code = process.returncode if process.returncode is not None else -1
+                    error, interrupted = "interrupted", exc
             except BaseException as exc:
                 if process is not None:
                     _stop(process)

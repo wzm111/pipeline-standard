@@ -156,8 +156,38 @@ class ReleaseRecoveryTests(unittest.TestCase):
                     self.execute(name, "activate")
             self.assertFalse(self.attempt(name)["launch_possible"])
             self.assertNotIn("recovery_hold", self.attempt(name))
+            with self.assertRaisesRegex(ValueError, "ended before launch"):
+                F.cancel_attempt(*self.args, name, reason="repeated after failure")
         self.assertEqual(self.count(), count)
         self.assertTrue(self.execute("valid", "activate")["release_accepted"])
+
+    def test_cancel_before_launch_blocks_subprocess_without_a_recovery_hold(self):
+        self.execute("build", "build")
+        count = self.count()
+        original = F.C.execute_check
+
+        def cancel_before_command(*args, **kwargs):
+            F.cancel_attempt(*self.args, args[3], reason="fixture cancel before launch")
+            return original(*args, **kwargs)
+
+        with patch.object(F.C, "execute_check", side_effect=cancel_before_command):
+            with self.assertRaisesRegex(ValueError, "cancelled before launch"):
+                self.execute("cancelled", "activate")
+        self.assertEqual(self.count(), count)
+        self.assertNotIn("recovery_hold", self.attempt("cancelled"))
+        self.assertTrue(self.execute("valid", "activate")["release_accepted"])
+
+    def test_process_cleanup_error_after_launch_preserves_recovery_hold(self):
+        self.execute("build", "build")
+        count = self.count()
+        with patch.object(F.C, "_stop", side_effect=PermissionError("fixture process observation error")):
+            with self.assertRaises(PermissionError):
+                self.execute("cleanup-failed", "activate")
+        self.assertEqual(self.count(), count + 1)
+        attempt = self.attempt("cleanup-failed")
+        self.assertEqual(attempt["result"]["exit_code"], 0)
+        self.assertEqual(attempt["result"]["result_class"], "interrupted")
+        self.assertEqual(attempt["recovery_hold"]["status"], "held")
 
     def test_stopped_recovery_closes_legacy_and_unlaunched_attempts(self):
         self.execute("build", "build")
@@ -214,10 +244,16 @@ class ReleaseRecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "running"):
                 self.execute("competing-build", "build")
             self.assertEqual(self.count(), before)
-            F.cancel_attempt(*self.args, args[3], reason="caller requested cancellation")
-            evidence = self.evidence(args[3], args[3] + "-too-soon")
-            with self.assertRaisesRegex(ValueError, "running"):
-                F.reconcile(*self.args, args[3], evidence=evidence)
+            launch_boundary = kwargs["_before_launch"]
+
+            def cancel_at_boundary():
+                launch_boundary()
+                F.cancel_attempt(*self.args, args[3], reason="caller requested cancellation")
+                evidence = self.evidence(args[3], args[3] + "-too-soon")
+                with self.assertRaisesRegex(ValueError, "running"):
+                    F.reconcile(*self.args, args[3], evidence=evidence)
+
+            kwargs["_before_launch"] = cancel_at_boundary
             return original(*args, **kwargs)
         with patch.object(F.C, "execute_check", side_effect=while_running):
             self.execute("running-build", "build")

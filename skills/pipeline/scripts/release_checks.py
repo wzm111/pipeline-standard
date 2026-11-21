@@ -89,6 +89,8 @@ def _mark_launch_possible(root, run_id, owner, name):
         attempt = next(a for a in state["release_plan"]["attempts"] if a["name"] == name)
         if attempt["status"] != "running":
             raise ValueError("release attempt is no longer running")
+        if attempt.get("cancel_requested_at"):
+            raise ValueError("release attempt was cancelled before launch")
         attempt["launch_possible"] = True
         R._atomic(path, state)
 
@@ -102,10 +104,15 @@ def cancel_attempt(root, run_id, owner_token, name, *, reason):
         attempt = next((a for a in state.get("release_plan", {}).get("attempts", []) if a["name"] == name), None)
         if not attempt or attempt["phase"] not in {"build", "activate"}:
             raise ValueError("cancellation requires a registered build or activation attempt")
-        if attempt.get("cancel_requested_at") and attempt.get("recovery_hold", {}).get("status") == "held":
+        launch_possible = attempt.get("launch_possible", True)
+        if attempt["status"] == "failed" and not launch_possible:
+            raise ValueError("release attempt already ended before launch")
+        if attempt.get("cancel_requested_at") and (
+                not launch_possible or attempt.get("recovery_hold", {}).get("status") == "held"):
             return deepcopy(attempt)
         attempt.update(cancel_requested_at=R._now(), cancel_reason=reason)
-        _hold(attempt, "cancellation_requested")
+        if launch_possible:
+            _hold(attempt, "cancellation_requested")
         state["release_plan"].pop("closeout", None)
         state["updated_at"] = R._now()
         R._atomic(path, state)
