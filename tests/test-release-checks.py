@@ -129,6 +129,37 @@ class ReleaseChecksTests(unittest.TestCase):
         self.assertTrue(accepted["release_accepted"])
         self.assertTrue((self.root / "switched").exists())
 
+    def test_readiness_probe_runs_first_and_reports_missing_driver_or_permissions(self):
+        self.declare_project_activation_gate()
+        declaration = self.root / "pipeline.release.json"
+        declared = json.loads(declaration.read_text()) | {"readiness_probe": "readiness.py"}
+        declaration.write_text(json.dumps(declared))
+        (self.root / "readiness.py").write_text(
+            "from pathlib import Path\n"
+            "if not Path('driver-ready').exists(): raise SystemExit(20)\n"
+            "if not Path('permission-ready').exists(): raise SystemExit(22)\n")
+        preflight = [sys.executable, "-c", "from pathlib import Path; Path('full-preflight-ran').touch()"]
+        blocked = self.execute("unbound-driver", "preflight", preflight)
+        self.assertEqual(blocked["reason_code"], "production_driver_unbound")
+        self.assertFalse((self.root / "full-preflight-ran").exists())
+        (self.root / "driver-ready").touch()
+        denied = self.execute("denied-permissions", "preflight", preflight)
+        self.assertEqual(denied["reason_code"], "production_permission_denied")
+        self.assertFalse((self.root / "full-preflight-ran").exists())
+        self.assertIn("release_readiness", F.public_status(*self.args)["missing_before"])
+        (self.root / "permission-ready").touch()
+        self.assertTrue(self.execute("permitted", "preflight", preflight,
+                                     environment={"release_target": "production-a"})["release_accepted"])
+        self.assertTrue((self.root / "full-preflight-ran").exists())
+        self.assertEqual([a["phase"] for a in self.plan()["attempts"]],
+                         ["readiness", "readiness", "readiness", "preflight"])
+        self.execute("compatibility", "compatibility")
+        self.build()
+        with self.assertRaises(F.PreflightIncomplete) as rejected:
+            self.execute("wrong-target", "activate", environment={"release_target": "production-b"})
+        self.assertEqual(rejected.exception.missing, ["release_readiness_target"])
+        self.assertFalse(any(a["phase"] == "activate" for a in self.plan()["attempts"]))
+
     def test_last_guard_check_rejects_candidate_change_after_attempt_registration(self):
         self.declare_project_activation_gate()
         self.prechecks()

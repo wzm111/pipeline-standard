@@ -19,7 +19,17 @@ import run_evidence as E
 import run_state as R
 
 PHASES = {"preflight": "release_preflight", "compatibility": "runner_compatibility",
-          "build": "build", "activate": "release_activation", "smoke": "release_smoke"}
+          "build": "build", "activate": "release_activation", "smoke": "release_smoke",
+          "readiness": "release_readiness"}
+
+READINESS_REASONS = {20: "production_driver_unbound", 21: "production_driver_unverified",
+                     22: "production_permission_denied", 23: "production_permission_unverified"}
+
+
+class PreflightIncomplete(ValueError):
+    def __init__(self, missing):
+        super().__init__("release prechecks missing or invalid: " + ",".join(missing))
+        self.missing = missing
 
 
 def _owned(base, run_id, owner):
@@ -156,6 +166,8 @@ def prepare(root, run_id, owner_token, *, required_before=None, required_after=N
                 "attempts": previous.get("attempts", [])}
         if gate is not None:
             plan["project_activation_gate"] = gate
+            if gate.get("readiness_probe"):
+                plan["required_before"] = sorted(set(plan["required_before"]) | {"release_readiness"})
         if not previous:
             plan["prepared_at"] = R._now()
         if plan != previous:
@@ -194,7 +206,7 @@ def _coverage(root, state, required):
             if set(labels) & failed_labels:
                 continue
             if any(PHASES[p] in labels and (latest_phases.get(p, {}).get("status") != "passed"
-                    or latest_phases[p]["report"] != path) for p in ("preflight", "compatibility")):
+                    or latest_phases[p]["report"] != path) for p in ("preflight", "compatibility", "readiness")):
                 continue  # An inherited old observation cannot inspect today's host.
             if set(labels) & post_labels:
                 if not candidate_id or payload.get("environment", {}).get("context:pipeline_release_candidate") != candidate_id:
@@ -242,13 +254,24 @@ def _candidate(root, state, coverage=None, *, verify_assets=True):
         return None
 
 
+def _require_readiness_target(root, state, coverage, environment):
+    if not (state["release_plan"].get("project_activation_gate") or {}).get("readiness_probe"):
+        return
+    target = (environment or {}).get("release_target")
+    for label in ("release_readiness", "release_preflight"):
+        refs = coverage["sources"].get(label, [])
+        if not any(E.read_report(root, state["run_id"], ref["path"], kind="check")["payload"]
+                   ["environment"].get("context:release_target") == target for ref in refs):
+            raise PreflightIncomplete(["release_readiness_target"])
+
+
 def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **options):
     """Precheck first, build once, then at most one automatic activation recovery.
 
     The project must support its actual candidate/activation commands. This
     helper never invents skip-build flags or weakens isolation/rollback checks.
     """
-    if phase not in PHASES:
+    if phase not in PHASES or phase == "readiness":
         raise ValueError("unknown release phase")
     E._label(name)
     if phase == "build" and (not isinstance(artifact_paths, list) or not artifact_paths):
@@ -256,6 +279,21 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
     for path in artifact_paths or []:
         E._local(Path(root).resolve(strict=True), path)
     plan = prepare(root, run_id, owner_token)
+    gate = plan.get("project_activation_gate", {})
+    if phase == "preflight" and gate.get("readiness_probe"):
+        project_root = Path(root).resolve(strict=True)
+        C.validate_request(project_root, owner_token, **{
+            key: options[key] for key in ("argv", "scope", "environment", "write_paths", "timeout", "cwd", "protected_paths")
+            if key in options})
+        probe_name = "ready-" + hashlib.sha256(name.encode()).hexdigest()[:24]
+        readiness = _execute_prepared(root, run_id, owner_token, probe_name, "readiness", plan, None,
+                                      G.readiness_request(project_root, gate, options))
+        if not readiness["release_accepted"]:
+            return readiness
+    return _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_paths, options)
+
+
+def _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_paths, options):
     state = R.status(root, run_id)["state"]
     if phase == "activate":
         import review_control
@@ -264,7 +302,7 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
     if phase in {"build", "activate"}:
         missing = coverage["missing"]
         if missing:
-            raise ValueError("release prechecks missing or invalid: " + ",".join(missing))
+            raise PreflightIncomplete(missing)
     candidate = _candidate(root, state, coverage)
     if phase == "activate" and not candidate:
         raise ValueError("validated candidate missing or changed; do not activate")
@@ -308,7 +346,11 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
             guarded_activation = phase == "activate" and bool(current["release_plan"].get("project_activation_gate"))
             latest_candidate = _candidate(root, current, current_coverage, verify_assets=not guarded_activation)
             if (current_coverage["missing"] or (latest_candidate or {}).get("id") != (candidate or {}).get("id")):
+                if current_coverage["missing"]:
+                    raise PreflightIncomplete(current_coverage["missing"])
                 raise ValueError("release prechecks or candidate changed while registering")
+            if phase == "activate":
+                _require_readiness_target(root, current, current_coverage, options.get("environment"))
         identity = candidate["id"] if candidate else None
         related = [a for a in _effective_attempts(current["release_plan"])
                    if a["phase"] == "activate" and a["candidate_id"] == identity]
@@ -381,6 +423,10 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
                     pass
             if result is not None:
                 recorded["result"] = {k: result[k] for k in ("exit_code", "result_class") if k in result}
+                if phase == "readiness" and not accepted:
+                    reason = ("readiness_probe_timeout" if result.get("result_class") == "timeout" else
+                              READINESS_REASONS.get(result["exit_code"], "readiness_probe_failed"))
+                    recorded["reason_code"] = result["reason_code"] = reason
                 result.update(release_accepted=accepted, recovery_blocked=_recovery_blocked(root, current))
             if phase == "build" and recorded["status"] == "passed" and candidate:
                 current["release_plan"]["candidate"] = candidate
@@ -472,7 +518,8 @@ def public_status(root, run_id, owner_token):
             "activated": _activated(plan, candidate),
             "missing_before": coverage["missing"],
             "recovery_blocked": _recovery_blocked(root, state),
-            "attempts": [{k: a[k] for k in ("name", "phase", "status")} for a in plan.get("attempts", [])]}
+            "attempts": [{k: a[k] for k in ("name", "phase", "status", "reason_code") if k in a}
+                         for a in plan.get("attempts", [])]}
 
 
 def _operation_check(root, state, reference, target, *, phase, current=False):
@@ -653,12 +700,17 @@ def main(argv=None):
         elif args.action == "execute":
             executed = execute(*owned, **declaration)
             result = {k: executed[k] for k in ("report", "exit_code", "reused", "release_accepted", "recovery_blocked")}
+            if "reason_code" in executed:
+                result["reason_code"] = executed["reason_code"]
             code = 0 if executed["release_accepted"] else 1
         elif args.action == "closeout":
             result = closeout(*owned, **declaration)
             code = 0 if result.get("gate", "PASS") == "PASS" else 1
         else:
             result = public_status(*owned)
+    except PreflightIncomplete as error:
+        result, code = {"error": "preflight_incomplete", "reason_code": "release_preflight_evidence_missing",
+                        "missing": error.missing}, 2
     except (OSError, ValueError, KeyError, TypeError) as error:
         # Exception text can contain submitted argv, paths or environment values.
         result, code = {"error": type(error).__name__, "message": "release request rejected; inspect the declaration and current gate evidence"}, 2
