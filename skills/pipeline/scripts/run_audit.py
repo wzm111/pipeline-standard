@@ -28,7 +28,7 @@ REUSE_REASONS = {
     "unregistered_evidence", "baseline_not_acceptance", "visual_not_acceptance",
     "working_directory_unavailable", "check_not_passed", "unknown",
 }
-RELEASE_LABELS = {"release_preflight", "runner_compatibility", "release_activation",
+RELEASE_LABELS = {"release_readiness", "release_preflight", "runner_compatibility", "release_activation",
                   "release_smoke", "release_identity"}
 NOTICE = "collection_only_not_acceptance_or_reuse_evidence"
 
@@ -566,7 +566,7 @@ DETAIL_FLAGS = {"release_plan_prepared", "release_plan_before_checks", "release_
 DETAIL_BUCKETS = {"by_result_class": RESULTS, "reuse_reasons": REUSE_REASONS, "qa_gates": QA_GATES}
 QA_HANDOFF_TIMES = {"last_check_success_seconds", "last_tester_return_seconds",
                     "last_qa_seconds", "last_acceptance_seconds"}
-RELEASE_PHASES = {"preflight", "compatibility", "build", "activate", "smoke"}
+RELEASE_PHASES = {"readiness", "preflight", "compatibility", "build", "activate", "smoke"}
 RELEASE_STATES = {"running", "passed", "failed"}
 WORDS = {NOTICE, "partial", "recorded_only", "unknown", "complete", "running", "execution_ended", "managed", "legacy_untracked", *R.FINAL}
 WORDS |= L.CANDIDATES

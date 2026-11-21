@@ -101,6 +101,8 @@ def _mark_launch_possible(root, run_id, owner, name):
             raise ValueError("release attempt is no longer running")
         if attempt.get("cancel_requested_at"):
             raise ValueError("release attempt was cancelled before launch")
+        if attempt.get("readiness_binding"):
+            validate_readiness_binding(root, state, attempt["readiness_binding"], verify_files=False)
         attempt["launch_possible"] = True
         R._atomic(path, state)
 
@@ -182,12 +184,21 @@ def _effective_attempts(plan):
             if attempt["status"] != "failed" or attempt.get("launch_possible", True)]
 
 
-def _coverage(root, state, required):
+def _coverage_identity(payload):
+    return json.dumps([payload.get("command"), payload.get("scope"), payload.get("intent")], sort_keys=True)
+
+
+def _coverage(root, state, required, *, identities=None):
     """Newest failed command blocks older PASS even if its labels differ."""
     sources, seen, blocked = {}, set(), set()
     plan = state.get("release_plan", {})
     latest_phases = {a["phase"]: a for a in _effective_attempts(plan)}
     failed_labels = {PHASES[p] for p, attempt in latest_phases.items() if attempt["status"] != "passed"}
+    if (plan.get("project_activation_gate") or {}).get("readiness_probe"):
+        probe = latest_phases.get("readiness", {})
+        preflight = latest_phases.get("preflight", {})
+        if probe.get("status") != "passed" or preflight.get("readiness_report") != probe.get("report"):
+            failed_labels.add("release_preflight")
     candidate_id = plan.get("candidate", {}).get("id")
     post_labels = set(plan.get("required_after", [])) | {"release_activation"}
     activations = [a for a in plan.get("attempts", []) if a["phase"] == "activate"
@@ -201,7 +212,9 @@ def _coverage(root, state, required):
             continue
         try:
             payload = E.read_report(root, state["run_id"], path, kind="check")["payload"]
-            key = json.dumps([payload.get("command"), payload.get("scope"), payload.get("intent")], sort_keys=True)
+            key = _coverage_identity(payload)
+            if identities is not None and key not in identities:
+                continue
             labels = E.coverage_labels(payload.get("coverage"))
             if set(labels) & failed_labels:
                 continue
@@ -254,15 +267,42 @@ def _candidate(root, state, coverage=None, *, verify_assets=True):
         return None
 
 
-def _require_readiness_target(root, state, coverage, environment):
+def _readiness_binding(root, state, coverage, environment):
     if not (state["release_plan"].get("project_activation_gate") or {}).get("readiness_probe"):
-        return
+        return None
     target = (environment or {}).get("release_target")
+    binding = {}
     for label in ("release_readiness", "release_preflight"):
         refs = coverage["sources"].get(label, [])
-        if not any(E.read_report(root, state["run_id"], ref["path"], kind="check")["payload"]
-                   ["environment"].get("context:release_target") == target for ref in refs):
+        match = next((ref for ref in refs if E.read_report(root, state["run_id"], ref["path"], kind="check")
+                      ["payload"]["environment"].get("context:release_target") == target), None)
+        if match is None:
             raise PreflightIncomplete(["release_readiness_target"])
+        binding[label] = match
+    binding["runner_compatibility"] = coverage["sources"]["runner_compatibility"][0]
+    return binding
+
+
+def validate_readiness_binding(root, state, binding, *, verify_files=True):
+    """Recheck the exact official pair under the launch claim's write lock."""
+    latest = {a["phase"]: a for a in _effective_attempts(state["release_plan"])}
+    probe, preflight = latest.get("readiness", {}), latest.get("preflight", {})
+    if (not binding or probe.get("status") != "passed" or preflight.get("status") != "passed"
+            or preflight.get("readiness_report") != probe.get("report")
+            or binding["release_readiness"]["path"] != probe.get("report")
+            or binding["release_preflight"]["path"] != preflight.get("report")):
+        raise PreflightIncomplete(["release_readiness", "release_preflight"])
+    compatibility = latest.get("compatibility", {})
+    if (compatibility.get("status") != "passed"
+            or binding.get("runner_compatibility", {}).get("path") != compatibility.get("report")):
+        raise PreflightIncomplete(["runner_compatibility"])
+    if verify_files:
+        identities = {_coverage_identity(D._read_reference(Path(root).resolve(strict=True), ref, "check"))
+                      for ref in binding.values()}
+        current = _coverage(root, state, binding, identities=identities)
+        missing = [label for label, ref in binding.items() if ref not in current["sources"].get(label, [])]
+        if missing:
+            raise PreflightIncomplete(missing)
 
 
 def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **options):
@@ -280,6 +320,7 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
         E._local(Path(root).resolve(strict=True), path)
     plan = prepare(root, run_id, owner_token)
     gate = plan.get("project_activation_gate", {})
+    readiness_report = None
     if phase == "preflight" and gate.get("readiness_probe"):
         project_root = Path(root).resolve(strict=True)
         C.validate_request(project_root, owner_token, **{
@@ -290,20 +331,22 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
                                       G.readiness_request(project_root, gate, options))
         if not readiness["release_accepted"]:
             return readiness
-    return _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_paths, options)
+        readiness_report = readiness["report"]
+    return _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_paths, options,
+                             readiness_report=readiness_report)
 
 
-def _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_paths, options):
+def _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_paths, options, *, readiness_report=None):
     state = R.status(root, run_id)["state"]
     if phase == "activate":
         import review_control
         review_control.validate_pre_activation(root, state)
-    coverage = _coverage(root, state, plan["required_before"])
-    if phase in {"build", "activate"}:
-        missing = coverage["missing"]
-        if missing:
-            raise PreflightIncomplete(missing)
-    candidate = _candidate(root, state, coverage)
+    candidate = None
+    if phase != "readiness":
+        coverage = _coverage(root, state, plan["required_before"])
+        if phase in {"build", "activate"} and coverage["missing"]:
+            raise PreflightIncomplete(coverage["missing"])
+        candidate = _candidate(root, state, coverage)
     if phase == "activate" and not candidate:
         raise ValueError("validated candidate missing or changed; do not activate")
     if phase == "smoke" and not _activated(plan, candidate) and not (_held(plan) and candidate):
@@ -335,6 +378,7 @@ def _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_pat
             import review_control
             review_control.validate_pre_activation(root, current)
         attempts = current["release_plan"]["attempts"]
+        readiness_binding = None
         if phase in {"build", "activate"}:
             if _recovery_blocked(root, current):
                 raise ValueError("release recovery hold unresolved; inspect and reconcile before retry")
@@ -350,7 +394,7 @@ def _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_pat
                     raise PreflightIncomplete(current_coverage["missing"])
                 raise ValueError("release prechecks or candidate changed while registering")
             if phase == "activate":
-                _require_readiness_target(root, current, current_coverage, options.get("environment"))
+                readiness_binding = _readiness_binding(root, current, current_coverage, options.get("environment"))
         identity = candidate["id"] if candidate else None
         related = [a for a in _effective_attempts(current["release_plan"])
                    if a["phase"] == "activate" and a["candidate_id"] == identity]
@@ -360,6 +404,13 @@ def _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_pat
             raise ValueError("activation recovery limit reached or activation running; stop and report blocker")
         attempt = {"name": name, "phase": phase, "candidate_id": identity, "status": "running", "report": None,
                    "started_at": R._now()}
+        if readiness_report:
+            probe = next((a for a in reversed(attempts) if a["phase"] == "readiness"), None)
+            if not probe or probe["status"] != "passed" or probe["report"] != readiness_report:
+                raise PreflightIncomplete(["release_readiness"])
+            attempt["readiness_report"] = readiness_report
+        if readiness_binding:
+            attempt["readiness_binding"] = readiness_binding
         if phase in {"build", "activate"}:
             attempt["launch_possible"] = False
         if phase == "activate" and current["release_plan"].get("project_activation_gate") is not None:
@@ -456,6 +507,16 @@ def _acceptance(root, state, pending):
     candidate = _candidate(root, state, coverage)
     if not _activated(plan, candidate) or not coverage["complete"]:
         raise ValueError("release acceptance incomplete; fill only missing or invalid checks")
+    if (plan.get("project_activation_gate") or {}).get("readiness_probe"):
+        activation = next(a for a in reversed(_effective_attempts(plan))
+                          if a["phase"] == "activate" and a["candidate_id"] == candidate["id"])
+        binding = activation.get("readiness_binding", {})
+        if not {"release_readiness", "release_preflight", "runner_compatibility"} <= binding.keys():
+            raise PreflightIncomplete(["release_readiness", "release_preflight"])
+        historical = {label: D._read_reference(Path(root).resolve(strict=True), ref, "check")
+                      for label, ref in binding.items()}
+        target = historical["release_readiness"]["environment"].get("context:release_target")
+        _readiness_binding(root, state, coverage, {"release_target": target})
     packet = {"gate": "PASS", "required_checks": required, "coverage": coverage,
               "candidate_id": candidate["id"], "external_pending": pending,
               "scope": "engineering_release; pending external outcomes are not passed"}

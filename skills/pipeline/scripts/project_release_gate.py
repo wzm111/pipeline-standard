@@ -76,6 +76,9 @@ def activation_command(root, state, name, context):
             or attempt["candidate_id"] != candidate["id"]
             or attempt.get("guarded_command") != command_identity(context)):
         raise ValueError("project release gate requires release_checks activate with a validated candidate")
+    if gate.get("readiness_probe"):
+        import release_checks
+        release_checks.validate_readiness_binding(root, state, attempt.get("readiness_binding"))
     if any(E.fingerprint(root, [asset["path"]]) != asset["fingerprint"] for asset in candidate["assets"]):
         raise ValueError("project release gate candidate changed before activation")
     payload = {"project_root": str(root), "candidate_id": candidate["id"],

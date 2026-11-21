@@ -129,7 +129,7 @@ class ReleaseChecksTests(unittest.TestCase):
         self.assertTrue(accepted["release_accepted"])
         self.assertTrue((self.root / "switched").exists())
 
-    def test_readiness_probe_runs_first_and_reports_missing_driver_or_permissions(self):
+    def declare_readiness_probe(self):
         self.declare_project_activation_gate()
         declaration = self.root / "pipeline.release.json"
         declared = json.loads(declaration.read_text()) | {"readiness_probe": "readiness.py"}
@@ -138,6 +138,9 @@ class ReleaseChecksTests(unittest.TestCase):
             "from pathlib import Path\n"
             "if not Path('driver-ready').exists(): raise SystemExit(20)\n"
             "if not Path('permission-ready').exists(): raise SystemExit(22)\n")
+
+    def test_readiness_probe_runs_first_and_reports_missing_driver_or_permissions(self):
+        self.declare_readiness_probe()
         preflight = [sys.executable, "-c", "from pathlib import Path; Path('full-preflight-ran').touch()"]
         blocked = self.execute("unbound-driver", "preflight", preflight)
         self.assertEqual(blocked["reason_code"], "production_driver_unbound")
@@ -159,6 +162,99 @@ class ReleaseChecksTests(unittest.TestCase):
             self.execute("wrong-target", "activate", environment={"release_target": "production-b"})
         self.assertEqual(rejected.exception.missing, ["release_readiness_target"])
         self.assertFalse(any(a["phase"] == "activate" for a in self.plan()["attempts"]))
+
+    def test_activation_rechecks_readiness_after_registration(self):
+        self.declare_readiness_probe()
+        for path in ("driver-ready", "permission-ready"):
+            (self.root / path).touch()
+        self.prechecks()
+        self.build()
+        original = C.execute_check
+
+        def revoke_before_claim(*args, **kwargs):
+            if args[3] == "activate":
+                (self.root / "permission-ready").unlink()
+                self.assertEqual(self.execute("revoked", "preflight")["reason_code"],
+                                 "production_permission_denied")
+            return original(*args, **kwargs)
+
+        with patch.object(C, "execute_check", side_effect=revoke_before_claim):
+            with self.assertRaises(F.PreflightIncomplete):
+                self.execute("activate", "activate", environment={"test_decision": "allow"})
+        attempt = next(a for a in self.plan()["attempts"] if a["name"] == "activate")
+        self.assertFalse(attempt["launch_possible"])
+        self.assertNotIn("recovery_hold", attempt)
+
+    def test_new_readiness_cannot_be_paired_with_old_preflight(self):
+        self.declare_readiness_probe()
+        for path in ("driver-ready", "permission-ready"):
+            (self.root / path).touch()
+        self.prechecks()
+        self.build()
+        with self.assertRaises(ValueError):
+            self.execute("invalid-preflight", "preflight", coverage="bad")
+        self.assertIn("release_preflight", F.public_status(*self.args)["missing_before"])
+        with self.assertRaises(F.PreflightIncomplete):
+            self.execute("unsafe-launch", "activate")
+
+    def test_activation_rechecks_compatibility_after_registration(self):
+        self.declare_readiness_probe()
+        for path in ("driver-ready", "permission-ready"):
+            (self.root / path).touch()
+        self.prechecks()
+        self.build()
+        original = C.execute_check
+
+        def fail_compatibility_before_claim(*args, **kwargs):
+            if args[3] == "activate":
+                rejected = self.execute("new-failure", "compatibility", [sys.executable, "-c", "raise SystemExit(1)"])
+                self.assertFalse(rejected["release_accepted"])
+            return original(*args, **kwargs)
+
+        with patch.object(C, "execute_check", side_effect=fail_compatibility_before_claim):
+            with self.assertRaises(F.PreflightIncomplete) as rejected:
+                self.execute("activate", "activate", environment={"test_decision": "allow"})
+        self.assertEqual(rejected.exception.missing, ["runner_compatibility"])
+        self.assertFalse(self.plan()["attempts"][-2]["launch_possible"])
+
+    def test_closeout_accepts_a_fresh_preflight_for_the_same_activated_target(self):
+        self.declare_readiness_probe()
+        for path in ("driver-ready", "permission-ready"):
+            (self.root / path).touch()
+        target = {"release_target": "production-a"}
+        self.execute("preflight", "preflight", environment=target)
+        self.execute("compatibility", "compatibility")
+        self.build()
+        result = self.execute("activate", "activate", environment=target | {"test_decision": "allow"})
+        self.assertTrue(result["release_accepted"])
+        self.smoke()
+        self.assertIn("report", F.closeout(*self.args))
+        updated = self.execute("refreshed-preflight", "preflight", environment=target)
+        self.assertTrue(updated["release_accepted"])
+        self.assertIn("report", F.closeout(*self.args))
+
+    def test_activation_claim_rejects_a_new_same_command_failure(self):
+        self.declare_readiness_probe()
+        for path in ("driver-ready", "permission-ready"):
+            (self.root / path).touch()
+        command = [sys.executable, "-c",
+                   "from pathlib import Path; raise SystemExit(Path('compat-fail').exists())"]
+        self.execute("preflight", "preflight")
+        self.execute("compatibility", "compatibility", command)
+        self.build()
+        original = C.execute_check
+
+        def run_same_command_before_claim(*args, **kwargs):
+            if args[3] == "activate":
+                (self.root / "compat-fail").touch()
+                failed = original(*self.args, "concurrent-failure", argv=command, scope=["source.py"], intent="check")
+                self.assertEqual(failed["exit_code"], 1)
+            return original(*args, **kwargs)
+
+        with patch.object(C, "execute_check", side_effect=run_same_command_before_claim):
+            with self.assertRaises(F.PreflightIncomplete) as rejected:
+                self.execute("activate", "activate", environment={"test_decision": "allow"})
+        self.assertEqual(rejected.exception.missing, ["runner_compatibility"])
 
     def test_last_guard_check_rejects_candidate_change_after_attempt_registration(self):
         self.declare_project_activation_gate()
