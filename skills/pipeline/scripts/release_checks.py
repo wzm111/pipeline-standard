@@ -372,7 +372,8 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
                 # re-raises. Preserve that observation without declaring PASS.
                 try:
                     observed = E.read_report(root, run_id, report, kind="check")["payload"]
-                    recorded["result"] = {k: observed[k] for k in ("exit_code", "result_class") if k in observed}
+                    recorded["result"] = {k: observed[k] for k in ("exit_code", "process_exit_code", "result_class")
+                                          if k in observed}
                 except (OSError, ValueError, KeyError, TypeError):
                     pass
             if result is not None:

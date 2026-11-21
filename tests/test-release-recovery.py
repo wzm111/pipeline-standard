@@ -143,6 +143,13 @@ class ReleaseRecoveryTests(unittest.TestCase):
         self.assertEqual(attempt["recovery_hold"]["status"], "held")
         self.assertNotIn("candidate", self.plan())
 
+    def test_interrupted_observation_with_process_exit_zero_is_not_reusable(self):
+        options = {"argv": [sys.executable, "-c", "pass"], "scope": ["source"], "impact_covered": True}
+        with patch.object(F.C, "_stop", side_effect=PermissionError("fixture process observation error")):
+            with self.assertRaises(PermissionError):
+                F.C.execute_check(*self.args, "interrupted-check", **options)
+        self.assertFalse(F.C.execute_check(*self.args, "actual-recheck", **options)["reused"])
+
     def test_local_rejection_does_not_create_hold_or_spend_activation_attempt(self):
         self.execute("build", "build")
         before = self.plan()["attempts"]
@@ -185,7 +192,8 @@ class ReleaseRecoveryTests(unittest.TestCase):
                 self.execute("cleanup-failed", "activate")
         self.assertEqual(self.count(), count + 1)
         attempt = self.attempt("cleanup-failed")
-        self.assertEqual(attempt["result"]["exit_code"], 0)
+        self.assertEqual(attempt["result"]["exit_code"], -1)
+        self.assertEqual(attempt["result"]["process_exit_code"], 0)
         self.assertEqual(attempt["result"]["result_class"], "interrupted")
         self.assertEqual(attempt["recovery_hold"]["status"], "held")
 

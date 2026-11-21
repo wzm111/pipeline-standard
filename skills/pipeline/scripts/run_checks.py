@@ -418,8 +418,7 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
                     exit_code, error = 127, "command_unavailable"
                 else:
                     stream.write(f"Process observation failed: {type(exc).__name__}\n")
-                    exit_code = process.returncode if process.returncode is not None else -1
-                    error, interrupted = "interrupted", exc
+                    exit_code, error, interrupted = -1, "interrupted", exc
             except BaseException as exc:
                 if process is not None:
                     _stop(process)
@@ -434,6 +433,8 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
         result_class = classify_result(exit_code, intent, error)
         log_bytes = log.read_bytes()
         timing = {}
+        if interrupted is not None and process is not None and process.returncode is not None:
+            timing["process_exit_code"] = process.returncode
         if "release_activation" in coverage:
             from release_timing import reported_stages
             stages = reported_stages(log_bytes, seconds)
