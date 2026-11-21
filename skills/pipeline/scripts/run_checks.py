@@ -321,9 +321,31 @@ def inspect_reuse(project_root, run_id, *, argv, scope, intent="test", environme
     return result
 
 
+def validate_request(root, owner, *, argv, scope, intent="test", environment=None,
+                     write_paths=None, timeout=None, cwd=None, protected_paths=None):
+    """Validate local arguments without reading check inputs or launching a process."""
+    directory = _workdir(root, cwd)
+    if (not isinstance(argv, list) or not argv
+            or any(not isinstance(a, str) or not a or "\0" in a for a in argv)):
+        raise ValueError("argv must be a nonempty list of arguments")
+    if not isinstance(scope, list) or not scope:
+        raise ValueError("nonempty scope required")
+    for path in scope:
+        E._local(root, path)
+    classify_result(0, intent)
+    if timeout is not None and (type(timeout) not in (int, float) or not 0 < timeout < float("inf")):
+        raise ValueError("timeout must be a finite positive duration")
+    if environment is not None:
+        E._environment(environment or {"scope": "local"})
+    inspect_resources(root, write_paths, protected_paths)
+    if owner in shlex.join(argv):
+        raise ValueError("owner token cannot be passed to a command")
+    return directory
+
+
 def execute_check(project_root, run_id, owner_token, name, *, argv, scope, intent="test",
                   environment=None, write_paths=None, timeout=None, reuse_from=None, impact_covered=False,
-                  coverage=None, cwd=None, protected_paths=None):
+                  coverage=None, cwd=None, protected_paths=None, _before_launch=None):
     """Automatically time one whole check call, including cache decisions."""
     import run_policy
     R.require_not_waiting(run_policy.require_owned(project_root, run_id, owner_token))
@@ -331,36 +353,30 @@ def execute_check(project_root, run_id, owner_token, name, *, argv, scope, inten
                   _execute_check, project_root, run_id, owner_token, name, argv=argv, scope=scope, intent=intent,
                   environment=environment, write_paths=write_paths, timeout=timeout, reuse_from=reuse_from,
                   impact_covered=impact_covered, coverage=coverage, cwd=cwd, protected_paths=protected_paths,
+                  _before_launch=_before_launch,
                   result_status=lambda result: "reused" if result["reused"] else "executed"
                   if result["result_class"] in {"success", "search_no_match", "reproduction_nonzero"} else "failed")
 
 
 def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, intent="test",
                    environment=None, write_paths=None, timeout=None, reuse_from=None, impact_covered=False,
-                   coverage=None, cwd=None, protected_paths=None):
+                   coverage=None, cwd=None, protected_paths=None, _before_launch=None):
     """One call handles a check; callers still authorize command and impact scope.
 
     Unknown writes serialize cooperating checks. Timeout ends our POSIX process
     group. Commands must stay in the foreground; this is not a service runner.
     """
     root = Path(project_root).resolve(strict=True)
-    directory = _workdir(root, cwd)
+    directory = validate_request(root, owner_token, argv=argv, scope=scope, intent=intent,
+                                 environment=environment, write_paths=write_paths, timeout=timeout,
+                                 cwd=cwd, protected_paths=protected_paths)
     E._label(name)
     coverage = E.coverage_labels(coverage)
-    if not isinstance(argv, list) or not argv or any(not isinstance(a, str) or not a or "\0" in a for a in argv):
-        raise ValueError("argv must be a nonempty list of arguments")
-    classify_result(0, intent)
-    if timeout is not None and (type(timeout) not in (int, float) or not 0 < timeout < float("inf")):
-        raise ValueError("timeout must be a finite positive duration")
-    # Check declared paths before any process starts, even without competing checks.
-    inspect_resources(root, write_paths, protected_paths)
     before = E.fingerprint(root, scope, environment)
     child_env = child_environment(owner_token, environment, project_root=root)
     env = _environment(directory, argv, child_env, environment, project_root=root)
     diagnostics = environment_diagnostics(child_env)
     command = shlex.join(argv)
-    if owner_token in command:
-        raise ValueError("owner token cannot be passed to a command")
     reusable, reuse_from, decision = _reuse_decision(root, run_id, owner_token,
         command=command, scope=scope, intent=intent, directory=directory, env=env,
         diagnostics=diagnostics, coverage=coverage, reuse_from=reuse_from, impact_covered=impact_covered)
@@ -383,6 +399,8 @@ def _execute_check(project_root, run_id, owner_token, name, *, argv, scope, inte
         started_at, start = R._now(), time.monotonic()
         error = None
         with log.open("x", encoding="utf-8") as stream:
+            if _before_launch is not None:
+                _before_launch()
             try:
                 process = subprocess.Popen(guarded_command or argv, cwd=directory, env=child_env, stdin=subprocess.DEVNULL,
                                            stdout=stream, stderr=subprocess.STDOUT, start_new_session=os.name == "posix")

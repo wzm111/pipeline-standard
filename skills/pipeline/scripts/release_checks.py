@@ -71,6 +71,16 @@ def _hold(attempt, reason):
         attempt["recovery_hold"] = {"status": "held", "held_at": R._now(), "reason": reason}
 
 
+def _mark_launch_possible(root, run_id, owner, name):
+    with R._write_guard(root) as base:
+        path, state = _owned(base, run_id, owner)
+        attempt = next(a for a in state["release_plan"]["attempts"] if a["name"] == name)
+        if attempt["status"] != "running":
+            raise ValueError("release attempt is no longer running")
+        attempt["launch_possible"] = True
+        R._atomic(path, state)
+
+
 def cancel_attempt(root, run_id, owner_token, name, *, reason):
     """Record caller cancellation only; this API does not stop local or remote work."""
     if not isinstance(reason, str) or not reason.strip() or owner_token in reason:
@@ -192,7 +202,8 @@ def _candidate(root, state, coverage=None):
     candidate = state.get("release_plan", {}).get("candidate")
     if not candidate:
         return None
-    builds = [a for a in state["release_plan"].get("attempts", []) if a["phase"] == "build"]
+    builds = [a for a in state["release_plan"].get("attempts", []) if a["phase"] == "build"
+              and (a["status"] != "failed" or a.get("launch_possible", True))]
     if not builds or builds[-1]["status"] != "passed" or builds[-1]["report"] != candidate["check"]["path"]:
         return None
     try:
@@ -251,6 +262,10 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
         if "pipeline_release_candidate" in environment:
             raise ValueError("release candidate context is maintained by the adapter")
         options["environment"] = {**environment, "pipeline_release_candidate": candidate["id"]}
+    if phase in {"build", "activate"}:
+        keys = ("argv", "scope", "intent", "environment", "write_paths", "timeout", "cwd", "protected_paths")
+        C.validate_request(Path(root).resolve(strict=True), owner_token,
+                           **{key: options[key] for key in keys if key in options})
     with R._write_guard(root) as base:
         path, current = _owned(base, run_id, owner_token)
         R.require_not_waiting(current)
@@ -268,13 +283,16 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
             if (current_coverage["missing"] or (latest_candidate or {}).get("id") != (candidate or {}).get("id")):
                 raise ValueError("release prechecks or candidate changed while registering")
         identity = candidate["id"] if candidate else None
-        related = [a for a in attempts if a["phase"] == "activate" and a["candidate_id"] == identity]
+        related = [a for a in attempts if a["phase"] == "activate" and a["candidate_id"] == identity
+                   and (a["status"] != "failed" or a.get("launch_possible", True))]
         if phase == "activate" and any(a["status"] == "passed" for a in related):
             raise ValueError("candidate already activated; continue smoke and closeout")
         if phase == "activate" and (any(a["status"] == "running" for a in related) or len(related) >= 2):
             raise ValueError("activation recovery limit reached or activation running; stop and report blocker")
         attempt = {"name": name, "phase": phase, "candidate_id": identity, "status": "running", "report": None,
                    "started_at": R._now()}
+        if phase in {"build", "activate"}:
+            attempt["launch_possible"] = False
         if phase == "activate" and current["release_plan"].get("project_activation_gate") is not None:
             attempt["guarded_command"] = G.command_identity({
                 "argv": options["argv"], "cwd": options.get("cwd") or ".", "environment": options["environment"],
@@ -287,6 +305,8 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
         R._atomic(path, current)
     result, accepted, completed_normally = None, False, False
     try:
+        if phase in {"build", "activate"}:
+            options["_before_launch"] = lambda: _mark_launch_possible(root, run_id, owner_token, name)
         result = C.execute_check(root, run_id, owner_token, name, coverage=labels, **options)
         passed = result["exit_code"] == 0 and result.get("inputs_stable", result.get("reused") is True) is True
         if phase == "build" and passed:
@@ -308,7 +328,8 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
             path, current = _owned(base, run_id, owner_token)
             recorded = next(a for a in current["release_plan"]["attempts"] if a["name"] == name)
             if phase in {"build", "activate"}:
-                if (not completed_normally or result is None or result.get("exit_code") in {124, 130, 137, 143, 255}
+                if recorded.get("launch_possible", True) and (
+                        not completed_normally or result is None or result.get("exit_code") in {124, 130, 137, 143, 255}
                         or result.get("exit_code", 0) < 0
                         or result.get("result_class") in {"timeout", "interrupted"}):
                     _hold(recorded, "execution_outcome_unknown")
@@ -340,7 +361,9 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
 
 
 def _activated(plan, candidate):
-    relevant = [a for a in plan.get("attempts", []) if candidate and a["candidate_id"] == candidate["id"] and a["phase"] == "activate"]
+    relevant = [a for a in plan.get("attempts", [])
+                if candidate and a["candidate_id"] == candidate["id"] and a["phase"] == "activate"
+                and (a["status"] != "failed" or a.get("launch_possible", True))]
     return bool(relevant and relevant[-1]["status"] == "passed")
 
 

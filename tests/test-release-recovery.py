@@ -121,7 +121,11 @@ class ReleaseRecoveryTests(unittest.TestCase):
         self.assertTrue(signal["recovery_blocked"])
 
     def test_execution_and_post_command_exceptions_persist_holds(self):
-        with patch.object(F.C, "execute_check", side_effect=RuntimeError("local observation interrupted")):
+        def interrupt_after_launch_boundary(*args, **kwargs):
+            kwargs["_before_launch"]()
+            raise RuntimeError("local observation interrupted")
+
+        with patch.object(F.C, "execute_check", side_effect=interrupt_after_launch_boundary):
             with self.assertRaises(RuntimeError):
                 self.execute("exception", "build")
         self.assertEqual(self.attempt("exception")["status"], "failed")
@@ -138,6 +142,22 @@ class ReleaseRecoveryTests(unittest.TestCase):
         self.assertEqual(attempt["result"]["exit_code"], 0)
         self.assertEqual(attempt["recovery_hold"]["status"], "held")
         self.assertNotIn("candidate", self.plan())
+
+    def test_local_rejection_does_not_create_hold_or_spend_activation_attempt(self):
+        self.execute("build", "build")
+        before = self.plan()["attempts"]
+        with self.assertRaisesRegex(ValueError, "timeout"):
+            self.execute("bad-timeout", "activate", timeout=0)
+        self.assertEqual(self.plan()["attempts"], before)
+        count = self.count()
+        for name in ("first-rejection", "second-rejection"):
+            with patch.object(F.C, "_claim", side_effect=ValueError("fixture claim rejected")):
+                with self.assertRaisesRegex(ValueError, "claim rejected"):
+                    self.execute(name, "activate")
+            self.assertFalse(self.attempt(name)["launch_possible"])
+            self.assertNotIn("recovery_hold", self.attempt(name))
+        self.assertEqual(self.count(), count)
+        self.assertTrue(self.execute("valid", "activate")["release_accepted"])
 
     def test_late_cancel_preserves_raw_exit_zero_without_passing_build_or_activation(self):
         original = F.C.execute_check
