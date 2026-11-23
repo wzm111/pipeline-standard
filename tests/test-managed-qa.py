@@ -456,9 +456,20 @@ class ManagedQaTests(unittest.TestCase):
         ticket = D.begin(*self.args, "scope_guardian")
         D.accepted(*self.args, ticket["id"], "reviewer", host_executor_id="native-reviewer")
         D.complete(*self.args, ticket["id"], executors_stopped=True, stop_evidence="fixture returned")
+        good_result = {"milestone": "solution_returned",
+                       "messages": [{"text": "✅ **[已完成｜方案评审]** 方案通过，下一步按范围开发。"}]}
+        E.write_report(*self.args, "progress_feedback", "too-early", good_result)
         E.write_report(*self.args, "solution_review", "solution",
                        {"gate": "PASS", "requirement_ref": requirement, "plan_ref": plan,
                         "dispatch_id": ticket["id"]})
+        with self.assertRaisesRegex(ValueError, "progress_feedback for solution_returned"):
+            R.update(*self.args, {"stage": "implementation"})
+        with self.assertRaisesRegex(ValueError, "progress_feedback for solution_returned"):
+            D.begin(*self.args, "developer", workflow_phase="implementation")
+        E.write_report(*self.args, "progress_feedback", "wrong-style", {"milestone": "solution_returned",
+                       "messages": [{"text": "[Pipeline] 方案评审通过。"}]})
+        self.assertIn("solution_returned", self.cli(*args, "input", expected=2)["message"])
+        E.write_report(*self.args, "progress_feedback", "actual-solution-return", good_result)
         self.assertIn("enter implementation", self.cli(*args, "input", expected=2)["message"])
         (self.root / "input").write_text("direct edit before entry")
         with self.assertRaisesRegex(ValueError, "changed before"):

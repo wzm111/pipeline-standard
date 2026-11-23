@@ -135,6 +135,9 @@ def validate_development(root, state):
     if (not dispatch or payload.get("requirement_ref") != requirements[-1][0]
             or payload.get("plan_ref") not in Q._plans(root, state)):
         raise ValueError("current passed solution review is required before implementation")
+    if supervised_high_risk(state):
+        import progress_feedback
+        progress_feedback.require_transition(root, state, "solution_returned", after=report["recorded_at"])
 
 
 def validate_pre_activation(root, state):

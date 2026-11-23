@@ -478,6 +478,8 @@ class VerifyCliTests(unittest.TestCase):
     def developer_request(self):
         W.decide(self.root, self.run, self.owner, "serial", "shared_write_paths",
                  [{"id": "fixture-work", "executor_id": "fixture-dev", "write_paths": [], "depends_on": []}])
+        E.write_report(self.root, self.run, self.owner, "progress_feedback", "opening", {
+            "milestone": "start", "messages": [{"text": "🔵 **[进行中]** 开始执行检查夹具。"}]})
         return D.begin(self.root, self.run, self.owner, "developer", work_item="fixture-work")
 
 
