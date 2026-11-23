@@ -1,5 +1,9 @@
 # 在真实宿主边界记录角色
 
+已完成的 Codex 派发若保留了 unknown，可用 `dispatch-bind --receipt <本轮回执> --dispatch-id <原派发 ID> --observation-ref <本 run 已登记的 models 报告引用>` 追加观测。模型报告按宿主分组，每组提供 `host_executor_id`、`host_session_id`、`metadata_source` 和 `turn_context_evidence`。每条观察含该次 turn 的 `model`、`effort`、`recorded_at` 及原 JSONL 行（含换行）的 `record_sha256`。入口按本机 Codex 会话首条身份记录和从 requested_at 到 completed_at 的唯一 turn 核实；同宿主时间重叠、日志缺失、摘要或已知值冲突时拒绝。审计可在 `supplemental_host_observations` 查看登记时间、摘要与引用，原派发的 unknown 和闭合时点保留。
+
+开发预检和预激活验证当前方案链。高风险 QA 和收口对链上每位方案专家、开发者及验收专家核对实际模型与路由，使用补充观测时会重新验证原始报告和宿主记录。
+
 仅在确有收益、已经决定委派时使用；角色模型仍由models.md解析。这个适配器不创建、停止或切换模型，也不代替Claude/Codex的原生工具。不要为满足事件要求额外创建agent。
 
 ## 主调度员主动分工

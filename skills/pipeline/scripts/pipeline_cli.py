@@ -145,11 +145,13 @@ def parser():
     handoff.add_argument("--run-id", required=True)
     handoff.add_argument("--detail", help="read only the named detail section")
     owned = {}
-    for name in ("handoff-save", "update", "write-preflight", "check", "report", "finish", "plan", "plan-preflight", "plan-bind", "plan-bind-release", "retain-release", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "expert-prepare", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review"):
+    for name in ("handoff-save", "update", "write-preflight", "check", "report", "finish", "plan", "plan-preflight", "plan-bind", "plan-bind-release", "retain-release", "run", "qa", "verify", "wait", "continue", "task-start", "task-end", "allocation-decide", "allocation-review", "expert-prepare", "observe-begin", "observe-finish", "policy-ack", "visual-declare", "visual-begin", "visual-finish", "visual-view", "visual-review", "dispatch-bind"):
         owned[name] = sub.add_parser(name)
         owned[name].add_argument("--project", default=".")
         owned[name].add_argument("--receipt", required=True, help="explicit receipt from this run's start; never use another task's")
     owned["write-preflight"].add_argument("--path", action="append", required=True)
+    owned["dispatch-bind"].add_argument("--dispatch-id", required=True)
+    owned["dispatch-bind"].add_argument("--observation-ref", required=True)
     owned["policy-ack"].add_argument("--revision", required=True)
     owned["allocation-review"].add_argument("--change-id", required=True, help="stable id of a meaningful authorized scope change")
     owned["allocation-decide"].add_argument("--json", required=True, dest="allocation_payload",
@@ -395,6 +397,8 @@ def dispatch(args):
                 "audit": _optional_audit(root, state["run_id"]), **paths()}, 0
     receipt = _receipt(root, args.receipt)
     run_id, owner = receipt["run_id"], receipt["owner_token"]
+    if args.action == "dispatch-bind":
+        return D.bind_host_observation(root, run_id, owner, args.dispatch_id, args.observation_ref), 0
     if args.action == "write-preflight":
         import review_control
         with R._write_guard(root) as base:

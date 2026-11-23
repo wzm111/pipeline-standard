@@ -17,6 +17,9 @@ def assess(root, state):
     issues = {}
     required = {}
     for role, kind in (("scope_guardian", "solution_review"), ("tester", "verification_review")):
+        if role == "scope_guardian":
+            required[role] = [planner for _, _, planner in Q.solution_chain(root, state)]
+            continue
         reports = Q._review_reports(root, state, kind)
         observed = Q._review_executor(state, reports, role, state["supervision_from"]) if reports else None
         required[role] = [observed] if observed else []
@@ -46,7 +49,12 @@ def assess(root, state):
             except (OSError, ValueError, KeyError):
                 issues[role] = "route_configuration_unavailable"
                 break
-            actual = (item.get("actual_model"), item.get("actual_effort"))
+            import role_dispatch
+            try:
+                actual = role_dispatch.effective_feedback(root, state, item)
+            except (OSError, ValueError, TypeError, KeyError):
+                issues[role] = "invalid_host_observation"
+                break
             if actual[0] in {None, "unknown", "inherit"} or (
                     expected.get("effort") and actual[1] in {None, "unknown", "inherit"}):
                 issues[role] = "missing_actual_model_or_effort"

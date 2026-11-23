@@ -738,16 +738,13 @@ def preflight_plan(root, run_id, owner, plan_ref, name, *, include_reuse=True):
 
         requirements = managed_qa._review_reports(root, state, "dual_review")
         if review_control.required(state) or requirements:
-            solutions = managed_qa._review_reports(root, state, "solution_review")
+            solutions = managed_qa.solution_chain(root, state)
             review = {"status": "missing_solution_review"}
-            if requirements and solutions and managed_qa._review_executor(
-                    state, solutions, "scope_guardian", requirements[-1][1]["recorded_at"]):
-                payload = solutions[-1][1]["payload"]
-                if payload.get("requirement_ref") == requirements[-1][0]:
-                    if payload.get("plan_ref") == plan_ref:
-                        review = {"status": "current_solution_recorded"}
-                    else:
-                        review = review_delta(root, run_id, owner, plan_ref)
+            if solutions:
+                if solutions[-1][1]["payload"]["plan_ref"] == plan_ref:
+                    review = {"status": "current_solution_recorded"}
+                else:
+                    review = review_delta(root, run_id, owner, plan_ref)
     current = _owned(root, run_id, owner, read_only=True)
     if current != state:
         fail(None, "snapshot", "run_changed_during_preflight")

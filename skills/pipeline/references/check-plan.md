@@ -1,5 +1,7 @@
 # 同一份检查计划执行与验收
 
+跨 Codex 工具调用执行并复用本地检查时，可在首次建计划时为相应 check 声明 `"environment":{"pipeline_execution_profile":"stable_host"}`。真实检查子进程仅移除 `CODEX_TOOL_CALL_ID`，其余环境继续参与核对。默认使用 strict。已有 strict 证据切换 profile 时需要按新计划实际重跑。
+
 同一需求有多个稳定验收类别、需要开发与QA交接时使用。由智能体根据需求和契约维护，用户无需配置。单个简单检查可用 verify 内联声明，无需手写计划文档；原 `check/report` 仍可用。
 
 计划一次声明命令、真实输入范围和coverage；`run`执行该定义，`qa`从相同定义核验证据并生成required_checks。重试仅换name，不改coverage。示例中路径、命令和超时须按项目实际替换：

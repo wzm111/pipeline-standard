@@ -1,5 +1,8 @@
 """Observed host dispatch boundaries; does not create or stop any host agent."""
 from copy import deepcopy
+import hashlib
+import json
+from pathlib import Path
 import re
 import uuid
 
@@ -320,6 +323,162 @@ def wait_for_dispatches(project_root, run_id, owner_token, dispatch_ids):
         return deepcopy(waiting)
 
 
+# Native Codex may include an ordinal between timestamp and type.
+_HOST_HEADER = re.compile(
+    rb'\s*\{\s*(?:"timestamp"\s*:\s*"([0-9T:.+Z-]+)"\s*,\s*'
+    rb'(?:"ordinal"\s*:\s*-?(?:0|[1-9][0-9]*)\s*,\s*)?)?'
+    rb'"type"\s*:\s*"([a-z_0-9]+)"\s*,\s*'
+    rb'(?:"timestamp"\s*:\s*"([0-9T:.+Z-]+)"\s*,\s*)?"payload"\s*:\s*(?=\{)')
+_HOST_STRUCTURE = re.compile(rb'"[^"\\]*(?:\\.[^"\\]*)*"|[{}\[\]"]')
+_RESPONSE_METADATA = re.compile(rb'\s*,\s*"metadata"\s*:\s*(?=\{)')
+
+
+def _opaque_object_end(line, start):
+    """Find the end of an object without decoding any of its quoted bytes."""
+    closing = []
+    for token in _HOST_STRUCTURE.finditer(line, start):
+        char = line[token.start():token.start() + 1]
+        if char == b'"':
+            if token.end() == token.start() + 1:
+                break
+            continue
+        if char in (b'{', b'['):
+            closing.append(b'}' if char == b'{' else b']')
+        elif not closing or char != closing.pop():
+            break
+        elif not closing:
+            return token.end()
+    raise ValueError("invalid Codex event envelope")
+
+
+def _host_header(line):
+    header = _HOST_HEADER.match(line)
+    if not header or (header[1] and header[3]):
+        raise ValueError("invalid Codex event header")
+    end = _opaque_object_end(line, header.end())
+    if header[2] == b"response_item":
+        metadata = _RESPONSE_METADATA.match(line, end)
+        if metadata:
+            end = _opaque_object_end(line, metadata.end())
+    if line[end:].strip() != b'}':
+        raise ValueError("invalid Codex event envelope")
+    return header[2], (header[1] or header[3] or b'').decode("ascii")
+
+
+def _host_observation(root, state, item, ref):
+    """Read only host identity and turn metadata; never return transcript content."""
+    import run_evidence as E
+    import run_tasks
+    host = item.get("host_executor_id")
+    if item["status"] != "completed" or not host or item.get("routing_runtime") != "codex":
+        raise ValueError("binding requires a completed Codex host dispatch")
+    start, end = (R._timestamp(item[key]) for key in ("requested_at", "completed_at"))
+    tasks = run_tasks._tasks(state)
+    if tasks and (start < R._timestamp(tasks[-1]["started_at"])
+                  or tasks[-1]["ended_at"] and end > R._timestamp(tasks[-1]["ended_at"])):
+        raise ValueError("dispatch does not belong to the current task")
+    if not isinstance(ref, str) or ref not in state["artifacts"] or "/artifacts/models/" not in ref:
+        raise ValueError("expected a registered models observation from this run")
+    report = E.read_report(root, state["run_id"], ref, kind="models")
+    reported = R._timestamp(report["recorded_at"])
+    if tasks and tasks[-1]["ended_at"] and reported > R._timestamp(tasks[-1]["ended_at"]):
+        raise ValueError("observation report does not belong to the current task")
+    payload = report["payload"]
+    groups = [group for group in payload.values() if isinstance(group, dict)
+              and group.get("host_executor_id") == host] if isinstance(payload, dict) else []
+    if len(groups) != 1:
+        raise ValueError("expected one observation group for this host executor")
+    group = groups[0]
+    session = group.get("host_session_id")
+    if not isinstance(session, str) or str(uuid.UUID(session)) != session:
+        raise ValueError("invalid host session identity")
+    home = Path.home()
+    source = Path(group.get("metadata_source", ""))
+    if not source.is_relative_to(home / ".codex/sessions") or not source.match("rollout-*-" + session + ".jsonl"):
+        raise ValueError("expected a local Codex session transcript for this session ID")
+    source = E._local(home, str(source.relative_to(home)))
+    if not source.is_file():
+        raise ValueError("host session evidence unavailable")
+    rows = group.get("turn_context_evidence")
+    if not isinstance(rows, list):
+        raise ValueError("per-turn host observations are required")
+    selected = [row for row in rows if isinstance(row, dict) and start <= R._timestamp(row.get("recorded_at")) <= end]
+    if len(selected) != 1:
+        raise ValueError("host observation is missing or ambiguous for the dispatch window")
+    row = selected[0]
+    at = R._timestamp(row["recorded_at"])
+    if at > reported:
+        raise ValueError("host observation report predates its turn")
+    if any(other["id"] != item["id"] and other.get("host_executor_id") == host
+           and R._timestamp(other["requested_at"]) <= at
+           and (not other.get("completed_at") or at <= R._timestamp(other["completed_at"]))
+           for other in state["role_dispatches"]):
+        raise ValueError("host observation belongs to overlapping dispatches")
+    matches = 0
+    with source.open("rb") as stream:
+        first = stream.readline()
+        if _host_header(first)[0] != b"session_meta":
+            raise ValueError("expected a host session metadata header")
+        meta = json.loads(first)
+        identity = meta.get("payload") if isinstance(meta, dict) else None
+        if not isinstance(identity, dict) or meta.get("type") != "session_meta" or identity.get("id") != session or host not in (
+                identity.get("agent_path"), identity.get("id")):
+            raise ValueError("host session metadata does not match the dispatch")
+        for line in stream:
+            kind, timestamp = _host_header(line)
+            if kind != b"turn_context" or not start <= R._timestamp(timestamp) <= end:
+                continue
+            matches += 1
+            if timestamp != row["recorded_at"] or row.get("record_sha256") != hashlib.sha256(line).hexdigest():
+                raise ValueError("turn metadata or original record digest does not match")
+            data = json.loads(line)["payload"]
+            if data.get("model") != row.get("model") or data.get("effort") != row.get("effort"):
+                raise ValueError("turn metadata or original record digest does not match")
+    if matches != 1:
+        raise ValueError("expected exactly one original host turn in the dispatch window")
+    model, effort = _model(row.get("model")), _effort(row.get("effort"))
+    if model in {"inherit", "unknown"} or effort in {"inherit", "unknown"} or any(
+            item[key] not in {"unknown", value} for key, value in (("actual_model", model), ("actual_effort", effort))):
+        raise ValueError("host observation is unknown or conflicts with recorded feedback")
+    return {"dispatch_id": item["id"], "host_executor_id": host, "host_session_id": session,
+            "observation_ref": ref, "observation_sha256": hashlib.sha256(E._local(Path(root).resolve(), ref).read_bytes()).hexdigest(),
+            "report_recorded_at": report["recorded_at"], "record_sha256": row["record_sha256"], "observed_at": row["recorded_at"],
+            "actual_model": model, "actual_effort": effort}
+
+
+def bind_host_observation(project_root, run_id, owner_token, dispatch_id, observation_ref):
+    """Append verified feedback without reopening or modifying the dispatch."""
+    with R._write_guard(project_root) as base:
+        path, state = _owned(base, run_id, owner_token)
+        item = _ticket(state, dispatch_id)
+        if "unknown" not in (item["actual_model"], item["actual_effort"]):
+            raise ValueError("closed dispatch already has complete host feedback")
+        seen = _host_observation(project_root, state, item, observation_ref)
+        bindings = state.setdefault("dispatch_observations", {})
+        if dispatch_id in bindings:
+            previous = bindings[dispatch_id]
+            if previous != dict(seen, registered_at=previous["registered_at"]):
+                raise ValueError("cannot replace registered host observation")
+            return deepcopy(previous)
+        now = R._now()
+        if R._timestamp(now) < max(R._timestamp(item["completed_at"]), R._timestamp(seen["report_recorded_at"])):
+            raise ValueError("observation registration clock moved backwards")
+        binding = bindings[dispatch_id] = dict(seen, registered_at=now)
+        state["updated_at"] = now
+        R._atomic(path, state)
+        return deepcopy(binding)
+
+
+def effective_feedback(root, state, item):
+    binding = state.get("dispatch_observations", {}).get(item["id"])
+    if not binding:
+        return item.get("actual_model"), item.get("actual_effort")
+    seen = _host_observation(root, state, item, binding["observation_ref"])
+    if binding != dict(seen, registered_at=binding["registered_at"]):
+        raise ValueError("registered host evidence changed")
+    return seen["actual_model"], seen["actual_effort"]
+
+
 def validate_direct(state):
     """Check the caller's direct declaration without changing execution history."""
     if state.get("role_events") or state.get("role_dispatches"):
@@ -342,4 +501,5 @@ def summary(project_root, run_id=None):
     state = R.status(project_root, run_id)["state"]
     entries = deepcopy(state.get("role_dispatches", [])) if state else []
     return {"run_id": state["run_id"] if state else run_id, "attempts": entries,
+            "supplemental_host_observations": deepcopy(state.get("dispatch_observations", {})) if state else {},
             "actual_models_are_host_reported_only": True, "metrics": M.summary(project_root, run_id)}

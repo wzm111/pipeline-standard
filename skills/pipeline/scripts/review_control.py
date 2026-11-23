@@ -129,15 +129,12 @@ def validate_development(root, state):
     requirements = Q._review_reports(root, state, "dual_review")
     if not reports or not requirements:
         raise ValueError("solution review is required before implementation")
-    _, report = reports[-1]
-    dispatch = Q._review_executor(state, reports, "scope_guardian", requirements[-1][1]["recorded_at"])
-    payload = report["payload"]
-    if (not dispatch or payload.get("requirement_ref") != requirements[-1][0]
-            or payload.get("plan_ref") not in Q._plans(root, state)):
+    chain = Q.solution_chain(root, state)
+    if not chain:
         raise ValueError("current passed solution review is required before implementation")
     if supervised_high_risk(state):
         import progress_feedback
-        progress_feedback.require_transition(root, state, "solution_returned", after=report["recorded_at"])
+        progress_feedback.require_transition(root, state, "solution_returned", after=chain[-1][1]["recorded_at"])
 
 
 def validate_pre_activation(root, state):

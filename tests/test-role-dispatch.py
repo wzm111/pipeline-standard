@@ -1,5 +1,7 @@
 """Native tool boundaries are simulated; host actual model is never inferred."""
 from pathlib import Path
+import hashlib
+import json
 import sys
 import tempfile
 import unittest
@@ -11,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills/pipeline/sc
 import role_dispatch as D
 import run_state as R
 import run_tasks as T
+import run_evidence as E
 
 
 class RoleDispatchTests(unittest.TestCase):
@@ -23,6 +26,83 @@ class RoleDispatchTests(unittest.TestCase):
 
     def done(self, ticket, outcome="completed"):
         return D.complete(*self.args, ticket["id"], executors_stopped=True, stop_evidence="fixture host confirms stopped", outcome=outcome)
+
+    def test_late_host_observation_is_append_only_and_revalidated(self):
+        ticket = D.begin(*self.args, "tester", routing_runtime="codex")
+        host, session = "/root/fixture", "12345678-0000-4000-a000-0123456789ab"
+        time = R._now()
+        D.accepted(*self.args, ticket["id"], "tester", host_executor_id=host)
+        closed = self.done(ticket)
+        with self.assertRaisesRegex(ValueError, "closed dispatch"):
+            D.complete(*self.args, ticket["id"], executors_stopped=True, stop_evidence="fixture ended",
+                       actual_model="observed-model")
+        path = self.root / ".codex/sessions/2026/11/23" / ("rollout-fixture-" + session + ".jsonl")
+        path.parent.mkdir(parents=True)
+        turn = {"timestamp": time, "ordinal": 3, "type": "turn_context",
+                "payload": {"model": "observed-model", "effort": "high"}}
+        record = (json.dumps(turn) + "\n").encode()
+        meta = {"timestamp": time, "ordinal": 0, "type": "session_meta", "payload": {"id": session, "agent_path": host}}
+        header = (json.dumps(meta) + "\n").encode()
+        private = "synthetic-private-body"
+        unrelated = b"".join((json.dumps({"timestamp": time, "type": kind, "payload": {
+            "type": "turn_context", "content": [private, 'quoted "}]:{ text']}}) + "\n").encode()
+            for kind in ("response_item", "event_msg"))
+        response = {"timestamp": time, "ordinal": 1, "type": "response_item", "payload": {},
+                    "metadata": {"type": "turn_context", "content": [private, {"braces": '}"'}]}}
+        unrelated += (json.dumps(response) + "\n").encode()
+        outside = (json.dumps({"timestamp": "2000-01-01T00:00:00Z", "type": "turn_context",
+                               "payload": {"model": private}}) + "\n").encode()
+        path.write_bytes(header + unrelated + outside + record)
+        observation = dict(turn["payload"], recorded_at=time, record_sha256=hashlib.sha256(record).hexdigest())
+        group = {"host_executor_id": host, "host_session_id": session, "metadata_source": str(path)}
+        ref = E.write_report(*self.args, "models", "turns", {"tester": group | {"turn_context_evidence": [observation]}})
+        with patch.object(Path, "home", return_value=self.root):
+            for name, rows in (("aggregate", []), ("ambiguous", [observation, observation]),
+                               ("bad-digest", [observation | {"record_sha256": "0" * 64}]),
+                               ("wrong-effort", [observation | {"effort": "low"}])):
+                invalid = E.write_report(*self.args, "models", name, {"tester": group | {"turn_context_evidence": rows}})
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    D.bind_host_observation(*self.args, ticket["id"], invalid)
+            with self.assertRaises(ValueError):
+                D.bind_host_observation(self.root, self.s["run_id"], "other-owner", ticket["id"], ref)
+            original_loads = json.loads
+
+            def metadata_only(value, *args, **kwargs):
+                self.assertNotIn(private, value.decode() if isinstance(value, bytes) else value)
+                return original_loads(value, *args, **kwargs)
+
+            with patch.object(json, "loads", side_effect=metadata_only):
+                path.write_bytes(header + unrelated + outside)
+                with self.assertRaisesRegex(ValueError, "exactly one"):
+                    D.bind_host_observation(*self.args, ticket["id"], ref)
+                path.write_bytes(unrelated + record)
+                with self.assertRaisesRegex(ValueError, "session"):
+                    D.bind_host_observation(*self.args, ticket["id"], ref)
+                duplicate_type = b'{"type":"response_item","payload":{},"type":"turn_context"}\n'
+                path.write_bytes(header + duplicate_type + record)
+                with self.assertRaisesRegex(ValueError, "event envelope"):
+                    D.bind_host_observation(*self.args, ticket["id"], ref)
+                for invalid in (response | {"ordinal": True}, response | {"type": "event_msg"},
+                                response | {"metadata": []}, response | {"extra": {}},
+                                json.dumps(response)[:-1] + ',"metadata":{}}'):
+                    line = invalid if isinstance(invalid, str) else json.dumps(invalid)
+                    path.write_bytes(header + line.encode() + b"\n" + record)
+                    with self.assertRaisesRegex(ValueError, "Codex event"):
+                        D.bind_host_observation(*self.args, ticket["id"], ref)
+                path.write_bytes(header + unrelated + outside + record)
+                binding = D.bind_host_observation(*self.args, ticket["id"], ref)
+            self.assertEqual(D.bind_host_observation(*self.args, ticket["id"], ref), binding)
+            state = R.status(self.root)["state"]
+            self.assertEqual(state["role_dispatches"][0], closed)
+            self.assertEqual(D.effective_feedback(self.root, state, closed), ("observed-model", "high"))
+            with self.assertRaisesRegex(ValueError, "conflicts"):
+                D.effective_feedback(self.root, state, closed | {"actual_model": "other-model"})
+            replacement = E.write_report(*self.args, "models", "other", {"tester": group | {"turn_context_evidence": [observation]}})
+            with self.assertRaisesRegex(ValueError, "replace"):
+                D.bind_host_observation(*self.args, ticket["id"], replacement)
+            path.write_bytes(path.read_bytes() + record)
+            with self.assertRaises(ValueError):
+                D.effective_feedback(self.root, state, closed)
 
     def test_attempt_is_not_creation_and_acceptance_records_actual_boundaries_once(self):
         ticket = D.begin(*self.args, "developer", requested_model="gpt-6.1-sol", requested_effort="medium")

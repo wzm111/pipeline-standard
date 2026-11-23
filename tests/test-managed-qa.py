@@ -261,9 +261,9 @@ class ManagedQaTests(unittest.TestCase):
     def review_report(self, kind, name, payload):
         return E.write_report(*self.args, kind, name, payload)
 
-    def review_dispatch(self, role, executor):
+    def review_dispatch(self, role, executor, host=None):
         dispatch = D.begin(*self.args, role)["id"]
-        D.accepted(*self.args, dispatch, executor, host_executor_id="host-" + executor)
+        D.accepted(*self.args, dispatch, executor, host_executor_id=host or "host-" + executor)
         D.complete(*self.args, dispatch, executors_stopped=True, stop_evidence="fixture stopped")
         return dispatch
 
@@ -349,6 +349,52 @@ class ManagedQaTests(unittest.TestCase):
         result = self.payload(P.qa_from_plan(*self.args, plan, "late"))
         self.assertEqual(result["gate"], "CONCERNS")
         self.assertIn("dual_review", result["check_failures"])
+
+    def test_amendment_preserves_timely_root_and_independent_current_check(self):
+        _, solution = self.reviewed_plan({"unit": self.spec})
+        R.update(*self.args, {"stage": "implementation"})
+        (self.root / "extra").write_text("also checked")
+        new = P.save_plan(*self.args, "expanded", {"unit": self.spec | {"scope": ["input", "extra"]}})
+        pending = P.qa_from_plan(*self.args, new, "missing")
+        self.assertEqual(self.payload(pending)["gate"], "CONCERNS")
+        leaf = self.review_report("solution_review", "amendment", {
+            "gate": "PASS", "dispatch_id": self.review_dispatch("scope_guardian", "amender"),
+            "requirement_ref": self.payload(solution)["requirement_ref"], "amends": solution, "plan_ref": new})
+        P.run_planned(*self.args, new, "unit", "expanded-test")
+        refs = P.inspect_plan(*self.args, new)["checks"]
+        self.review_report("verification_review", "same-root-planner", {
+            "gate": "PASS", "dispatch_id": self.review_dispatch("tester", "alias", "host-planner"),
+            "solution_ref": leaf, "checks": refs})
+        self.assertEqual(self.payload(P.qa_from_plan(*self.args, new, "shared-root-reviewer"))["gate"], "CONCERNS")
+        self.verified_refs(leaf, refs)
+        self.assertEqual(self.payload(P.qa_from_plan(*self.args, new, "amended"))["gate"], "PASS")
+        self.assertEqual(self.payload(pending)["gate"], "CONCERNS")
+        self.assertEqual(self.finish()["status"], "completed")
+
+    def test_amendment_cannot_drop_a_check_even_when_coverage_labels_match(self):
+        _, solution = self.reviewed_plan({"unit": self.spec, "independent": self.spec})
+        new = P.save_plan(*self.args, "reduced", {"unit": self.spec})
+        leaf = self.review_report("solution_review", "amend", {"gate": "PASS", "amends": solution,
+            "dispatch_id": self.review_dispatch("scope_guardian", "new"),
+            "requirement_ref": self.payload(solution)["requirement_ref"], "plan_ref": new})
+        P.run_planned(*self.args, new, "unit", "current")
+        self.verified_refs(leaf, P.inspect_plan(*self.args, new)["checks"])
+        self.assertEqual(self.payload(P.qa_from_plan(*self.args, new, "dropped"))["gate"], "CONCERNS")
+
+    def test_amendment_cannot_skip_a_failed_verdict_or_reuse_a_dispatch(self):
+        _, solution = self.reviewed_plan({"unit": self.spec})
+        new = P.save_plan(*self.args, "expanded", {"unit": self.spec})
+        original = self.payload(solution)
+        stale = self.review_report("solution_review", "stale", original | {"amends": solution, "plan_ref": new})
+        P.run_planned(*self.args, new, "unit", "current")
+        refs = P.inspect_plan(*self.args, new)["checks"]
+        self.verified_refs(stale, refs)
+        self.assertEqual(self.payload(P.qa_from_plan(*self.args, new, "replayed"))["gate"], "CONCERNS")
+        self.review_report("solution_review", "fail", {"gate": "FAIL"})
+        skipped = self.review_report("solution_review", "skip", original | {"amends": solution, "plan_ref": new,
+            "dispatch_id": self.review_dispatch("scope_guardian", "fresh")})
+        self.verified_refs(skipped, refs, "new-verification")
+        self.assertEqual(self.payload(P.qa_from_plan(*self.args, new, "skipped"))["gate"], "CONCERNS")
 
     def test_declared_retrospective_cannot_start_development(self):
         T.start(*self.args, "retro", "review existing implementation", ["evidence"],

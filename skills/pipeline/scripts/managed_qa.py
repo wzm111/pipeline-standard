@@ -225,8 +225,16 @@ def validate_release_sources(root, state, coverage):
 
 
 def _review_reports(root, state, kind):
-    reports = [(ref, _read(root, state, ref, kind)) for ref in state["artifacts"]
-               if f"/artifacts/{kind}/" in ref]
+    reports = []
+    for ref in state["artifacts"]:
+        if f"/artifacts/{kind}/" not in ref:
+            continue
+        digest = state.get("review_digests", {}).get(ref)
+        if digest:
+            import check_plan as P
+            if P._digest(root, ref) != digest:
+                raise ValueError("registered expert review evidence changed")
+        reports.append((ref, _read(root, state, ref, kind)))
     return [(ref, report) for ref, report in reports if _current(report, state)]
 
 
@@ -253,6 +261,68 @@ def _executor_ids(dispatch):
     return {dispatch.get("host_executor_id"), dispatch["executor_id"]} - {None}
 
 
+def _developers(state):
+    start = boundary(state)
+    return {identity for item in state.get("role_dispatches", [])
+            if item["role"] == "developer" and item.get("accepted_at")
+            and (start is None or R._timestamp(item["accepted_at"]) >= R._timestamp(start))
+            for identity in _executor_ids(item)}
+
+
+def solution_chain(root, state):
+    """Resolve the current leaf back to its timely, independent same-task root."""
+    import check_plan as P
+    requirements = _review_reports(root, state, "dual_review")
+    reports = _review_reports(root, state, "solution_review")
+    if not requirements or not reports:
+        return []
+    requirement_ref, requirement = requirements[-1]
+    start = boundary(state)
+    implementation = [d["requested_at"] for d in state.get("role_dispatches", []) if d["role"] == "developer"]
+    implementation.extend(e["at"] for e in state["history"] if e.get("stage") == "implementation")
+    times = [R._timestamp(at) for at in implementation if not start or R._timestamp(at) >= R._timestamp(start)]
+    developers = _developers(state)
+    plans = set(_plans(root, state))
+    snapshot = {"digests": {}, "reports": {}}
+    chain, used_dispatches, used_plans = [], set(), set()
+    child_plan = None
+    for index in range(len(reports) - 1, -1, -1):
+        ref, report = reports[index]
+        payload = report["payload"]
+        if not isinstance(payload, dict) or payload.get("requirement_ref") != requirement_ref:
+            return []
+        plan_ref = payload.get("plan_ref")
+        if not isinstance(plan_ref, str) or plan_ref not in plans or plan_ref in used_plans:
+            return []
+        plan = P._read_plan(root, state["run_id"], state["owner_token"], plan_ref, state, snapshot)
+        plan_time = _read(root, state, plan_ref, "check_plan")["recorded_at"]
+        earliest = requirement["recorded_at"]
+        if "amends" in payload:
+            if index == 0 or payload["amends"] != reports[index - 1][0]:
+                return []
+            earliest = max(earliest, plan_time, reports[index - 1][1]["recorded_at"], key=R._timestamp)
+        elif (times and not review_control.decision(state).get("retrospective")
+              and R._timestamp(report["recorded_at"]) > min(times)):
+            return []
+        planner = _review_executor(state, reports[:index+1], "scope_guardian", earliest)
+        if (not planner or planner["id"] in used_dispatches or _executor_ids(planner) & developers
+                or R._timestamp(plan_time) > R._timestamp(report["recorded_at"])):
+            return []
+        if child_plan is not None and (
+                not set(plan["required_checks"]) <= set(child_plan["required_checks"])
+                or any(key not in child_plan["checks"] or
+                       not set(check["coverage"]) <= set(child_plan["checks"][key]["coverage"])
+                       for key, check in plan["checks"].items())):
+            return []
+        chain.append((ref, report, planner))
+        used_plans.add(plan_ref)
+        used_dispatches.add(planner["id"])
+        if "amends" not in payload:
+            return list(reversed(chain))
+        child_plan = plan
+    return []
+
+
 def _apply_expert_reviews(root, state, result):
     requirements = _review_reports(root, state, "dual_review")
     import review_control
@@ -269,42 +339,26 @@ def _apply_expert_reviews(root, state, result):
         result.setdefault("check_failures", {})["progress_feedback"] = "missing_or_invalid_visible_feedback"
     else:
         result["feedback_ref"] = feedback[-1][0]
-    start = boundary(state)
-    developers = {
-        identity for dispatch in state.get("role_dispatches", [])
-        if dispatch["role"] == "developer" and dispatch.get("accepted_at")
-        and (start is None or R._timestamp(dispatch["accepted_at"]) >= R._timestamp(start))
-        for identity in _executor_ids(dispatch)
-    }
     failure = "missing_solution_review"
-    requirement_ref, requirement = requirements[-1]
-    solutions = _review_reports(root, state, "solution_review")
+    requirement_ref = requirements[-1][0]
+    solutions = solution_chain(root, state)
     verifications = _review_reports(root, state, "verification_review")
     if solutions:
-        solution_ref, solution = solutions[-1]
-        planner = _review_executor(state, solutions, "scope_guardian", requirement["recorded_at"])
+        solution_ref, solution, _ = solutions[-1]
         plan_ref = result.get("plan_ref")
-        implementation = [R._timestamp(d["requested_at"]) for d in state.get("role_dispatches", [])
-                          if d["role"] == "developer" and (start is None
-                          or R._timestamp(d["requested_at"]) >= R._timestamp(start))]
-        implementation.extend(R._timestamp(e["at"]) for e in state.get("history", [])
-                              if e.get("stage") == "implementation"
-                              and (start is None or R._timestamp(e["at"]) >= R._timestamp(start)))
-        timely = (review_control.decision(state).get("retrospective") is True or
-                  not implementation or R._timestamp(solution["recorded_at"]) <= min(implementation))
-        if (timely and planner and not _executor_ids(planner) & developers and plan_ref and solution["payload"].get("requirement_ref") == requirement_ref
-                and solution["payload"].get("plan_ref") == plan_ref):
+        if solution["payload"].get("plan_ref") == plan_ref:
             failure = "missing_current_independent_verification"
             if verifications:
                 verification_ref, verification = verifications[-1]
                 checks = result["checks"]
                 tester = _review_executor(state, verifications, "tester", solution["recorded_at"])
-                if (tester and not _executor_ids(tester) & (_executor_ids(planner) | developers)
+                reviewers = set().union(*(_executor_ids(planner) for _, _, planner in solutions))
+                if (tester and not _executor_ids(tester) & (reviewers | _developers(state))
                         and verification["payload"].get("solution_ref") == solution_ref
                         and verification["payload"].get("checks") == checks
                         and all(R._timestamp(_read(root, state, ref, "check")["recorded_at"])
                                 <= R._timestamp(tester["completed_at"]) for ref in checks)):
-                    result["expert_reviews"] = [requirement_ref, solution_ref, verification_ref]
+                    result["expert_reviews"] = [requirement_ref, *(ref for ref, _, _ in solutions), verification_ref]
                     return result
     if result["gate"] == "PASS":
         result["gate"] = "CONCERNS"

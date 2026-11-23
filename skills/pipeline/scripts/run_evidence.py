@@ -111,6 +111,8 @@ def write_report(project_root, run_id, owner_token, kind, name, payload):
         run_state._atomic(path, report)
         if relative not in state["artifacts"]:
             state["artifacts"].append(relative)
+        if kind in {"dual_review", "solution_review", "verification_review"}:
+            state.setdefault("review_digests", {})[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
         if kind == "planned_release":
             bindings = state.setdefault("planned_release_bindings", {}).setdefault(payload["plan"]["path"], {})
             bindings[payload["activation"]["id"]] = {
