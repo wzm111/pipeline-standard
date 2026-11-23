@@ -22,7 +22,7 @@ def entered_verification(state):
         for event in state["history"])
 
 
-def require_transition(root, state, milestone):
+def require_transition(root, state, milestone, *, after=None):
     """Require a newly registered valid message before a managed transition."""
     boundary = state.get("supervision_from")
     if boundary is None:
@@ -30,6 +30,8 @@ def require_transition(root, state, milestone):
     import run_evidence as E
     import run_state as R
 
+    if after is not None:
+        boundary = max(boundary, after, key=R._timestamp)
     # Use a fresh message for each entry, including a second wait in one task.
     for event in reversed(state["history"]):
         if ((milestone == "blocked" and event.get("activity") == "human_wait")
@@ -41,8 +43,11 @@ def require_transition(root, state, milestone):
             continue
         report = E.read_report(root, state["run_id"], ref, kind="progress_feedback")
         payload = report["payload"]
-        if payload.get("milestone") == milestone and R._timestamp(report["recorded_at"]) > R._timestamp(boundary):
-            if payload.get("format_valid") is True:
+        registered = R._timestamp(report["recorded_at"])
+        if payload.get("milestone") == milestone and registered > R._timestamp(boundary):
+            timestamps = payload.get("sent_at", [])
+            if payload.get("format_valid") is True and all(
+                    R._timestamp(boundary) <= R._timestamp(stamp) <= registered for stamp in timestamps):
                 return
             break
     raise ValueError(f"register valid current progress_feedback for {milestone} before transitioning")

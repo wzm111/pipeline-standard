@@ -156,6 +156,12 @@ def begin(project_root, run_id, owner_token, role, *, executor_id=None, requeste
             raise ValueError("existing executor must finish its current episode before a new dispatch")
         if role == "developer" and _developer_reservations(state) >= DEVELOPER_LIMIT:
             raise ValueError("developer concurrency limit reached (3); wait for confirmed completion before dispatch")
+        boundary = state.get("supervision_from")
+        if boundary is not None and not any(
+                R._timestamp(item["requested_at"]) >= R._timestamp(boundary)
+                for item in state.get("role_dispatches", [])):
+            import progress_feedback
+            progress_feedback.require_transition(project_root, state, "start")
         now = R._now()
         item = {"id": uuid.uuid4().hex, "role": role, "mode": "reuse" if executor_id else "create",
                 "executor_id": executor_id, "requested_model": model, "requested_effort": effort,

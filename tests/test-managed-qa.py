@@ -210,6 +210,7 @@ class ManagedQaTests(unittest.TestCase):
     def test_high_risk_omitted_declaration_blocks_development_and_acceptance(self):
         T.start(*self.args, "risk", "shared logic", ["cross entry"], require_managed=True,
                 review_risk="high", review_reason="shared authorization")
+        self.start_feedback()
         with self.assertRaisesRegex(ValueError, "solution review"):
             D.begin(*self.args, "developer")
         with self.assertRaisesRegex(ValueError, "solution review"):
@@ -395,6 +396,37 @@ class ManagedQaTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.finish()
 
+    def start_feedback(self, name="opening"):
+        return E.write_report(*self.args, "progress_feedback", name, {"milestone": "start",
+                              "messages": [{"text": "🔵 **[进行中]** 开始核对任务并安排评审。"}]})
+
+    def test_first_dispatch_requires_valid_start_feedback_in_current_task(self):
+        def start(task):
+            self.cli("task-start", "--receipt", str(self.receipt), "--task-id", task,
+                     "--goal", "review", "--accept", "checked", "--review-risk", "low",
+                     "--review-reason", "fixture")
+
+        start("first")
+        with self.assertRaisesRegex(ValueError, "progress_feedback for start"):
+            D.begin(*self.args, "planner")
+        for name, message in (("malformed", {"text": "[Pipeline] 开始"}),
+                              ("stale", {"text": "🔵 **[进行中]** 开始。", "sent_at": "2000-01-01T00:00:00Z"})):
+            E.write_report(*self.args, "progress_feedback", name, {"milestone": "start", "messages": [message]})
+            with self.assertRaisesRegex(ValueError, "progress_feedback for start"):
+                D.begin(*self.args, "planner")
+        self.assertFalse(R.status(self.root)["state"].get("role_dispatches"))
+        self.start_feedback()
+        first = D.begin(*self.args, "planner")
+        D.complete(*self.args, first["id"], executors_stopped=True, stop_evidence="fixture stopped", outcome="failed")
+        second = D.begin(*self.args, "planner")
+        D.complete(*self.args, second["id"], executors_stopped=True, stop_evidence="fixture stopped", outcome="failed")
+        T.end(*self.args, "first")
+        start("second")
+        with self.assertRaisesRegex(ValueError, "progress_feedback for start"):
+            D.begin(*self.args, "planner")
+        self.start_feedback("second-opening")
+        self.assertEqual(D.begin(*self.args, "planner")["status"], "dispatching")
+
     def test_high_risk_project_write_requires_review_and_current_implementation(self):
         (self.root / "PIPELINE.md").write_text("<!-- pipeline-guard:allow-write\ninput\ntmp/\n-->")
         self.initialize_source_baseline()
@@ -418,6 +450,7 @@ class ManagedQaTests(unittest.TestCase):
             self.check(write_paths=["input"])
         self.assertEqual(hook("tmp/pipeline/context.md").returncode, 0)
         self.assertTrue(self.cli(*args, "tmp/pipeline/context.md")["ready"])
+        self.start_feedback()
         requirement = E.write_report(*self.args, "dual_review", "required", {})
         plan = P.save_plan(*self.args, "plan", {"unit": self.spec})
         ticket = D.begin(*self.args, "scope_guardian")
@@ -489,6 +522,7 @@ class ManagedQaTests(unittest.TestCase):
                        actual_model=returned)
             return ticket["id"]
 
+        self.start_feedback()
         requirement = report("dual_review", "required", {})
         plan = P.save_plan(*self.args, "plan", {"unit": self.spec})
         solution = report("solution_review", "solution", {

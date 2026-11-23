@@ -84,9 +84,14 @@ def write_report(project_root, run_id, owner_token, kind, name, payload):
             milestone = payload.get("milestone")
             if "milestone" in payload and milestone not in progress_feedback.MILESTONES:
                 raise ValueError("unknown progress milestone")
-            payload = progress_feedback.inspect_feedback(payload["messages"])
+            messages = payload["messages"]
+            payload = progress_feedback.inspect_feedback(messages)
             if milestone is not None:
                 payload["milestone"] = milestone
+            if milestone in {"start", "solution_returned"}:
+                timestamps = [message["sent_at"] for message in messages if message.get("sent_at") is not None]
+                if timestamps:
+                    payload["sent_at"] = timestamps
         if kind == "planned_release":
             import check_plan
             import planned_release

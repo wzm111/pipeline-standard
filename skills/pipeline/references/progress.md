@@ -70,6 +70,8 @@ JSON
 
 `start`（含 `--compact`）和 `task-start` 自动返回当前任务的 `supervision`。主调度员发送首条可见进度后，将实际消息按 `start` 里程碑登记。派发前核对分工及风险路线，实际调用宿主后依次记录请求、接受和结果。角色实际型号和强度只填写宿主已反馈的值。
 
-新 CLI 运行及新任务进入正式 `verification` 前，先发送实际进度，再用 `report --kind progress_feedback` 登记格式有效的 `verification_started`。手动改变阶段和绑定验证阶段的派发都检查这一证据。进入人工等待前，用同样方式登记 `blocked`，随后使用 `wait` 写入用户动作与恢复后的验证条件。每次重新进入阶段需要新的记录。已有运行的旧任务继续按原规则处理。
+新 CLI 运行及新任务首次正式派发前，主调度员先发送合规开工反馈，再用 `report --kind progress_feedback` 登记实际文本与 `milestone: start`。角色请求由 `role_dispatch.begin` 检查登记。草稿须先发送，旧任务的开工记录不能复用。已正式派发的任务继续当前工作。
+
+进入正式 `verification` 前，先发送实际进度，再用 `report --kind progress_feedback` 登记格式有效的 `verification_started`。手动改变阶段和绑定验证阶段的派发都检查这一证据。进入人工等待前，用同样方式登记 `blocked`，随后使用 `wait` 写入用户动作与恢复后的验证条件。每次重新进入这两个阶段需要新的记录。
 
 `qa`、`verify` 和受管 QA 报告会返回监督摘要。调度员将它与实际消息、宿主派发证据对照。监督提示和工程 QA 分别报告。摘要查询已登记的证据，宿主派发仍需要对照实际反馈。
