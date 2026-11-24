@@ -513,7 +513,8 @@ def solution_chain(root, state, *, guardians=None):
         if not isinstance(payload, dict) or payload.get("requirement_ref") != requirement_ref:
             return []
         plan_ref = payload.get("plan_ref")
-        if not isinstance(plan_ref, str) or plan_ref not in plans or plan_ref in used_plans:
+        if (not isinstance(plan_ref, str) or plan_ref not in plans
+                or (plan_ref in used_plans and plan_ref != chain[-1][1]["payload"]["plan_ref"])):
             return []
         plan = P._read_plan(root, state["run_id"], state["owner_token"], plan_ref, state, snapshot)
         plan_time = _read(root, state, plan_ref, "check_plan")["recorded_at"]
