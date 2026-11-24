@@ -373,6 +373,31 @@ class VerifyCliTests(unittest.TestCase):
                                   "--name", "host-final")["gate"], "PASS")
 
     def test_reviewed_amendments_and_actual_release_closeout(self):
+        self.reviewed_release()
+
+    def test_attested_ancestor_qa_concern_through_release_and_finish(self):
+        self.reviewed_release(archive_qa=True)
+
+    def test_ancestor_qa_rejects_additional_historical_failures_even_when_attested(self):
+        self.reviewed_release(archive_qa=True, bad_history=True)
+
+    def test_matching_current_command_does_not_attest_an_unmapped_historical_observation(self):
+        self.reviewed_release(archive_qa=True, unmatched=True)
+
+    def test_unsigned_fully_executed_intermediate_plan_through_release_and_finish(self):
+        self.reviewed_release(archive_qa=True, intermediate="same")
+
+    def test_intermediate_plan_cannot_drop_existing_obligations_or_use_different_evidence(self):
+        for change in ("definition", "source", "reordered", "earlier-required", "earlier-judgment"):
+            with self.subTest(change=change):
+                case = VerifyCliTests()
+                case.setUp()
+                try:
+                    case.reviewed_release(intermediate=change)
+                finally:
+                    case.doCleanups()
+
+    def reviewed_release(self, *, archive_qa=False, bad_history=False, unmatched=False, intermediate=None):
         import managed_qa
         import release_checks as F
 
@@ -394,9 +419,35 @@ class VerifyCliTests(unittest.TestCase):
         prior, second = reviewed("prior", {"unit": wrong}, first)
         old = self.cli("run", "--receipt", self.receipt, "--plan", prior, "--id", "unit",
                        "--name", "obsolete", expected=1)["report"]
+        if archive_qa:
+            ancestor, second = reviewed("checked-ancestor", {"unit": self.check}, second)
+            checked = self.cli("run", "--receipt", self.receipt, "--plan", ancestor, "--id", "unit",
+                               "--name", "ancestor-execution")["report"]
+            if unmatched:
+                self.cli("check", "--receipt", self.receipt, "--name", "older-preflight",
+                         "--scope", "input", "--coverage", "release_preflight", "--intent", "check", "--",
+                         sys.executable, "-B", "-c", "print('preflight')")
+            self.verification_report("ancestor-verdict", {"gate": "PASS", "solution_ref": second, "checks": [checked],
+                                     "dispatch_id": self.review_dispatch("tester", "old-verifier")})
+            judgment = self.cli("qa", "--receipt", self.receipt, "--plan", ancestor,
+                                "--name", "historical-concerns", expected=1)
+            self.assertEqual(judgment["check_failures"], {"unplanned_checks": "current_task_checks_not_in_plan"})
+            qa_ref = judgment["report"]
+            qa_file = self.root / qa_ref
+            original_qa = qa_file.read_bytes()
         hooks = {phase: {"argv": [sys.executable, "-B", "-c", "print('" + phase + "')"],
                          "scope": ["input"], "intent": "check", "coverage": [label], "write_paths": []}
                  for phase, label in (("preflight", "release_preflight"), ("compatibility", "runner_compatibility"))}
+        if intermediate:
+            if intermediate == "earlier-required":
+                P.save_plan(*args, "earlier-requirement", {"compatibility": hooks["compatibility"]})
+            unit = self.check | {"timeout": 90} if intermediate == "definition" else self.check
+            slots = {"unit": unit, "preflight": hooks["preflight"]}
+            if intermediate == "reordered":
+                slots = dict(reversed(slots.items()))
+            middle = P.save_plan(*args, "intermediate", slots)
+            if intermediate == "earlier-judgment":
+                self.cli("qa", "--receipt", self.receipt, "--plan", middle, "--name", "intermediate-concern", expected=1)
         self.plan, solution = reviewed("leaf", {"unit": self.check, **hooks}, second)
         new = self.cli("run", "--receipt", self.receipt, "--plan", self.plan, "--id", "unit",
                        "--name", "fixed")["report"]
@@ -406,15 +457,78 @@ class VerifyCliTests(unittest.TestCase):
                 actual = F.execute(*args, "official-" + phase, phase=phase, **spec)["report"]
                 P.bind_check(*args, self.plan, phase, "bind-" + phase, actual)
                 refs.append(actual)
+            if intermediate:
+                if intermediate == "source":
+                    self.cli("run", "--receipt", self.receipt, "--plan", middle,
+                             "--id", "unit", "--name", "different-execution")
+                else:
+                    P.bind_check(*args, middle, "unit", "middle-unit", new)
+                P.bind_check(*args, middle, "preflight", "middle-preflight", refs[1])
             passed = {"gate": "PASS", "solution_ref": solution, "checks": refs,
                       "dispatch_id": self.review_dispatch("tester", "leaf-verifier"),
                       "supersessions": [{"obsolete_ref": old, "replacement_ref": new,
                       "reason": "The amended fixture runs the unit check with the current configuration."}]}
+            if archive_qa:
+                # Wrong or absent attestations cannot dispose of the actual earlier machine judgment.
+                for name, rows in (("absent", None), ("wrong-digest", [{"ref": qa_ref, "sha256": "0" * 64}]),
+                                   ("wrong-ref", [{"ref": old, "sha256": hashlib.sha256(original_qa).hexdigest()}])):
+                    payload = passed | {"dispatch_id": self.review_dispatch("tester", "review-" + name)}
+                    if rows is not None:
+                        payload["ancestor_qa"] = rows
+                    self.verification_report("verification-" + name, payload)
+                    self.cli("qa", "--receipt", self.receipt, "--plan", self.plan, "--name", "qa-" + name)
+                    with self.assertRaises(ValueError):
+                        managed_qa.release_requirements(self.root, R.status(self.root)["state"])
+                if bad_history:
+                    for index, change in enumerate((
+                            {"gate": "FAIL"}, {"engineering_gate": "FAIL"}, {"missing_checks": ["unit"]},
+                            {"check_failures": {"unit": "inputs_changed", "unplanned_checks": "current_task_checks_not_in_plan"}},
+                            {"required_checks": []}, {"expert_reviews": []}, {"checks": []},
+                            {"visual": {"complete": False}}, {"plan_ref": "unrelated-plan"})):
+                        with self.subTest(change=change):
+                            doc = json.loads(original_qa)
+                            doc["payload"].update(change)
+                            R._atomic(qa_file, doc)
+                            stamp = {"ref": qa_ref, "sha256": hashlib.sha256(qa_file.read_bytes()).hexdigest()}
+                            test = passed | {"ancestor_qa": [stamp], "dispatch_id":
+                                             self.review_dispatch("tester", "history-" + str(index))}
+                            self.verification_report("history-" + str(index), test)
+                            self.cli("qa", "--receipt", self.receipt, "--plan", self.plan, "--name", "history-" + str(index))
+                            with self.assertRaises(ValueError):
+                                managed_qa.release_requirements(self.root, R.status(self.root)["state"])
+                    return
+                passed["ancestor_qa"] = [{"ref": qa_ref, "sha256": hashlib.sha256(original_qa).hexdigest()}]
+                passed["dispatch_id"] = self.review_dispatch("tester", "final-leaf-verifier")
             self.verification_report("release-reviewed", passed)
             self.cli("qa", "--receipt", self.receipt, "--plan", self.plan, "--name", "source")
             state = R.status(self.root)["state"]
+            if intermediate:
+                inspected = P.inspect_plan(*args, middle)
+                self.assertEqual(inspected["check_failures"], {})
+                self.assertEqual(inspected["missing_checks"], ["runner_compatibility"])
+                if intermediate != "same":
+                    with self.assertRaises(ValueError):
+                        managed_qa.release_source_scope(self.root, state)
+                    return
+            if unmatched:
+                with self.assertRaisesRegex(ValueError, "historical source QA"):
+                    managed_qa.release_source_scope(self.root, state)
+                return
             self.assertEqual(managed_qa.release_requirements(self.root, state),
                              {"unit", "release_preflight", "runner_compatibility"})
+            if archive_qa:
+                qa_file.write_bytes(original_qa + b" ")
+                with self.assertRaises(ValueError):
+                    managed_qa.release_source_scope(self.root, state)
+                for change in ({"gate": "PASS"}, {"plan_ref": self.plan},
+                               {"scope": "engineering_release; pending external outcomes are not passed"}):
+                    with self.subTest(edited_after_attestation=change):
+                        tampered = json.loads(original_qa)
+                        tampered["payload"].update(change)
+                        R._atomic(qa_file, tampered)
+                        with self.assertRaises(ValueError):
+                            managed_qa.release_source_scope(self.root, state)
+                qa_file.write_bytes(original_qa)
             F.execute(*args, "build", phase="build", scope=["input"], artifact_paths=["artifact"],
                       argv=[sys.executable, "-c", "from pathlib import Path; Path('artifact').write_text('fixture')"])
             F.execute(*args, "switch", phase="activate", scope=["input"],
@@ -429,6 +543,10 @@ class VerifyCliTests(unittest.TestCase):
             self.assertEqual([r["path"] for r in acceptance["coverage"]["sources"]["unit"]], [new])
             self.assertEqual(self.cli("finish", "--receipt", self.receipt, "--stopped",
                                       "--stop-evidence", "fixture finished")["status"], "completed")
+
+            if archive_qa:
+                self.assertEqual(qa_file.read_bytes(), original_qa)
+                self.assertEqual(json.loads(original_qa)["payload"]["gate"], "CONCERNS")
 
     def test_supersession_rejects_inexact_or_unreviewed_mappings(self):
         payload = self.supersession_fixture()
