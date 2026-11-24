@@ -372,6 +372,115 @@ class VerifyCliTests(unittest.TestCase):
         self.assertEqual(self.cli("qa", "--receipt", self.receipt, "--plan", self.plan,
                                   "--name", "host-final")["gate"], "PASS")
 
+    def ordinary_release_source(self, *, amendments=True, failed_ancestor=False):
+        import release_checks as release
+        environment = mock.patch.dict(os.environ, self.env, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+        args = self.root, self.run, self.owner
+        E.write_report(*args, "progress_feedback", "start", {"milestone": "start",
+                       "messages": [{"text": "🔵 **[进行中]** 核对常规修订及发布夹具。"}]})
+        requirement = E.write_report(*args, "dual_review", "required", {})
+        (self.root / "fixture-config").touch()
+        (self.root / "fixture-dependency").touch()
+        full_scope = ["input", "fixture-config", "fixture-dependency"]
+        command = [sys.executable, "-B", "-c",
+                   "from pathlib import Path; raise SystemExit(int(Path('failed-fixture').exists()))"]
+        unit = self.check | {"argv": command, "scope": full_scope}
+        previous = None
+
+        def reviewed(name, checks):
+            nonlocal previous
+            plan = P.save_plan(*args, name, checks)
+            solution = {"gate": "PASS", "plan_ref": plan, "requirement_ref": requirement,
+                        "dispatch_id": self.review_dispatch("scope_guardian", name + "-guardian")}
+            if previous:
+                solution["amends"] = previous
+            previous = E.write_report(*args, "solution_review", name, solution)
+            return plan
+
+        if amendments:
+            first = reviewed("first", {"unit": unit | {"scope": full_scope if failed_ancestor else full_scope[:1]}})
+            if failed_ancestor:
+                marker = self.root / "failed-fixture"
+                marker.touch()
+                self.cli("run", "--receipt", self.receipt, "--plan", first, "--id", "unit", "--name", "failed", expected=1)
+                marker.unlink()
+            reviewed("second", {"unit": unit | {"scope": full_scope[:2]}})
+        phases = {name: {"argv": [sys.executable, "-B", "-c", "print('" + name + "')"],
+                         "intent": "check", "scope": ["input"], "coverage": [label], "write_paths": []}
+                  for name, label in (("preflight", "release_preflight"), ("compatibility", "runner_compatibility"))}
+        self.plan = reviewed("leaf", {"unit": unit, **phases})
+        source = self.cli("run", "--receipt", self.receipt, "--plan", self.plan, "--id", "unit",
+                          "--name", "source-check")["report"]
+        refs = [source]
+        for phase, spec in phases.items():
+            ref = release.execute(*args, phase, phase=phase, **spec)["report"]
+            P.bind_check(*args, self.plan, phase, "bind-" + phase, ref)
+            refs.append(ref)
+        self.verification_report("review", {"gate": "PASS", "solution_ref": previous, "checks": refs,
+                                 "dispatch_id": self.review_dispatch("tester", "independent")})
+        result = self.cli("qa", "--receipt", self.receipt, "--plan", self.plan, "--name", "source")
+        self.assertEqual(result["gate"], "PASS")
+        self.assertFalse(R.status(self.root)["state"].get("supersession_reviews"))
+        return args
+
+    def ordinary_build(self, args):
+        import release_checks as release
+        return release.execute(*args, "build", phase="build", scope=["input"], artifact_paths=["artifact"],
+                               argv=[sys.executable, "-c", "from pathlib import Path; Path('artifact').write_text('fixture')"])
+
+    def test_ordinary_reviewed_amendments_release_and_finish(self):
+        import managed_qa
+        import release_checks as release
+        args = self.ordinary_release_source()
+        self.assertEqual(managed_qa.release_requirements(self.root, R.status(self.root)["state"]),
+                         {"unit", "release_preflight", "runner_compatibility"})
+        self.ordinary_build(args)
+        release.execute(*args, "switch", phase="activate", scope=["input"], argv=[sys.executable, "-c", "print('fixture')"])
+        release.execute(*args, "smoke", phase="smoke", scope=["input"], coverage=["release_identity"],
+                        argv=[sys.executable, "-c", "print('verified version')"])
+        report = release.closeout(*args)["report"]
+        self.assertEqual(E.read_report(self.root, self.run, report)["payload"]["gate"], "PASS")
+        completed = self.cli("finish", "--receipt", self.receipt, "--stopped", "--stop-evidence", "fixture returned")
+        self.assertTrue(completed["delivery_sealed"])
+
+    def test_ordinary_source_revalidation_excludes_only_official_attempt_refs(self):
+        import managed_qa
+        args = self.ordinary_release_source(amendments=False)
+        built = self.ordinary_build(args)["report"]
+        self.assertIn(built, self.preview(expected=1)["unplanned_checks"])
+        required, replacements = managed_qa.release_source_scope(self.root, R.status(self.root)["state"])
+        self.assertEqual(required, {"unit", "release_preflight", "runner_compatibility", "build"})
+        self.assertEqual(replacements, {})
+        proof = E.read_report(self.root, self.run, built)["payload"]
+        self.cli("check", "--receipt", self.receipt, "--name", "unofficial", "--intent", proof["intent"],
+                 "--scope", "input", "--coverage", "build", "--", *proof["argv"])
+        with self.assertRaisesRegex(ValueError, "current dual expert QA"):
+            managed_qa.release_source_scope(self.root, R.status(self.root)["state"])
+
+    def test_failed_ancestor_does_not_disappear_on_ordinary_reviewed_amendment(self):
+        import managed_qa
+        self.ordinary_release_source(failed_ancestor=True)
+        state = R.status(self.root)["state"]
+        first = next(ref for ref in state["check_plans"] if ref.endswith("/first.json"))
+        inspected = P.inspect_state(self.root, self.run, self.owner, first, state)
+        self.assertEqual(inspected["check_failures"], {"unit": "check_not_passed"})
+        with self.assertRaisesRegex(ValueError, "source plan acceptance is incomplete"):
+            managed_qa.release_source_scope(self.root, state)
+
+    def test_failed_official_preflight_still_prevents_build(self):
+        import managed_qa
+        import release_checks as release
+        args = self.ordinary_release_source()
+        failed = release.execute(*args, "new-preflight", phase="preflight", scope=["input"],
+                                 argv=[sys.executable, "-c", "raise SystemExit(7)"])
+        self.assertEqual(failed["exit_code"], 7)
+        self.assertEqual(managed_qa.release_source_scope(self.root, R.status(self.root)["state"])[1], {})
+        with self.assertRaisesRegex(release.PreflightIncomplete, "release_preflight"):
+            self.ordinary_build(args)
+        self.assertFalse((self.root / "artifact").exists())
+
     def test_reviewed_amendments_and_actual_release_closeout(self):
         self.reviewed_release()
 

@@ -187,7 +187,7 @@ def _covered_ancestor(root, state, plan_ref, leaf, plans, snapshot, failures, re
     """A reviewed amendment carries unused slots; an actual failure needs its exact replacement."""
     import check_plan as P
     for key, reason in failures.items():
-        if reason == "not_executed":
+        if reason == "not_executed" and (plan_ref, key) not in snapshot["bindings"]:
             continue
         binding = snapshot["bindings"].get((plan_ref, key), (None, {}))[1]
         old = binding.get("result", {}).get("report")
@@ -316,7 +316,7 @@ def release_source_scope(root, state):
     plans = _plans(root, state)
     snapshot = P._snapshot(root, state["run_id"], state)
     definitions = {ref: P._read_plan(root, state["run_id"], state["owner_token"], ref, state, snapshot) for ref in plans}
-    replacements, ancestors, attempts = {}, {}, set()
+    replacements, ancestors = {}, {}
     leaf = latest.get("plan_ref") if latest else None
     if state.get("supersession_reviews") and leaf in definitions:
         import check_supersession
@@ -325,13 +325,15 @@ def release_source_scope(root, state):
         if replacements:
             judged_plans.update(report["payload"].get("plan_ref") for _, report in
                                 _review_reports(root, state, "solution_review") if isinstance(report["payload"], dict))
-            ancestors = {solution["payload"]["plan_ref"]: solution_ref
-                         for solution_ref, solution, _ in solution_chain(root, state)[:-1]}
-            # The release gate independently rechecks each official phase, candidate and post-release source.
-            attempts = {item.get("report") for item in state.get("release_plan", {}).get("attempts", [])}
     if review_control.required(state) or _review_reports(root, state, "dual_review"):
-        if not latest or not latest.get("expert_reviews") or canonical(root, state, latest, release_attempts=attempts) != latest:
+        # Only release-side source revalidation excludes these exact reports. Release phases validate them separately.
+        attempts = {item["report"] for item in state.get("release_plan", {}).get("attempts", []) if item.get("report")}
+        if (not latest or latest.get("gate") != "PASS" or not latest.get("expert_reviews")
+                or canonical(root, state, latest, release_attempts=attempts) != latest):
             raise ValueError("current dual expert QA is required before release acceptance")
+        chain = solution_chain(root, state)
+        if chain and chain[-1][1]["payload"]["plan_ref"] == leaf:
+            ancestors = {solution["payload"]["plan_ref"]: ref for ref, solution, _ in chain[:-1]}
     results = {ref: P.inspect_state(root, state["run_id"], state["owner_token"], ref, state, snapshot=snapshot) for ref in plans}
     if replacements:
         verdict = _read(root, state, latest["expert_reviews"][-1], "verification_review")["payload"]
