@@ -139,6 +139,31 @@ class ReleaseChecksTests(unittest.TestCase):
             "if not Path('driver-ready').exists(): raise SystemExit(20)\n"
             "if not Path('permission-ready').exists(): raise SystemExit(22)\n")
 
+    def test_early_readiness_runs_only_declared_probe_and_cannot_satisfy_release_gate(self):
+        import subprocess
+
+        def early():
+            return subprocess.run([sys.executable, "-B", F.__file__, "early-readiness", "--project",
+                                   str(self.root), "--json", '{"environment":{"release_target":"production-a"}}'],
+                                  text=True, capture_output=True)
+
+        original = R.status(self.root)
+        missing = early()
+        self.assertEqual(missing.returncode, 1)
+        self.assertEqual(json.loads(missing.stdout)["reason_code"], "readiness_probe_not_declared")
+        self.declare_readiness_probe()
+        self.assertEqual(json.loads(early().stdout)["reason_code"], "production_driver_unbound")
+        for path in ("driver-ready", "permission-ready"):
+            (self.root / path).touch()
+        with (self.root / "readiness.py").open("a") as probe:
+            probe.write("print('private fixture output')\n")
+        passed = early()
+        self.assertEqual(passed.returncode, 0, passed.stderr)
+        self.assertEqual(json.loads(passed.stdout), {"ready": True})
+        self.assertEqual(R.status(self.root), original)
+        with self.assertRaisesRegex(F.PreflightIncomplete, "release_readiness"):
+            self.build()
+
     def test_readiness_probe_runs_first_and_reports_missing_driver_or_permissions(self):
         self.declare_readiness_probe()
         preflight = [sys.executable, "-c", "from pathlib import Path; Path('full-preflight-ran').touch()"]

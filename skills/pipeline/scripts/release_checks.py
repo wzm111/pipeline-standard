@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 if __name__ == "__main__":
@@ -24,6 +25,29 @@ PHASES = {"preflight": "release_preflight", "compatibility": "runner_compatibili
 
 READINESS_REASONS = {20: "production_driver_unbound", 21: "production_driver_unverified",
                      22: "production_permission_denied", 23: "production_permission_unverified"}
+
+
+def early_readiness(root, *, environment):
+    """Check the declared read-only probe before any release plan exists."""
+    root = Path(root).resolve(strict=True)
+    environment = E._environment(environment)
+    if not isinstance(environment.get("release_target"), str) or not environment["release_target"].strip():
+        raise ValueError("early readiness requires a release_target")
+    gate = G.snapshot(root)
+    if not gate or not gate.get("readiness_probe"):
+        return {"ready": False, "reason_code": "readiness_probe_not_declared"}
+    request = G.readiness_request(root, gate, {"environment": environment})
+    try:
+        process = subprocess.run(request["argv"], cwd=root, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 timeout=30, check=False)
+    except subprocess.TimeoutExpired:
+        return {"ready": False, "reason_code": "readiness_probe_timeout"}
+    if G.snapshot(root) != gate:
+        return {"ready": False, "reason_code": "readiness_probe_inputs_changed"}
+    if process.returncode:
+        return {"ready": False, "reason_code": READINESS_REASONS.get(process.returncode, "readiness_probe_failed")}
+    return {"ready": True}
 
 
 class PreflightIncomplete(ValueError):
@@ -718,19 +742,21 @@ def main(argv=None):
     from pipeline_cli import _receipt
     parser = argparse.ArgumentParser(description="Invoke existing authorized project release commands.")
     sub = parser.add_subparsers(dest="action", required=True)
-    for action in ("prepare", "execute", "status", "closeout", "operation-capture", "operation-inspect"):
+    for action in ("early-readiness", "prepare", "execute", "status", "closeout", "operation-capture",
+                   "operation-inspect"):
         command = sub.add_parser(action, allow_abbrev=False)
         command.add_argument("--project", default=".")
         if action == "operation-inspect":
             command.add_argument("--run-id", required=True)
-        else:
+        elif action != "early-readiness":
             command.add_argument("--receipt", required=True)
         if action != "status":
             command.add_argument("--json", required=True, dest="declaration")
     args = parser.parse_args(argv)
     try:
         declaration = {} if args.action == "status" else json.loads(args.declaration)
-        allowed = {"prepare": {"required_before", "required_after"},
+        allowed = {"early-readiness": {"environment"},
+                   "prepare": {"required_before", "required_after"},
                    "execute": {"name", "phase", "argv", "scope", "artifact_paths", "timeout", "cwd",
                                "environment", "coverage", "write_paths", "protected_paths"},
                    "closeout": {"external_pending"}, "status": set(),
@@ -740,16 +766,19 @@ def main(argv=None):
             raise ValueError("unknown declaration fields")
         if args.action == "execute" and not {"name", "phase", "argv", "scope"} <= set(declaration):
             raise ValueError("execute requires name, phase, argv and scope")
-        required = {"operation-capture": {"name", "target_environment"},
+        required = {"early-readiness": {"environment"}, "operation-capture": {"name", "target_environment"},
                     "operation-inspect": {"proof", "target_environment"}}.get(args.action, set())
         if not required <= set(declaration):
             raise ValueError("operation declaration missing required fields")
         root = Path(args.project).resolve(strict=True)
-        if args.action != "operation-inspect":
+        if args.action not in {"early-readiness", "operation-inspect"}:
             receipt = _receipt(root, args.receipt)
             owned = root, receipt["run_id"], receipt["owner_token"]
         code = 0
-        if args.action == "operation-inspect":
+        if args.action == "early-readiness":
+            result = early_readiness(root, **declaration)
+            code = 0 if result["ready"] else 1
+        elif args.action == "operation-inspect":
             E._environment(declaration["target_environment"])
             if (not isinstance(declaration["proof"], dict)
                     or set(declaration["proof"]) != {"run_id", "path", "sha256"}
