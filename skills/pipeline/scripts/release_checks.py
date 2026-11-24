@@ -188,7 +188,7 @@ def _coverage_identity(payload):
     return json.dumps([payload.get("command"), payload.get("scope"), payload.get("intent")], sort_keys=True)
 
 
-def _coverage(root, state, required, *, identities=None):
+def _coverage(root, state, required, *, identities=None, excluded=()):
     """Newest failed command blocks older PASS even if its labels differ."""
     sources, seen, blocked = {}, set(), set()
     plan = state.get("release_plan", {})
@@ -208,7 +208,7 @@ def _coverage(root, state, required, *, identities=None):
         activation = E.read_report(root, state["run_id"], activations[-1]["report"], kind="check")["payload"]
         activated_at = R._timestamp(activation["finished_at"])
     for path in reversed(state["artifacts"]):
-        if "/artifacts/check/" not in path:
+        if "/artifacts/check/" not in path or path in excluded:
             continue
         try:
             payload = E.read_report(root, state["run_id"], path, kind="check")["payload"]
@@ -506,10 +506,12 @@ def _acceptance(root, state, pending):
         raise ValueError("release recovery hold unresolved; cannot accept or finish")
     required = sorted(set(plan.get("required_before", [])) | set(plan.get("required_after", []))
                       | {"build", "release_activation"} | set(state.get("inherited_required_checks") or []))
+    replaced = {}
     if "run_policy" in state:
         import managed_qa
-        required = sorted(set(required) | managed_qa.release_requirements(root, state))
-    coverage = _coverage(root, state, required)
+        source_required, replaced = managed_qa.release_source_scope(root, state)
+        required = sorted(set(required) | source_required)
+    coverage = _coverage(root, state, required, excluded=replaced)
     candidate = _candidate(root, state, coverage)
     if not _activated(plan, candidate) or not coverage["complete"]:
         raise ValueError("release acceptance incomplete; fill only missing or invalid checks")

@@ -108,6 +108,9 @@ def write_report(project_root, run_id, owner_token, kind, name, payload):
         path.parent.mkdir(parents=True, exist_ok=True)
         report = {"schema_version": 1, "run_id": run_id, "kind": kind,
                   "recorded_at": run_state._now(), "payload": deepcopy(payload)}
+        if kind == "verification_review" and isinstance(payload, dict) and "supersessions" in payload:
+            import check_supersession
+            check_supersession.register(root, state, relative, report)
         run_state._atomic(path, report)
         if relative not in state["artifacts"]:
             state["artifacts"].append(relative)

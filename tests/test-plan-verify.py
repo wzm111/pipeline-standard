@@ -1,10 +1,13 @@
 """Real CLI verify pipeline: strict environment, evidence and original closeout."""
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -125,6 +128,352 @@ class VerifyCliTests(unittest.TestCase):
         self.assertEqual(result["results"], [])
         self.assertEqual(result["gate"], "CONCERNS")
         self.assertFalse((self.root / "counter").exists())
+
+    def review_dispatch(self, role, name, host=None):
+        args = (self.root, self.run, self.owner)
+        dispatch = D.begin(*args, role)["id"]
+        D.accepted(*args, dispatch, name, host_executor_id=host or "host-" + name)
+        D.complete(*args, dispatch, executors_stopped=True, stop_evidence="fixture review returned")
+        return dispatch
+
+    def supersession_fixture(self, *, argv=None, scope="input", coverage="unit", intent="test"):
+        def report(kind, name, payload):
+            return E.write_report(self.root, self.run, self.owner, kind, name, payload)
+
+        report("progress_feedback", "opening", {"milestone": "start",
+               "messages": [{"text": "🔵 **[进行中]** 核对测试夹具的检查范围。"}]})
+        requirement = report("dual_review", "required", {})
+        solution = report("solution_review", "solution", {"gate": "PASS", "plan_ref": self.plan,
+                          "requirement_ref": requirement,
+                          "dispatch_id": self.review_dispatch("scope_guardian", "planner")})
+        argv = argv or [sys.executable, "-B", "-c", "raise SystemExit(3)"]
+        old = self.cli("check", "--receipt", self.receipt, "--name", "wrong-command",
+                       "--scope", scope, "--coverage", coverage, "--intent", intent, "--", *argv,
+                       expected=0 if argv == self.check["argv"] else 1)["report"]
+        new = self.cli("run", "--receipt", self.receipt, "--plan", self.plan, "--id", "unit",
+                       "--name", "corrected-command")["report"]
+        row = {"obsolete_ref": old, "replacement_ref": new,
+               "reason": "The corrected invocation checks the fixture input using its current configuration."}
+        return {"gate": "PASS", "dispatch_id": self.review_dispatch("tester", "independent"),
+                "solution_ref": solution, "checks": [new], "supersessions": [row]}
+
+    def verification_report(self, name, payload, expected=0):
+        return self.cli("report", "--receipt", self.receipt, "--kind", "verification_review",
+                        "--name", name, "--json", json.dumps(payload), expected=expected)
+
+    def preview(self, expected=0, **kwargs):
+        return self.cli("plan-preflight", "--receipt", self.receipt, "--plan", self.plan,
+                        "--name", "preview", expected=expected, **kwargs)
+
+    def test_reviewed_supersession_preserves_evidence_through_finish(self):
+        payload = self.supersession_fixture()
+        row = payload["supersessions"][0]
+        old, new = row["obsolete_ref"], row["replacement_ref"]
+        proof = E.read_report(self.root, self.run, old)["payload"]
+        old_report = (self.root / old).read_bytes()
+        old_log = (self.root / proof["log_path"]).read_bytes()
+        self.assertEqual(self.preview(expected=1)["unplanned_checks"], [old])
+        ref = self.verification_report("reviewed", payload)["report"]
+        stored = E.read_report(self.root, self.run, ref)["payload"]["supersessions"][0]
+        for key, path in (("obsolete_sha256", old), ("replacement_sha256", new)):
+            self.assertEqual(stored[key], hashlib.sha256((self.root / path).read_bytes()).hexdigest())
+        self.assertTrue(self.preview()["ready"])
+        qa = self.cli("qa", "--receipt", self.receipt, "--plan", self.plan, "--name", "source")
+        self.assertEqual(qa["gate"], "PASS")
+        import review_control
+        import managed_qa
+        state = R.status(self.root)["state"]
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            review_control.validate_pre_activation(self.root, state | {
+                "release_plan": {"required_before": ["unit"], "required_after": [], "attempts": []}})
+            self.assertEqual(managed_qa.release_requirements(self.root, state), {"unit"})
+        completed = self.cli("finish", "--receipt", self.receipt, "--stopped",
+                             "--stop-evidence", "all fixture executors returned")
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual((self.root / old).read_bytes(), old_report)
+        self.assertEqual((self.root / proof["log_path"]).read_bytes(), old_log)
+        self.assertEqual(proof["exit_code"], 3)
+        self.assertEqual((self.root / "counter").read_text(), "1")
+
+    def test_authenticated_host_checks_can_share_a_corrected_execution(self):
+        args = self.root, self.run, self.owner
+        E.write_report(*args, "progress_feedback", "opening", {"milestone": "start",
+                       "messages": [{"text": "🔵 **[进行中]** 核对宿主观察夹具。"}]})
+        requirement = E.write_report(*args, "dual_review", "required", {})
+        (self.root / "config").write_text("fixture")
+        def observe(name, labels, scope, code):
+            spec = {"command": name, "scope": scope, "coverage": labels,
+                    "environment": {"fixture": "local-host"}, "write_paths": []}
+            self.cli("observe-begin", "--receipt", self.receipt, "--id", name, "--json", json.dumps(spec))
+            log = name + ".log"
+            (self.root / log).write_text("fixture returned " + str(code))
+            return self.cli("observe-finish", "--receipt", self.receipt, "--id", name, "--host-stopped",
+                            "--stop-evidence", "fixture finished", "--log-path", log,
+                            "--exit-code", str(code))["report"]
+
+        olds = [observe("old-" + label, [label], ["config", "input"], code)
+                for label, code in (("unit", 1), ("integration", 0))]
+        new = observe("verified", ["integration", "unit"], ["input", "config"], 0)
+        proof = E.read_report(self.root, self.run, new)["payload"]
+        check = {key: proof[key] for key in ("scope", "coverage", "environment", "intent")}
+        self.plan = P.save_plan(*args, "native", {"combined": dict(check, observed_ref=new)})
+        solution = E.write_report(*args, "solution_review", "solution", {
+            "gate": "PASS", "plan_ref": self.plan, "requirement_ref": requirement,
+            "dispatch_id": self.review_dispatch("scope_guardian", "planner")})
+        self.verification_report("combined", {"gate": "PASS", "solution_ref": solution, "checks": [new],
+            "dispatch_id": self.review_dispatch("tester", "tester"), "supersessions": [
+                {"obsolete_ref": old, "replacement_ref": new,
+                 "reason": "The corrected host invocation covers both fixture inputs and both checks."}
+                for old in olds]})
+        self.assertTrue(self.preview()["ready"])
+        self.assertEqual(self.cli("qa", "--receipt", self.receipt, "--plan", self.plan,
+                                  "--name", "host-final")["gate"], "PASS")
+
+    def test_reviewed_amendments_and_actual_release_closeout(self):
+        import managed_qa
+        import release_checks as F
+
+        args = self.root, self.run, self.owner
+        E.write_report(*args, "progress_feedback", "opening", {"milestone": "start",
+                       "messages": [{"text": "🔵 **[进行中]** 核对隔离发布夹具。"}]})
+        requirement = E.write_report(*args, "dual_review", "required", {})
+
+        def reviewed(name, checks, previous=None):
+            ref = P.save_plan(*args, name, checks)
+            solution = {"gate": "PASS", "plan_ref": ref, "requirement_ref": requirement,
+                        "dispatch_id": self.review_dispatch("scope_guardian", name + "-guardian")}
+            if previous:
+                solution["amends"] = previous
+            return ref, E.write_report(*args, "solution_review", name, solution)
+
+        unused, first = reviewed("initial", {"unit": self.check})
+        wrong = dict(self.check, argv=[sys.executable, "-B", "-c", "raise SystemExit(3)"])
+        prior, second = reviewed("prior", {"unit": wrong}, first)
+        old = self.cli("run", "--receipt", self.receipt, "--plan", prior, "--id", "unit",
+                       "--name", "obsolete", expected=1)["report"]
+        hooks = {phase: {"argv": [sys.executable, "-B", "-c", "print('" + phase + "')"],
+                         "scope": ["input"], "intent": "check", "coverage": [label], "write_paths": []}
+                 for phase, label in (("preflight", "release_preflight"), ("compatibility", "runner_compatibility"))}
+        self.plan, solution = reviewed("leaf", {"unit": self.check, **hooks}, second)
+        new = self.cli("run", "--receipt", self.receipt, "--plan", self.plan, "--id", "unit",
+                       "--name", "fixed")["report"]
+        refs = [new]
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            for phase, spec in hooks.items():
+                actual = F.execute(*args, "official-" + phase, phase=phase, **spec)["report"]
+                P.bind_check(*args, self.plan, phase, "bind-" + phase, actual)
+                refs.append(actual)
+            passed = {"gate": "PASS", "solution_ref": solution, "checks": refs,
+                      "dispatch_id": self.review_dispatch("tester", "leaf-verifier"),
+                      "supersessions": [{"obsolete_ref": old, "replacement_ref": new,
+                      "reason": "The amended fixture runs the unit check with the current configuration."}]}
+            self.verification_report("release-reviewed", passed)
+            self.cli("qa", "--receipt", self.receipt, "--plan", self.plan, "--name", "source")
+            state = R.status(self.root)["state"]
+            self.assertEqual(managed_qa.release_requirements(self.root, state),
+                             {"unit", "release_preflight", "runner_compatibility"})
+            F.execute(*args, "build", phase="build", scope=["input"], artifact_paths=["artifact"],
+                      argv=[sys.executable, "-c", "from pathlib import Path; Path('artifact').write_text('fixture')"])
+            F.execute(*args, "switch", phase="activate", scope=["input"],
+                      argv=[sys.executable, "-c", "print('fixture activated')"])
+            with self.assertRaisesRegex(ValueError, "incomplete"):
+                F.closeout(*args)
+            F.execute(*args, "smoke", phase="smoke", scope=["input"], coverage=["release_identity"],
+                      argv=[sys.executable, "-c", "print('recorded fixture version')"])
+            release = F.closeout(*args)
+            acceptance = E.read_report(self.root, self.run, release["report"])["payload"]
+            self.assertEqual(acceptance["gate"], "PASS")
+            self.assertEqual([r["path"] for r in acceptance["coverage"]["sources"]["unit"]], [new])
+            self.assertEqual(self.cli("finish", "--receipt", self.receipt, "--stopped",
+                                      "--stop-evidence", "fixture finished")["status"], "completed")
+
+    def test_supersession_rejects_inexact_or_unreviewed_mappings(self):
+        payload = self.supersession_fixture()
+        row = payload["supersessions"][0]
+        old, new = row["obsolete_ref"], row["replacement_ref"]
+        manual = E.write_report(self.root, self.run, self.owner, "check", "manual",
+                                {"command": "manual", "scope": ["input"], "coverage": ["unit"]})
+        cases = [
+            {"gate": "FAIL"}, {"checks": []}, {"solution_ref": self.plan},
+            {"dispatch_id": self.review_dispatch("tester", "alias", "host-planner")},
+            {"supersessions": []}, {"supersessions": [row, row]},
+            {"supersessions": [row, row | {"obsolete_ref": new, "replacement_ref": old}]},
+            *({"supersessions": [row | change]} for change in (
+                {"obsolete_ref": new}, {"replacement_ref": old}, {"reason": " "},
+                {"unexpected": 1}, {"obsolete_sha256": "0" * 64}, {"replacement_sha256": None},
+                {"replacement_ref": manual}, {"obsolete_ref": manual}, {"obsolete_ref": "./" + old},
+                {"replacement_ref": new.replace(self.run, "0" * 32)}))]
+        for index, change in enumerate(cases):
+            with self.subTest(change=change):
+                self.verification_report("invalid-" + str(index), payload | change, expected=2)
+        ordinary = {k: v for k, v in payload.items() if k != "supersessions"}
+        self.verification_report("ordinary", ordinary)
+        self.verification_report("recycled-dispatch", payload, expected=2)
+        self.assertIn(old, self.preview(expected=1)["unplanned_checks"])
+
+    def test_supersession_requires_same_scope_and_full_old_coverage(self):
+        (self.root / "other").write_text("different")
+        payload = self.supersession_fixture(scope="other")
+        self.verification_report("wrong-scope", payload, expected=2)
+
+    def test_supersession_cannot_drop_old_coverage(self):
+        payload = self.supersession_fixture(coverage="integration")
+        self.verification_report("wrong-coverage", payload, expected=2)
+
+    def test_supersession_rejects_same_executed_command_with_different_intent(self):
+        payload = self.supersession_fixture(argv=self.check["argv"], intent="check")
+        self.verification_report("same-command", payload, expected=2)
+
+    def test_supersession_does_not_cover_a_later_observation_of_the_old_command(self):
+        payload = self.supersession_fixture()
+        self.verification_report("mapped", payload)
+        old = E.read_report(self.root, self.run, payload["supersessions"][0]["obsolete_ref"])["payload"]
+        failed = self.cli("check", "--receipt", self.receipt, "--name", "fresh-failure",
+                          "--scope", "input", "--coverage", "unit", "--", *old["argv"], expected=1)
+        self.assertEqual(self.preview(expected=1)["unplanned_checks"], [failed["report"]])
+
+    def test_supersession_rejects_replacement_predating_the_obsolete_observation(self):
+        payload = self.supersession_fixture()
+        old = E.read_report(self.root, self.run, payload["supersessions"][0]["obsolete_ref"])["payload"]
+        late = self.cli("check", "--receipt", self.receipt, "--name", "later-command",
+                        "--scope", "input", "--coverage", "unit", "--", *old["argv"], expected=1)
+        payload["supersessions"][0]["obsolete_ref"] = late["report"]
+        payload["dispatch_id"] = self.review_dispatch("tester", "later-reviewer")
+        self.verification_report("backwards", payload, expected=2)
+
+    def test_supersession_is_revoked_by_later_failure_of_the_replacement(self):
+        self.check["argv"] = [sys.executable, "-B", "-c",
+                              "from pathlib import Path; raise SystemExit(int(Path('fail-switch').exists()))"]
+        payload = self.supersession_fixture()
+        self.verification_report("mapped", payload)
+        (self.root / "fail-switch").touch()
+        self.cli("run", "--receipt", self.receipt, "--plan", self.plan, "--id", "unit",
+                 "--name", "later-failure", expected=1)
+        self.assertIn(payload["supersessions"][0]["obsolete_ref"], self.preview(expected=1)["unplanned_checks"])
+
+    def test_supersession_revoked_if_dispatch_or_reviewed_plan_changes(self):
+        payload = self.supersession_fixture()
+        self.verification_report("judgment", payload)
+        old = payload["supersessions"][0]["obsolete_ref"]
+        state_path = self.root / "tmp/pipeline/runs" / (self.run + ".json")
+        original = state_path.read_bytes()
+        state = json.loads(original)
+        next(d for d in state["role_dispatches"] if d["id"] == payload["dispatch_id"])["status"] = "failed"
+        R._atomic(state_path, state)
+        self.assertIn(old, self.preview(expected=1)["unplanned_checks"])
+        state_path.write_bytes(original)
+        self.cli("plan", "--receipt", self.receipt, "--name", "other-plan",
+                 "--json", json.dumps({"checks": {"unit": self.check}}))
+        self.assertIn(old, self.preview(expected=1)["unplanned_checks"])
+
+    def test_supersession_rejects_review_before_obsolete_report_registration(self):
+        args = self.root, self.run, self.owner
+        E.write_report(*args, "progress_feedback", "opening", {"milestone": "start",
+                       "messages": [{"text": "🔵 **[进行中]** 核对并发检查夹具。"}]})
+        requirement = E.write_report(*args, "dual_review", "required", {})
+        solution = E.write_report(*args, "solution_review", "solution", {
+            "gate": "PASS", "plan_ref": self.plan, "requirement_ref": requirement,
+            "dispatch_id": self.review_dispatch("scope_guardian", "planner")})
+        argv = CLI.parser().parse_args(["check", "--project", str(self.root), "--receipt", self.receipt,
+                                        "--name", "delayed-old", "--write-path", "isolated-old",
+                                        "--scope", "input", "--coverage", "unit", "--",
+                                        sys.executable, "-B", "-c", "raise SystemExit(3)"])
+        ready, resume = threading.Event(), threading.Event()
+        original = E.write_report
+
+        def delay_registration(*args, **kwargs):
+            if args[3:5] == ("check", "delayed-old"):
+                ready.set()
+                if not resume.wait(10):
+                    raise TimeoutError("fixture did not release old report")
+            return original(*args, **kwargs)
+
+        with ThreadPoolExecutor(max_workers=1) as executor, mock.patch.object(E, "write_report", delay_registration):
+            future = executor.submit(CLI.dispatch, argv)
+            try:
+                self.assertTrue(ready.wait(10))
+                new = self.cli("run", "--receipt", self.receipt, "--plan", self.plan, "--id", "unit",
+                               "--name", "replacement")["report"]
+                tester = self.review_dispatch("tester", "independent")
+            finally:
+                resume.set()
+            result, code = future.result(timeout=10)
+        self.assertEqual(code, 1)
+        old = result["report"]
+        report = E.read_report(self.root, self.run, old)
+        started = E.read_report(self.root, self.run, new)["payload"]["started_at"]
+        ended = next(d["completed_at"] for d in R.status(self.root)["state"]["role_dispatches"] if d["id"] == tester)
+        self.assertLess(report["payload"]["finished_at"], started)
+        self.assertLess(started, ended)
+        self.assertLess(ended, report["recorded_at"])
+        judgment = {"gate": "PASS", "solution_ref": solution, "dispatch_id": tester, "checks": [new],
+                    "supersessions": [{"obsolete_ref": old, "replacement_ref": new,
+                                       "reason": "The corrected invocation checks the same fixture inputs."}]}
+        self.verification_report("too-early", judgment, expected=2)
+        self.assertEqual(self.preview(expected=1)["unplanned_checks"], [old])
+
+    def test_supersession_requires_review_of_the_binding_currently_in_use(self):
+        payload = self.supersession_fixture()
+        self.verification_report("review-a", payload)
+        row = payload["supersessions"][0]
+        bound = self.cli("plan-bind", "--receipt", self.receipt, "--plan", self.plan,
+                         "--id", "unit", "--name", "binding-b", "--check", row["replacement_ref"])
+        old = row["obsolete_ref"]
+        self.assertIn(old, self.preview(expected=1)["unplanned_checks"])
+        binding_path = self.root / bound["planned_report"]
+        original = binding_path.read_bytes()
+        corrupted = json.loads(original)
+        corrupted["payload"]["result"]["exit_code"] = 9
+        R._atomic(binding_path, corrupted)
+        qa = self.cli("qa", "--receipt", self.receipt, "--plan", self.plan, "--name", "stale-binding", expected=1)
+        self.assertIn("unplanned_checks", qa["check_failures"])
+        payload["dispatch_id"] = self.review_dispatch("tester", "corrupt-reviewer")
+        self.verification_report("corrupt-b", payload, expected=2)
+        binding_path.write_bytes(original)
+        payload["dispatch_id"] = self.review_dispatch("tester", "new-tester")
+        self.verification_report("review-b", payload)
+        self.assertTrue(self.preview()["ready"])
+
+    def test_supersession_revalidates_observation_review_and_current_environment(self):
+        payload = self.supersession_fixture()
+        row = payload["supersessions"][0]
+        old, new = row["obsolete_ref"], row["replacement_ref"]
+        review = self.verification_report("judgment", payload)["report"]
+        self.assertTrue(self.preview()["ready"])
+        bindings = R.status(self.root)["state"]["supersession_reviews"][review]["bindings"]
+        self.assertEqual(len(bindings), 1)
+        bound = self.root / next(iter(bindings))
+        initial_binding = bound.read_bytes()
+        bound.write_bytes(initial_binding + b" ")
+        self.assertIn(old, self.preview(expected=1)["unplanned_checks"])
+        bound.write_bytes(initial_binding)
+        for path in (old, new):
+            proof = E.read_report(self.root, self.run, path)["payload"]
+            log = self.root / proof["log_path"]
+            original = log.read_bytes()
+            log.write_bytes(original + b"changed")
+            self.assertIn(old, self.preview(expected=1)["unplanned_checks"])
+            log.write_bytes(original)
+        self.assertIn(old, self.preview(expected=1, env=self.env | {"FIXTURE_DRIFT": "1"})["unplanned_checks"])
+        (self.root / "input").write_text("changed")
+        self.assertIn(old, self.preview(expected=1)["unplanned_checks"])
+        (self.root / "input").write_text("stable")
+        original_report = (self.root / old).read_bytes()
+        changed = json.loads(original_report)
+        changed["payload"]["intent"] = "baseline"
+        R._atomic(self.root / old, changed)
+        self.assertIn("supersession", self.preview(expected=2)["message"])
+        (self.root / old).write_bytes(original_report)
+        state_path = self.root / "tmp/pipeline/runs" / (self.run + ".json")
+        original_state = state_path.read_bytes()
+        for ref in (payload["solution_ref"], review):
+            state = json.loads(original_state)
+            del state["review_digests"][ref]
+            R._atomic(state_path, state)
+            self.assertIn(old, self.preview(expected=1)["unplanned_checks"])
+            state_path.write_bytes(original_state)
+        self.verification_report("new-concerns", {"gate": "CONCERNS"})
+        self.assertIn(old, self.preview(expected=1)["unplanned_checks"])
 
     def test_preflight_excludes_old_task_observations_without_weakening_current_ones(self):
         self.cli("check", "--receipt", self.receipt, "--name", "old",

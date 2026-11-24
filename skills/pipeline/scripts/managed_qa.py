@@ -77,7 +77,7 @@ def _validate_ref(root, state, ref):
     return proof
 
 
-def unplanned_checks(root, state, plan):
+def raw_unplanned_checks(root, state, plan):
     """Current-task obligations omitted by a plan, without executing checks."""
     import check_plan as P
     planned = set()
@@ -92,7 +92,14 @@ def unplanned_checks(root, state, plan):
                   and P._identity(_read(root, state, source, "check")["payload"]) not in planned)
 
 
-def canonical(root, state, payload):
+def unplanned_checks(root, state, plan_ref, plan, snapshot):
+    import check_supersession
+    raw = raw_unplanned_checks(root, state, plan)
+    approved = check_supersession.approved(root, state, plan_ref, raw, snapshot)
+    return [ref for ref in raw if ref not in approved]
+
+
+def canonical(root, state, payload, *, release_attempts=()):
     import check_plan as P
     import run_policy
     if not isinstance(payload, dict):
@@ -117,7 +124,7 @@ def canonical(root, state, payload):
                             snapshot)
         result = P.inspect_state(root, state["run_id"], state["owner_token"], ref, state,
                                  payload.get("summary", ""), snapshot=snapshot)
-        if unplanned_checks(root, state, plan):
+        if any(path not in release_attempts for path in unplanned_checks(root, state, ref, plan, snapshot)):
             result["gate"] = "CONCERNS"
             result["check_failures"]["unplanned_checks"] = "current_task_checks_not_in_plan"
         if payload.get("gate") in {"CONCERNS", "FAIL"}:
@@ -176,7 +183,33 @@ def validate_finish(root, state):
         raise ValueError("QA evidence changed after acceptance; revalidate current evidence before completing")
 
 
+def _covered_ancestor(root, state, plan_ref, leaf, plans, snapshot, failures, replacements):
+    """A reviewed amendment carries unused slots; an actual failure needs its exact replacement."""
+    import check_plan as P
+    for key, reason in failures.items():
+        if reason == "not_executed":
+            continue
+        binding = snapshot["bindings"].get((plan_ref, key), (None, {}))[1]
+        old = binding.get("result", {}).get("report")
+        if old not in replacements or reason not in {
+                "check_not_passed", "superseded_observation", "inputs_changed",
+                "inputs_changed_during_check", "command_or_environment_changed"}:
+            return False
+        check = plans[plan_ref]["checks"][key]
+        expected = P.planned_identity(root, state["run_id"], state, check)
+        proof = _read(root, state, old, "check")["payload"]
+        replacement, _ = P._valid(root, state["run_id"], state["owner_token"], state,
+                                  leaf, key, plans[leaf]["checks"][key], snapshot)
+        if expected != P._identity(proof) or replacements[old] != replacement:
+            return False
+    return True
+
+
 def release_requirements(root, state):
+    return release_source_scope(root, state)[0]
+
+
+def release_source_scope(root, state):
     """Keep current source plans and observed categories when release QA joins them."""
     import check_plan as P
     required = set(required_for_state(root, state))
@@ -192,16 +225,29 @@ def release_requirements(root, state):
             source_qa[payload.get("plan_ref", "single")] = latest = payload
     if any(payload.get("gate") != "PASS" for payload in source_qa.values()):
         raise ValueError("current source QA has unresolved concerns or failure")
-    import review_control
-    if review_control.required(state) or _review_reports(root, state, "dual_review"):
-        if not latest or not latest.get("expert_reviews") or canonical(root, state, latest) != latest:
-            raise ValueError("current dual expert QA is required before release acceptance")
     plans = _plans(root, state)
     snapshot = P._snapshot(root, state["run_id"], state)
     definitions = {ref: P._read_plan(root, state["run_id"], state["owner_token"], ref, state, snapshot) for ref in plans}
+    replacements, ancestors, attempts = {}, set(), set()
+    leaf = latest.get("plan_ref") if latest else None
+    if state.get("supersession_reviews") and leaf in definitions:
+        import check_supersession
+        raw = raw_unplanned_checks(root, state, definitions[leaf])
+        replacements = check_supersession.approved(root, state, leaf, raw, snapshot)
+        if replacements:
+            ancestors = {solution["payload"]["plan_ref"] for _, solution, _ in solution_chain(root, state)[:-1]}
+            # The release gate independently rechecks each official phase, candidate and post-release source.
+            attempts = {item.get("report") for item in state.get("release_plan", {}).get("attempts", [])}
+    if review_control.required(state) or _review_reports(root, state, "dual_review"):
+        if not latest or not latest.get("expert_reviews") or canonical(root, state, latest, release_attempts=attempts) != latest:
+            raise ValueError("current dual expert QA is required before release acceptance")
     results = {ref: P.inspect_state(root, state["run_id"], state["owner_token"], ref, state, snapshot=snapshot) for ref in plans}
     for index, ref in enumerate(plans):
         if results[ref]["gate"] == "PASS":
+            continue
+        if (ref in ancestors and results[leaf]["gate"] == "PASS"
+                and _covered_ancestor(root, state, ref, leaf, definitions, snapshot,
+                                      results[ref]["check_failures"], replacements)):
             continue
         recovered = any(results[later]["gate"] == "PASS" and P.equivalent_observed_recovery(
                         root, state["run_id"], state, definitions[ref], definitions[later])
@@ -211,7 +257,7 @@ def release_requirements(root, state):
     current, _ = _checks(root, state)
     for ref in current:
         required.update(E.coverage_labels(_read(root, state, ref, "check")["payload"].get("coverage")))
-    return required
+    return required, replacements
 
 
 def validate_release_sources(root, state, coverage):

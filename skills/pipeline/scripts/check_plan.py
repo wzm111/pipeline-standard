@@ -647,7 +647,7 @@ def preflight_plan(root, run_id, owner, plan_ref, name, *, include_reuse=True):
     if "run_policy" in state:
         import managed_qa
         requirements = managed_qa.required_for_state(root, state, snapshot)
-        unplanned = managed_qa.unplanned_checks(root, state, plan)
+        unplanned = managed_qa.unplanned_checks(root, state, plan_ref, plan, snapshot)
     else:
         requirements = E.coverage_labels(state.get("planned_required_checks"))
         unplanned = []

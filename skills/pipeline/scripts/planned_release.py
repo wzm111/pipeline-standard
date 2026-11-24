@@ -121,18 +121,18 @@ def _source(root, state, snapshot, plan_ref, check_id, check, source, *, histori
     return proof, read_log(root, proof), started, finished
 
 
-def executed(state, ref, report):
+def executed(state, ref, report, *, status="executed"):
     """Find the runner span for this original execution, independent of later tasks."""
     proof = report["payload"]
     started, finished = (R._timestamp(proof[key]) for key in ("started_at", "finished_at"))
     recorded = R._timestamp(report["recorded_at"])
     label = Path(ref).stem
     spans = [R._timestamp(span["end"]) for span in state.get("operation_spans", [])
-             if span["category"] == "verify" and span["label"] == label and span["status"] == "executed"
+             if span["category"] == "verify" and span["label"] == label and span["status"] == status
              and R._timestamp(span["start"]) <= started <= finished <= recorded <= R._timestamp(span["end"])]
     expected_log = f"tmp/pipeline/runs/{state['run_id']}/artifacts/logs/{label}.log"
     if len(spans) != 1 or proof["log_path"] != expected_log:
-        raise ValueError("release proof has no matching completed runner operation")
+        raise ValueError("proof has no matching completed runner operation")
     return started, finished, spans[0]
 
 

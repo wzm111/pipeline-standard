@@ -6,29 +6,15 @@ import review_control
 import run_state as R
 
 
-def assess(root, state):
-    if not review_control.supervised_high_risk(state):
-        return None
-    import managed_qa as Q
-
+def _current_dispatches(state):
     since = R._timestamp(state["supervision_from"])
-    dispatches = [item for item in state.get("role_dispatches", [])
-                  if item.get("accepted_at") and R._timestamp(item["requested_at"]) >= since]
-    issues = {}
-    required = {}
-    for role, kind in (("scope_guardian", "solution_review"), ("tester", "verification_review")):
-        if role == "scope_guardian":
-            required[role] = [planner for _, _, planner in Q.solution_chain(root, state)]
-            continue
-        reports = Q._review_reports(root, state, kind)
-        observed = Q._review_executor(state, reports, role, state["supervision_from"]) if reports else None
-        required[role] = [observed] if observed else []
-    developers = [item for item in dispatches if item["role"] == "developer" and item["status"] == "completed"]
-    entered = review_control.implementation_entered(state)
-    changed = review_control.implementation_changed(root, state)
-    if developers or entered or changed is True:
-        required["developer"] = developers
+    return [item for item in state.get("role_dispatches", [])
+            if item.get("accepted_at") and R._timestamp(item["requested_at"]) >= since]
 
+
+def dispatch_issues(root, state, required):
+    dispatches = _current_dispatches(state)
+    issues = {}
     project = Path(root).resolve() / "pipeline.models.json"
     personal = Path.home() / ".config/pipeline-standard/models.json"
     for role, items in required.items():
@@ -82,6 +68,30 @@ def assess(root, state):
                         (source.get("requested_effort"), native_effort, actual[1])))):
                 issues[role] = "model_route_mismatch"
                 break
+    return issues
+
+
+def assess(root, state):
+    if not review_control.supervised_high_risk(state):
+        return None
+    import managed_qa as Q
+
+    dispatches = _current_dispatches(state)
+    required = {}
+    for role, kind in (("scope_guardian", "solution_review"), ("tester", "verification_review")):
+        if role == "scope_guardian":
+            required[role] = [planner for _, _, planner in Q.solution_chain(root, state)]
+            continue
+        reports = Q._review_reports(root, state, kind)
+        observed = Q._review_executor(state, reports, role, state["supervision_from"]) if reports else None
+        required[role] = [observed] if observed else []
+    developers = [item for item in dispatches if item["role"] == "developer" and item["status"] == "completed"]
+    entered = review_control.implementation_entered(state)
+    changed = review_control.implementation_changed(root, state)
+    if developers or entered or changed is True:
+        required["developer"] = developers
+
+    issues = dispatch_issues(root, state, required)
     workflow = {}
     if changed is None:
         workflow["implementation"] = "missing_verifiable_git_baseline"

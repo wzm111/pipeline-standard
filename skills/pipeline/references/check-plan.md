@@ -86,6 +86,15 @@ Python对应接口：`check_plan.save_plan`、`run_planned`、`qa_from_plan`、�
 
 高风险任务补跑前先看同一份 `plan-preflight` 的 `review`、`unplanned_checks` 和 `reuse`。它们分别显示方案记录是否对应本计划、哪些当前检查未纳入计划，以及当前环境下各检查的复用判定。方案引用变化时返回已有差量。静态 `ready` 只表示执行入口可用，QA 仍独立核验方案和结果。
 
+已纠正诊断命令并取得新的通过证据时，独立 tester 可以核对原始退出码、日志、执行时间、输入范围和覆盖项，说明旧命令的问题以及新命令如何验证原义务。用本轮新的已完成 tester dispatch，在现有 `report --kind verification_review` 的 PASS JSON 中保留 `dispatch_id`、最新 `solution_ref` 和完整有序的 `checks`，增加逐条映射。例如：
+
+```json
+{"supersessions":[{"obsolete_ref":"<原始 check 引用>","replacement_ref":"<本计划已验证的 check 引用>","reason":"原命令从错误目录解析夹具配置，修正后的命令对同一批输入运行了完整检查。"}]}
+```
+
+登记会固定两份报告的 SHA-256。每次预检、QA、激活和收尾都重新核对当前计划与评审、报告、日志及替代检查的可复用性。每条映射只解除所指的旧检查义务，原报告和失败记录仍可查阅。tester 接单前，两次原始执行和替代检查的计划绑定都须已完成登记。重新绑定同一份检查也需新的独立评审。已有绑定可直接用 `qa --plan` 核验。
+
+
 
 ## 计划化单体发布的跨进程封存
 

@@ -175,7 +175,7 @@ def validate_pre_activation(root, state):
         if observed is None or observed not in refs:
             raise ValueError("reviewed pre-activation check missing, failed or not verified: " + check_id)
     release_refs = {attempt.get("report") for attempt in release.get("attempts", [])}
-    if any(ref not in release_refs for ref in Q.unplanned_checks(root, state, plan)):
+    if any(ref not in release_refs for ref in Q.unplanned_checks(root, state, plan_ref, plan, snapshot)):
         raise ValueError("unplanned source checks require reviewed plan coverage before activation")
     source_qa = Q._review_reports(root, state, "qa")
     if source_qa:
