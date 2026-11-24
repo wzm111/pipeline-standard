@@ -47,44 +47,43 @@ else
   echo "已准备: PIPELINE.md 模板；下一次 pipeline 对话会自动识别项目并补全。"
 fi
 
-# ② Claude Code 的 PreToolUse hook(禁区硬拦截)
+# ② Claude Code 的写入保护与会话取证 hook
 if [ "$MODE" = "--all" ] || [ "$MODE" = "--claude" ]; then
 HOOK_CMD='bash ~/.claude/hooks/pipeline-guard.sh'
+SESSION_HOOK_CMD='bash ~/.claude/hooks/pipeline-progress-session.sh'
 mkdir -p "$TARGET/.claude"
 SETTINGS="$TARGET/.claude/settings.json"
 
 merge_settings_json() {
-  local path="$1" cmd="$2"
+  local path="$1" cmd="$2" session_cmd="$3"
 
   # 优先用 python3, 其次用 jq, 都没有则降级为手动提示
   if command -v python3 >/dev/null 2>&1; then
-    if python3 - "$path" "$cmd" <<'PYEOF'
+    if python3 - "$path" "$cmd" "$session_cmd" <<'PYEOF'
 import json, sys, os, tempfile
 
-path, cmd = sys.argv[1], sys.argv[2]
+path, cmd, session_cmd = sys.argv[1:]
 cfg = {}
 if os.path.exists(path):
     with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
 
 hooks = cfg.setdefault("hooks", {})
-pre = hooks.setdefault("PreToolUse", [])
-
 entries = [
-    {"matcher": "Write|Edit|MultiEdit|NotebookEdit",
-     "hooks": [{"type": "command", "command": cmd}]},
-    {"matcher": "Bash",
-     "hooks": [{"type": "command", "command": cmd}]}
+    ("PreToolUse", "Write|Edit|MultiEdit|NotebookEdit", cmd),
+    ("PreToolUse", "Bash", cmd),
+    ("SessionStart", "", session_cmd),
 ]
 
 changed = False
-for entry in entries:
-    if any(group.get("matcher") == entry["matcher"] and
-           any(h.get("type") == "command" and h.get("command") == cmd for h in group.get("hooks", []))
-           for group in pre):
-        print(f"跳过: matcher {entry['matcher']} 已含 pipeline hook")
+for event, matcher, command in entries:
+    groups = hooks.setdefault(event, [])
+    if any(group.get("matcher", "") == matcher and
+           any(h.get("type") == "command" and h.get("command") == command for h in group.get("hooks", []))
+           for group in groups):
+        print(f"跳过: {event} {matcher} 已含 pipeline hook")
         continue
-    pre.append(entry)
+    groups.append({"matcher": matcher, "hooks": [{"type": "command", "command": command}]})
     changed = True
 
 if changed:
@@ -114,29 +113,19 @@ PYEOF
   if command -v jq >/dev/null 2>&1; then
     local tmp
     tmp="$(mktemp "${path}.pipeline.XXXXXX")" || return 1
-    local jq_ok=0
-    if [ -f "$path" ]; then
-      jq --arg cmd "$cmd" '
-        .hooks.PreToolUse //= [] |
-        if (.hooks.PreToolUse | map(select(.matcher == "Write|Edit|MultiEdit|NotebookEdit" and any(.hooks[]?; .type == "command" and .command == $cmd))) | length) == 0 then
-          .hooks.PreToolUse += [{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":$cmd}]}]
-        else . end |
-        if (.hooks.PreToolUse | map(select(.matcher == "Bash" and any(.hooks[]?; .type == "command" and .command == $cmd))) | length) == 0 then
-          .hooks.PreToolUse += [{"matcher":"Bash","hooks":[{"type":"command","command":$cmd}]}]
-        else . end
-      ' "$path" > "$tmp" && jq_ok=1
-    else
-      echo '{}' | jq --arg cmd "$cmd" '
-        .hooks.PreToolUse //= [] |
-        if (.hooks.PreToolUse | map(select(.matcher == "Write|Edit|MultiEdit|NotebookEdit")) | length) == 0 then
-          .hooks.PreToolUse += [{"matcher":"Write|Edit|MultiEdit|NotebookEdit","hooks":[{"type":"command","command":$cmd}]}]
-        else . end |
-        if (.hooks.PreToolUse | map(select(.matcher == "Bash")) | length) == 0 then
-          .hooks.PreToolUse += [{"matcher":"Bash","hooks":[{"type":"command","command":$cmd}]}]
-        else . end
-      ' > "$tmp" && jq_ok=1
-    fi
-    if [ "$jq_ok" -eq 1 ]; then
+    if { if [ -f "$path" ]; then cat "$path"; else printf '{}\n'; fi; } |
+      jq --arg cmd "$cmd" --arg session_cmd "$session_cmd" '
+        def add_hook($event; $matcher; $command):
+          .hooks[$event] //= [] |
+          if any(.hooks[$event][]; (.matcher // "") == $matcher
+                and any(.hooks[]?; .type == "command" and .command == $command))
+          then . else
+            .hooks[$event] += [{"matcher":$matcher,"hooks":[{"type":"command","command":$command}]}]
+          end;
+        add_hook("PreToolUse"; "Write|Edit|MultiEdit|NotebookEdit"; $cmd) |
+        add_hook("PreToolUse"; "Bash"; $cmd) |
+        add_hook("SessionStart"; ""; $session_cmd)
+      ' > "$tmp" && [ -s "$tmp" ]; then
       mv "$tmp" "$path"
       echo "已写入 hook: $path (via jq)"
       return 0
@@ -148,7 +137,7 @@ PYEOF
   return 1
 }
 
-if ! merge_settings_json "$SETTINGS" "$HOOK_CMD"; then
+if ! merge_settings_json "$SETTINGS" "$HOOK_CMD" "$SESSION_HOOK_CMD"; then
   echo "接入未完成:无法合并 hook（配置无效、写入失败或缺少 python3/jq）。原设置保留，请让智能体根据上述错误修复后继续。" >&2
   exit 1
 fi

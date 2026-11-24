@@ -79,19 +79,26 @@ def write_report(project_root, run_id, owner_token, kind, name, payload):
             release_blockers.validate(root, state, payload)
         if kind == "progress_feedback":
             import progress_feedback
-            if not isinstance(payload, dict) or set(payload) not in ({"messages"}, {"messages", "milestone"}):
+            import review_control
+            if not isinstance(payload, dict):
                 raise ValueError("progress feedback requires actual supplied messages")
             milestone = payload.get("milestone")
             if "milestone" in payload and milestone not in progress_feedback.MILESTONES:
                 raise ValueError("unknown progress milestone")
-            messages = payload["messages"]
-            payload = progress_feedback.inspect_feedback(messages)
-            if milestone is not None:
-                payload["milestone"] = milestone
-            if milestone in {"start", "solution_returned"}:
-                timestamps = [message["sent_at"] for message in messages if message.get("sent_at") is not None]
-                if timestamps:
-                    payload["sent_at"] = timestamps
+            if milestone == "solution_returned" and (
+                    "host_message" in payload or review_control.supervised_high_risk(state)):
+                payload = progress_feedback.solution_return_report(root, state, payload)
+            else:
+                if set(payload) not in ({"messages"}, {"messages", "milestone"}):
+                    raise ValueError("progress feedback requires actual supplied messages")
+                messages = payload["messages"]
+                payload = progress_feedback.inspect_feedback(messages)
+                if milestone is not None:
+                    payload["milestone"] = milestone
+                if milestone in {"start", "solution_returned"}:
+                    timestamps = [message["sent_at"] for message in messages if message.get("sent_at") is not None]
+                    if timestamps:
+                        payload["sent_at"] = timestamps
         if kind == "planned_release":
             import check_plan
             import planned_release
@@ -116,6 +123,8 @@ def write_report(project_root, run_id, owner_token, kind, name, payload):
             state["artifacts"].append(relative)
         if kind in {"dual_review", "solution_review", "verification_review"}:
             state.setdefault("review_digests", {})[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+        if kind == "progress_feedback" and payload.get("basis") == "verified_local_host_message":
+            state.setdefault("progress_feedback_digests", {})[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
         if kind == "planned_release":
             bindings = state.setdefault("planned_release_bindings", {}).setdefault(payload["plan"]["path"], {})
             bindings[payload["activation"]["id"]] = {

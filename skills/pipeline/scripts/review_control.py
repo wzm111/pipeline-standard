@@ -134,7 +134,8 @@ def validate_development(root, state):
         raise ValueError("current passed solution review is required before implementation")
     if supervised_high_risk(state):
         import progress_feedback
-        progress_feedback.require_transition(root, state, "solution_returned", after=chain[-1][1]["recorded_at"])
+        ref, report, _ = chain[-1]
+        progress_feedback.require_transition(root, state, "solution_returned", review=(ref, report["recorded_at"]))
 
 
 def validate_pre_activation(root, state):

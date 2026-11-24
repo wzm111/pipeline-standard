@@ -1,6 +1,7 @@
 """Managed acceptance behavior with real fixture checks and no external work."""
 import json
 import os
+from datetime import timedelta
 from pathlib import Path
 import subprocess
 import sys
@@ -455,6 +456,10 @@ class ManagedQaTests(unittest.TestCase):
         start("first")
         with self.assertRaisesRegex(ValueError, "progress_feedback for start"):
             D.begin(*self.args, "planner")
+        E.write_report(*self.args, "progress_feedback", "untagged",
+                       {"messages": [{"text": "🔵 **[进行中]** 开始核对任务。"}]})
+        with self.assertRaisesRegex(ValueError, "missing milestone: start"):
+            D.begin(*self.args, "planner")
         for name, message in (("malformed", {"text": "[Pipeline] 开始"}),
                               ("stale", {"text": "🔵 **[进行中]** 开始。", "sent_at": "2000-01-01T00:00:00Z"})):
             E.write_report(*self.args, "progress_feedback", name, {"milestone": "start", "messages": [message]})
@@ -502,20 +507,106 @@ class ManagedQaTests(unittest.TestCase):
         ticket = D.begin(*self.args, "scope_guardian")
         D.accepted(*self.args, ticket["id"], "reviewer", host_executor_id="native-reviewer")
         D.complete(*self.args, ticket["id"], executors_stopped=True, stop_evidence="fixture returned")
-        good_result = {"milestone": "solution_returned",
-                       "messages": [{"text": "✅ **[已完成｜方案评审]** 方案通过，下一步按范围开发。"}]}
-        E.write_report(*self.args, "progress_feedback", "too-early", good_result)
-        E.write_report(*self.args, "solution_review", "solution",
-                       {"gate": "PASS", "requirement_ref": requirement, "plan_ref": plan,
-                        "dispatch_id": ticket["id"]})
+        text = "✅ **[已完成｜方案评审通过]** 下一步按范围开发。"
+        solution = E.write_report(*self.args, "solution_review", "solution",
+                                  {"gate": "PASS", "requirement_ref": requirement, "plan_ref": plan,
+                                   "dispatch_id": ticket["id"]})
+        # A pre-upgrade text-only report recorded after PASS cannot unlock implementation.
+        legacy = {"milestone": "solution_returned", "messages": [{"text": text, "sent_at": R._now()}]}
+        with patch.object(RC, "supervised_high_risk", return_value=False):
+            E.write_report(*self.args, "progress_feedback", "legacy", legacy)
         with self.assertRaisesRegex(ValueError, "progress_feedback for solution_returned"):
             R.update(*self.args, {"stage": "implementation"})
         with self.assertRaisesRegex(ValueError, "progress_feedback for solution_returned"):
             D.begin(*self.args, "developer", workflow_phase="implementation")
-        E.write_report(*self.args, "progress_feedback", "wrong-style", {"milestone": "solution_returned",
-                       "messages": [{"text": "[Pipeline] 方案评审通过。"}]})
         self.assertIn("solution_returned", self.cli(*args, "input", expected=2)["message"])
-        E.write_report(*self.args, "progress_feedback", "actual-solution-return", good_result)
+        with self.assertRaisesRegex(ValueError, "verifiable host_message"):
+            E.write_report(*self.args, "progress_feedback", "caller-time", legacy)
+
+        session = "00000000-0000-4000-8000-000000000001"
+        passed = R._timestamp(E.read_report(self.root, self.args[1], solution)["recorded_at"])
+        with tempfile.TemporaryDirectory() as directory, patch("progress_host.Path.home", return_value=Path(directory).resolve()), \
+                patch.dict(os.environ, {"CODEX_THREAD_ID": session, "PIPELINE_CLAUDE_SESSION_ID": ""}):
+            home = Path(directory).resolve()
+            source = home / ".codex" / "sessions" / f"rollout-fixture-{session}.jsonl"
+            source.parent.mkdir(parents=True)
+            claude = home / ".claude" / "projects" / "fixture" / f"{session}.jsonl"
+            claude.parent.mkdir(parents=True)
+            message_id = "msg_fixture"
+            evidence = {"milestone": "solution_returned", "solution_review_ref": solution,
+                        "host_message": {"message_id": message_id, "transcript": str(source)}}
+
+            def write_codex(stamp, body=text, phase="commentary", cwd=self.root, duplicate=False):
+                meta = {"timestamp": R._now(), "type": "session_meta",
+                        "payload": {"id": session, "cwd": str(self.root)}}
+                turn = {"timestamp": R._now(), "type": "turn_context", "payload": {"cwd": str(cwd)}}
+                msg = {"timestamp": stamp, "type": "response_item",
+                       "payload": {"type": "message", "id": message_id, "role": "assistant", "phase": phase,
+                                   "content": [{"type": "output_text", "text": body}]}}
+                rows = [meta, turn, msg, msg] if duplicate else [meta, turn, msg]
+                source.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+            def register(ref=evidence):
+                return E.write_report(*self.args, "progress_feedback", "actual-solution-return", ref)
+
+            with self.assertRaisesRegex(ValueError, "current passing solution review"):
+                register({**evidence, "solution_review_ref": requirement})
+            with self.assertRaisesRegex(ValueError, "cannot verify a unique visible host message"):
+                register()
+            for stamp in ((passed - timedelta(seconds=1)).isoformat(), passed.isoformat(),
+                          (passed + timedelta(days=1)).isoformat()):
+                write_codex(stamp)
+                with self.assertRaisesRegex(ValueError, "sent after the current solution review PASS"):
+                    register()
+            write_codex("unknown")
+            with self.assertRaisesRegex(ValueError, "send time cannot be verified"):
+                register()
+            for bad_body in ("[Pipeline] missing bold status", "🔵 **[进行中]** 正在核对日志。"):
+                write_codex(R._now(), bad_body)
+                with self.assertRaisesRegex(ValueError, "fixed bold status"):
+                    register()
+            for invalid in ({"phase": "final_answer"}, {"cwd": home}, {"duplicate": True}):
+                write_codex(R._now(), **invalid)
+                with self.assertRaisesRegex(ValueError, "cannot verify a unique visible host message"):
+                    register()
+            write_codex(R._now())
+            ref = register()
+            record = E.read_report(self.root, self.args[1], ref)
+            self.assertEqual(record["payload"]["solution_review_ref"], solution)
+            self.assertEqual(record["payload"]["host_observation"]["message_id"], message_id)
+            self.assertNotIn(text, json.dumps(record, ensure_ascii=False))
+            self.assertNotIn(str(home), json.dumps(record, ensure_ascii=False))
+            with patch.object(Q, "solution_chain", return_value=[(requirement, {"recorded_at": passed.isoformat()}, ticket)]):
+                with self.assertRaisesRegex(ValueError, "current solution review PASS"):
+                    R.update(*self.args, {"stage": "implementation"})
+            report_path = self.root / ref
+            original = report_path.read_bytes()
+            record["payload"]["host_observation"]["record_sha256"] = "changed"
+            report_path.write_text(json.dumps(record))
+            with self.assertRaisesRegex(ValueError, "verified visible host message"):
+                R.update(*self.args, {"stage": "implementation"})
+            report_path.write_bytes(original)
+
+            claude.write_text(json.dumps({"timestamp": R._now(), "type": "assistant", "uuid": "assistant-fixture",
+                "cwd": str(self.root), "isSidechain": False, "sessionId": session,
+                "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}) + "\n")
+            claude_evidence = {**evidence, "host_message": {
+                "message_id": "assistant-fixture", "transcript": str(claude)}}
+            for codex_session, claude_session in ((session, session), ("", ""), ("", "another-session")):
+                with patch.dict(os.environ, {"CODEX_THREAD_ID": codex_session,
+                                             "PIPELINE_CLAUDE_SESSION_ID": claude_session}):
+                    with self.assertRaisesRegex(ValueError, "cannot verify a unique visible host message"):
+                        E.write_report(*self.args, "progress_feedback", "cross-session", claude_evidence)
+            env_file = home / "claude-session.env"
+            session_hook = SCRIPTS.parents[2] / "hooks/pipeline-progress-session.sh"
+            subprocess.run(["bash", str(session_hook)], input=json.dumps({
+                "hook_event_name": "SessionStart", "session_id": session}), text=True, check=True,
+                env={**os.environ, "CLAUDE_ENV_FILE": str(env_file)})
+            self.assertEqual(env_file.read_text(), f"export PIPELINE_CLAUDE_SESSION_ID={session}\n")
+            with patch.dict(os.environ, {"CODEX_THREAD_ID": "", "PIPELINE_CLAUDE_SESSION_ID": session}):
+                ref = E.write_report(*self.args, "progress_feedback", "claude-solution-return", claude_evidence)
+            self.assertEqual(E.read_report(self.root, self.args[1], ref)["payload"]["host_observation"]["runtime"],
+                             "claude")
         self.assertIn("enter implementation", self.cli(*args, "input", expected=2)["message"])
         (self.root / "input").write_text("direct edit before entry")
         with self.assertRaisesRegex(ValueError, "changed before"):

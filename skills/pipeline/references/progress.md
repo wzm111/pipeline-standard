@@ -64,15 +64,30 @@ JSON
 
 时长取当前task或本步骤真实起点，不从多日旧run创建时间倒推；旧阶段/纯排队未知则保持未知。并行时段不相加，测试数量不当耗时，不编造完成百分比、ETA或token。阶段和activity实际改变时仍走原update/观察接口；本页不放宽QA、复用、发布或人工闸口，也不要求正在运行的旧上下文中断重做。
 
-登记实际可见进度时，可在 `progress_feedback` 报告的 `messages` 旁提供 `milestone`，使用 `start`（开工）、`solution_returned`（方案返回）、`verification_started`（进入验证）或 `blocked`（已登记阻塞）。`progress` 按当前记录推导已到达的里程碑，分别列出缺证据、格式待修正、已通过以及未标记样本数。只在真实消息对应该里程碑时填写。无标签样本仍可检查格式，无法覆盖具体里程碑。
+登记实际可见进度时，在 `progress_feedback` 报告的 `messages` 旁提供 `milestone`，使用 `start`（开工）、`verification_started`（进入验证）或 `blocked`（已登记阻塞）。高风险方案返回使用下方宿主消息入口。`progress` 汇总当前登记的里程碑和格式样本；实施门禁另行核验当前评审和绑定证据。无标签样本仍可检查格式，无法覆盖具体里程碑。
 
 ## 从任务启动开始监督
 
 `start`（含 `--compact`）和 `task-start` 自动返回当前任务的 `supervision`。主调度员发送首条可见进度后，将实际消息按 `start` 里程碑登记。派发前核对分工及风险路线，实际调用宿主后依次记录请求、接受和结果。角色实际型号和强度只填写宿主已反馈的值。
 
-新 CLI 运行及新任务首次正式派发前，主调度员先发送合规开工反馈，再用 `report --kind progress_feedback` 登记实际文本与 `milestone: start`。角色请求由 `role_dispatch.begin` 检查登记。草稿须先发送，旧任务的开工记录不能复用。已正式派发的任务继续当前工作。
+新 CLI 运行及新任务首次正式派发前，主调度员先发送合规开工反馈，再用 `report --kind progress_feedback` 登记实际文本与 `milestone: start`。角色请求由 `role_dispatch.begin` 检查登记。若提示 `missing milestone: start`，用新报告名为已发送的合规开工消息补登记该字段。草稿须先发送，旧任务的开工记录不能复用。已正式派发的任务继续当前工作。
 
-新 CLI 高风险任务取得本轮方案评审 PASS 后，主调度员发送评审结果和下一步，登记实际文本与 `milestone: solution_returned`。进入实施、派发开发及写入预检沿用实施门禁，均需要当前通过方案之后的有效反馈。若提交了可靠的 `sent_at`，发送时间也必须落在方案报告之后、反馈登记之前。消息正文仍由调用者取自聊天，脚本检查登记的格式和时间。
+新 CLI 高风险任务先登记本轮方案评审 PASS，再由主调度员发送评审结果和下一步，标题使用 `✅ **[已完成｜方案评审通过]**`。用 `report --kind progress_feedback` 登记该消息：
+
+```json
+{
+  "milestone": "solution_returned",
+  "solution_review_ref": "<当前 PASS 报告的项目相对路径>",
+  "host_message": {
+    "transcript": "<当前宿主会话的 JSONL 绝对路径>",
+    "message_id": "<已发送消息的宿主 ID>"
+  }
+}
+```
+
+Codex 使用当前 `CODEX_THREAD_ID` 对应的 `~/.codex/sessions` rollout 文件和可见助手 `commentary` 的 ID。Claude Code 使用 `~/.claude/projects` 中当前主会话的 JSONL 和助手记录的 `uuid`。完整安装会链接会话脚本，`init-project.sh --claude` 会在项目设置中合并 [SessionStart](https://code.claude.com/docs/en/hooks#sessionstart) hook。更新已有接入后，由宿主在新开或恢复会话时运行该 hook，取得宿主会话身份。
+
+只定位刚发送的消息，避免输出对话文件内容。入口核对会话、worktree、消息格式，以及发送时间严格晚于当前 PASS；只落盘评审引用、消息标识、时间和摘要指纹。实施、开发派发和写入预检都要求本次评审的已验证证据。消息未落盘时待宿主记录可见再登记；无法核实时停在实施前。方案修订并通过后需要新的通知，已有纯文本登记保留为历史格式样本。
 
 进入正式 `verification` 前，先发送实际进度，再用 `report --kind progress_feedback` 登记格式有效的 `verification_started`。手动改变阶段和绑定验证阶段的派发都检查这一证据。进入人工等待前，用同样方式登记 `blocked`，随后使用 `wait` 写入用户动作与恢复后的验证条件。每次重新进入这两个阶段需要新的记录。
 
