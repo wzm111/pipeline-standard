@@ -10,6 +10,7 @@ ICONS = {'进行中': '🔵', '已完成': '✅', '修复中': '🟠', '等待�
 LABEL = re.compile(r'^\s*(🔵|✅|🟠|⏳|🔴|🔎)\s*\*\*\[(进行中|已完成|修复中|等待中|需你处理|待核实)(?:[｜|][^\]\n]{1,40})?\]\*\*')
 MAX_BYTES = 262144
 MILESTONES = ("start", "solution_returned", "verification_started", "blocked")
+_SOLUTION_LABEL = re.compile(r"^\s*✅\s*\*\*\[已完成[｜|]方案评审通过\]\*\*")
 
 
 def entered_verification(state):
@@ -22,7 +23,7 @@ def entered_verification(state):
         for event in state["history"])
 
 
-def require_transition(root, state, milestone, *, after=None):
+def require_transition(root, state, milestone, *, review=None):
     """Require a newly registered valid message before a managed transition."""
     boundary = state.get("supervision_from")
     if boundary is None:
@@ -30,8 +31,9 @@ def require_transition(root, state, milestone, *, after=None):
     import run_evidence as E
     import run_state as R
 
-    if after is not None:
-        boundary = max(boundary, after, key=R._timestamp)
+    if review is not None:
+        review_ref, passed_at = review
+        boundary = max(boundary, passed_at, key=R._timestamp)
     # Use a fresh message for each entry, including a second wait in one task.
     for event in reversed(state["history"]):
         if ((milestone == "blocked" and event.get("activity") == "human_wait")
@@ -49,15 +51,58 @@ def require_transition(root, state, milestone, *, after=None):
                 and "milestone" not in payload and payload.get("format_valid") is True):
             untagged_start_candidate = True
         if payload.get("milestone") == milestone and registered > R._timestamp(boundary):
+            if review is not None:
+                observed = payload.get("host_observation") or {}
+                from check_plan import _digest
+                digest = state.get("progress_feedback_digests", {}).get(ref)
+                if (payload.get("format_valid") is True and payload.get("solution_review_ref") == review_ref
+                        and digest and _digest(root, ref) == digest
+                        and observed.get("record_sha256")
+                        and R._timestamp(boundary) < R._timestamp(observed.get("sent_at")) <= registered):
+                    return
+                break
             timestamps = payload.get("sent_at", [])
             if payload.get("format_valid") is True and all(
                     R._timestamp(boundary) <= R._timestamp(stamp) <= registered for stamp in timestamps):
                 return
             break
+    if review is not None:
+        raise ValueError("progress_feedback for solution_returned requires a verified visible host "
+                         "message sent after the current solution review PASS")
     if untagged_start_candidate:
         raise ValueError('progress_feedback for start is missing milestone: start; '
                          'register the actual kickoff message with "milestone": "start"')
     raise ValueError(f"register valid current progress_feedback for {milestone} before transitioning")
+
+
+def solution_return_report(root, state, payload):
+    """Bind one actual host message to the current passing solution review."""
+    import managed_qa as Q
+    import progress_host
+    import run_state as R
+
+    if set(payload) != {"milestone", "solution_review_ref", "host_message"}:
+        raise ValueError("solution_returned requires solution_review_ref and a verifiable host_message")
+    chain = Q.solution_chain(root, state)
+    if not chain or chain[-1][0] != payload["solution_review_ref"]:
+        raise ValueError("solution_returned must reference the current passing solution review")
+    ref, review, _ = chain[-1]
+    text, observation = progress_host.read_message(root, payload["host_message"])
+    try:
+        sent = R._timestamp(observation["sent_at"])
+    except (TypeError, ValueError):
+        raise ValueError("solution_returned host send time cannot be verified") from None
+    boundary = max(filter(None, (state.get("supervision_from"), review["recorded_at"])), key=R._timestamp)
+    if not R._timestamp(boundary) < sent <= R._timestamp(R._now()):
+        raise ValueError("solution_returned host message must be sent after the current solution review PASS "
+                         "and before feedback registration")
+    result = inspect_feedback([{"text": text, "sent_at": observation["sent_at"]}])
+    if result["format_valid"] is not True or not _SOLUTION_LABEL.match(text):
+        raise ValueError("solution_returned host message requires the fixed bold status label "
+                         "✅ **[已完成｜方案评审通过]** and feedback body")
+    return {**result, "basis": "verified_local_host_message", "milestone": "solution_returned",
+            "solution_review_ref": ref, "host_observation": observation,
+            "notice": "Host message and send time verified locally. No message text stored or sent."}
 
 
 def milestone_audit(required, reports):

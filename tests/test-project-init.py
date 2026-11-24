@@ -20,7 +20,8 @@ class InitTests(unittest.TestCase):
         (self.root / ".claude").mkdir()
         path = self.root / ".claude/settings.json"
         existing = {"permissions": {"deny": ["Bash(rm *)"]}, "hooks": {"PreToolUse": [
-            {"matcher": "Bash", "hooks": [{"type": "command", "command": "existing-command"}]}]}}
+            {"matcher": "Bash", "hooks": [{"type": "command", "command": "existing-command"}]}],
+            "SessionStart": [{"hooks": [{"type": "command", "command": "existing-session-command"}]}]}}
         path.write_text(json.dumps(existing))
         (self.root / "PIPELINE.md").write_text("user contract")
         result = self.run_init()
@@ -29,6 +30,10 @@ class InitTests(unittest.TestCase):
         self.assertEqual(data["permissions"], existing["permissions"])
         self.assertEqual(data["hooks"]["PreToolUse"][0], existing["hooks"]["PreToolUse"][0])
         self.assertEqual(len(data["hooks"]["PreToolUse"]), 3)
+        session_hooks = data["hooks"]["SessionStart"]
+        self.assertEqual(session_hooks[0], existing["hooks"]["SessionStart"][0])
+        self.assertEqual(session_hooks[1]["hooks"][0]["command"], "bash ~/.claude/hooks/pipeline-progress-session.sh")
+        self.assertEqual(len(session_hooks), 2)
         before = path.read_bytes()
         self.assertEqual(self.run_init().returncode, 0)
         self.assertEqual(path.read_bytes(), before)
