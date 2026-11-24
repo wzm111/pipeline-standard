@@ -70,7 +70,7 @@ JSON
 
 `start`（含 `--compact`）和 `task-start` 自动返回当前任务的 `supervision`。主调度员发送首条可见进度后，将实际消息按 `start` 里程碑登记。派发前核对分工及风险路线，实际调用宿主后依次记录请求、接受和结果。角色实际型号和强度只填写宿主已反馈的值。
 
-新 CLI 运行及新任务首次正式派发前，主调度员先发送合规开工反馈，再用 `report --kind progress_feedback` 登记实际文本与 `milestone: start`。角色请求由 `role_dispatch.begin` 检查登记。草稿须先发送，旧任务的开工记录不能复用。已正式派发的任务继续当前工作。
+新 CLI 运行及新任务首次正式派发前，主调度员先发送合规开工反馈，再用 `report --kind progress_feedback` 登记实际文本与 `milestone: start`。角色请求由 `role_dispatch.begin` 检查登记。若提示 `missing milestone: start`，用新报告名为已发送的合规开工消息补登记该字段。草稿须先发送，旧任务的开工记录不能复用。已正式派发的任务继续当前工作。
 
 新 CLI 高风险任务取得本轮方案评审 PASS 后，主调度员发送评审结果和下一步，登记实际文本与 `milestone: solution_returned`。进入实施、派发开发及写入预检沿用实施门禁，均需要当前通过方案之后的有效反馈。若提交了可靠的 `sent_at`，发送时间也必须落在方案报告之后、反馈登记之前。消息正文仍由调用者取自聊天，脚本检查登记的格式和时间。
 

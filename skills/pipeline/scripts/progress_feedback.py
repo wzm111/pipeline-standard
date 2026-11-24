@@ -38,18 +38,25 @@ def require_transition(root, state, milestone, *, after=None):
                 or (milestone == "verification_started" and event.get("stage") == "verification")):
             boundary = max(boundary, event["at"], key=R._timestamp)
             break
+    untagged_start_candidate = False
     for ref in reversed(state["artifacts"]):
         if "/artifacts/progress_feedback/" not in ref:
             continue
         report = E.read_report(root, state["run_id"], ref, kind="progress_feedback")
         payload = report["payload"]
         registered = R._timestamp(report["recorded_at"])
+        if (milestone == "start" and registered > R._timestamp(boundary)
+                and "milestone" not in payload and payload.get("format_valid") is True):
+            untagged_start_candidate = True
         if payload.get("milestone") == milestone and registered > R._timestamp(boundary):
             timestamps = payload.get("sent_at", [])
             if payload.get("format_valid") is True and all(
                     R._timestamp(boundary) <= R._timestamp(stamp) <= registered for stamp in timestamps):
                 return
             break
+    if untagged_start_candidate:
+        raise ValueError('progress_feedback for start is missing milestone: start; '
+                         'register the actual kickoff message with "milestone": "start"')
     raise ValueError(f"register valid current progress_feedback for {milestone} before transitioning")
 
 

@@ -455,6 +455,10 @@ class ManagedQaTests(unittest.TestCase):
         start("first")
         with self.assertRaisesRegex(ValueError, "progress_feedback for start"):
             D.begin(*self.args, "planner")
+        E.write_report(*self.args, "progress_feedback", "untagged",
+                       {"messages": [{"text": "🔵 **[进行中]** 开始核对任务。"}]})
+        with self.assertRaisesRegex(ValueError, "missing milestone: start"):
+            D.begin(*self.args, "planner")
         for name, message in (("malformed", {"text": "[Pipeline] 开始"}),
                               ("stale", {"text": "🔵 **[进行中]** 开始。", "sent_at": "2000-01-01T00:00:00Z"})):
             E.write_report(*self.args, "progress_feedback", name, {"milestone": "start", "messages": [message]})
