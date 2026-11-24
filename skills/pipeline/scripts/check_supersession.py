@@ -42,7 +42,8 @@ def _observation(root, state, ref, snapshot):
 def _judgment(root, state, reports, plan_ref, snapshot, registering):
     ref, report = reports[-1]
     judgment = report["payload"]
-    chain = Q.solution_chain(root, state)
+    planners = []
+    chain = Q.solution_chain(root, state, guardians=planners)
     if ("run_policy" not in state or judgment.get("gate") != "PASS" or not chain
             or Q._plans(root, state)[-1] != plan_ref or chain[-1][1]["payload"]["plan_ref"] != plan_ref
             or judgment.get("solution_ref") != chain[-1][0]):
@@ -60,7 +61,6 @@ def _judgment(root, state, reports, plan_ref, snapshot, registering):
                     for path in result["checks"]), *(prior["recorded_at"] for _, prior in reports[:-1])],
                    key=R._timestamp)
     tester = Q._review_executor(state, reports, "tester", earliest)
-    planners = [item for _, _, item in chain]
     identities = set().union(*(Q._executor_ids(item) for item in planners), Q._developers(state))
     if (not tester or not tester.get("host_executor_id") or Q._executor_ids(tester) & identities
             or any(not planner.get("host_executor_id") for planner in planners)

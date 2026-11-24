@@ -315,8 +315,55 @@ def _developers(state):
             for identity in _executor_ids(item)}
 
 
-def solution_chain(root, state):
-    """Resolve the current leaf back to its timely, independent same-task root."""
+def _retry_parent(root, state, reports, index, requirement, plan_time, developers, used_dispatches):
+    """Cross only contiguous early guardian attempts for the identical amendment."""
+    first = index
+    payload = reports[index][1]["payload"]
+    while "retries" in reports[first][1]["payload"]:
+        if first == 0 or reports[first][1]["payload"]["retries"] != reports[first - 1][0]:
+            return None
+        first -= 1
+        if not isinstance(reports[first][1]["payload"], dict):
+            return None
+    if first == 0 or payload.get("amends") != reports[first - 1][0]:
+        return None
+    earliest = max(requirement["recorded_at"], reports[first - 1][1]["recorded_at"], key=R._timestamp)
+    candidate_at = R._timestamp(plan_time)
+    digests = state.get("review_digests", {})
+    early_guardians = []
+    for position in range(first, index + 1):
+        ref, attempt = reports[position]
+        review = attempt["payload"]
+        if not digests.get(ref) or any(review.get(key) != payload.get(key)
+                                       for key in ("plan_ref", "requirement_ref", "amends")):
+            return None
+        planner = _review_executor(state, reports[:position + 1], "scope_guardian", earliest)
+        if (not planner or not planner.get("host_executor_id") or _executor_ids(planner) & developers
+                or planner["id"] in used_dispatches or any(
+                    other_ref != ref and isinstance(other["payload"], dict)
+                    and other["payload"].get("dispatch_id") == planner["id"] for other_ref, other in reports)):
+            return None
+        requested, accepted, completed = (R._timestamp(planner[key])
+                                          for key in ("requested_at", "accepted_at", "completed_at"))
+        task_start = boundary(state)
+        if requested > accepted or (task_start and requested < R._timestamp(task_start)):
+            return None
+        threshold = max(candidate_at, R._timestamp(reports[position - 1][1]["recorded_at"]))
+        timely = accepted >= threshold if position == first else accepted > threshold
+        if completed < threshold or timely != (position == index):
+            return None
+        if position < index:
+            used_dispatches.add(planner["id"])
+            early_guardians.append(planner)
+    if review_control.supervised_high_risk(state):
+        import process_compliance
+        if process_compliance.dispatch_issues(root, state, {"scope_guardian": early_guardians}):
+            return None
+    return first - 1
+
+
+def solution_chain(root, state, *, guardians=None):
+    """Return accepted ancestry; optionally collect every participant for tester independence."""
     import check_plan as P
     requirements = _review_reports(root, state, "dual_review")
     reports = _review_reports(root, state, "solution_review")
@@ -332,7 +379,9 @@ def solution_chain(root, state):
     snapshot = {"digests": {}, "reports": {}}
     chain, used_dispatches, used_plans = [], set(), set()
     child_plan = None
-    for index in range(len(reports) - 1, -1, -1):
+    index = len(reports) - 1
+    retried = False
+    while index >= 0:
         ref, report = reports[index]
         payload = report["payload"]
         if not isinstance(payload, dict) or payload.get("requirement_ref") != requirement_ref:
@@ -343,10 +392,17 @@ def solution_chain(root, state):
         plan = P._read_plan(root, state["run_id"], state["owner_token"], plan_ref, state, snapshot)
         plan_time = _read(root, state, plan_ref, "check_plan")["recorded_at"]
         earliest = requirement["recorded_at"]
-        if "amends" in payload:
-            if index == 0 or payload["amends"] != reports[index - 1][0]:
+        parent_index = index - 1
+        if "retries" in payload:
+            retried = True
+            parent_index = _retry_parent(root, state, reports, index, requirement, plan_time,
+                                         developers, used_dispatches)
+            if parent_index is None:
                 return []
-            earliest = max(earliest, plan_time, reports[index - 1][1]["recorded_at"], key=R._timestamp)
+        if "amends" in payload:
+            if parent_index < 0 or payload["amends"] != reports[parent_index][0]:
+                return []
+            earliest = max(earliest, plan_time, reports[parent_index][1]["recorded_at"], key=R._timestamp)
         elif (times and not review_control.decision(state).get("retrospective")
               and R._timestamp(report["recorded_at"]) > min(times)):
             return []
@@ -364,8 +420,14 @@ def solution_chain(root, state):
         used_plans.add(plan_ref)
         used_dispatches.add(planner["id"])
         if "amends" not in payload:
+            if retried and not all(state.get("review_digests", {}).get(path)
+                                   for path in [requirement_ref, *(ref for ref, _, _ in chain)]):
+                return []
+            if guardians is not None:
+                guardians.extend(item for item in state.get("role_dispatches", []) if item["id"] in used_dispatches)
             return list(reversed(chain))
         child_plan = plan
+        index = parent_index
     return []
 
 
@@ -387,7 +449,8 @@ def _apply_expert_reviews(root, state, result):
         result["feedback_ref"] = feedback[-1][0]
     failure = "missing_solution_review"
     requirement_ref = requirements[-1][0]
-    solutions = solution_chain(root, state)
+    guardians = []
+    solutions = solution_chain(root, state, guardians=guardians)
     verifications = _review_reports(root, state, "verification_review")
     if solutions:
         solution_ref, solution, _ = solutions[-1]
@@ -398,7 +461,7 @@ def _apply_expert_reviews(root, state, result):
                 verification_ref, verification = verifications[-1]
                 checks = result["checks"]
                 tester = _review_executor(state, verifications, "tester", solution["recorded_at"])
-                reviewers = set().union(*(_executor_ids(planner) for _, _, planner in solutions))
+                reviewers = set().union(*(_executor_ids(planner) for planner in guardians))
                 if (tester and not _executor_ids(tester) & (reviewers | _developers(state))
                         and verification["payload"].get("solution_ref") == solution_ref
                         and verification["payload"].get("checks") == checks

@@ -136,6 +136,149 @@ class VerifyCliTests(unittest.TestCase):
         D.complete(*args, dispatch, executors_stopped=True, stop_evidence="fixture review returned")
         return dispatch
 
+    def amendment_retry_fixture(self, *, early=True, narrower=False):
+        args = self.root, self.run, self.owner
+        E.write_report(*args, "progress_feedback", "opening", {"milestone": "start",
+                       "messages": [{"text": "🔵 **[进行中]** 核对变更后的夹具计划。"}]})
+        requirement = E.write_report(*args, "dual_review", "required", {})
+        parent = E.write_report(*args, "solution_review", "original", {
+            "gate": "PASS", "plan_ref": self.plan, "requirement_ref": requirement,
+            "dispatch_id": self.review_dispatch("scope_guardian", "original")})
+        def start_guardian():
+            dispatch = D.begin(*args, "scope_guardian")["id"]
+            D.accepted(*args, dispatch, "first-amendment", host_executor_id="host-first-amendment")
+            return dispatch
+        old_dispatch = start_guardian() if early else None
+        spec = self.check | {"coverage": ["other"]} if narrower else self.check
+        leaf = P.save_plan(*args, "candidate", {"unit": spec})
+        old_dispatch = old_dispatch or start_guardian()
+        D.complete(*args, old_dispatch, executors_stopped=True, stop_evidence="fixture returned")
+        amendment = {"gate": "PASS", "plan_ref": leaf, "requirement_ref": requirement,
+                     "amends": parent, "dispatch_id": old_dispatch}
+        old = E.write_report(*args, "solution_review", "first-amendment", amendment)
+        retry = amendment | {"retries": old, "dispatch_id": self.review_dispatch("scope_guardian", "new-review")}
+        return parent, old, retry
+
+    def retry_solution(self, name, payload):
+        result = self.cli("report", "--receipt", self.receipt, "--kind", "solution_review",
+                          "--name", name, "--json", json.dumps(payload))
+        return result["report"]
+
+    def solution_refs(self):
+        import managed_qa
+        return [ref for ref, _, _ in managed_qa.solution_chain(self.root, R.status(self.root)["state"])]
+
+    def test_same_candidate_fresh_amendment_retry_and_new_verification(self):
+        parent, old, retry = self.amendment_retry_fixture()
+        previous_bytes = (self.root / old).read_bytes()
+        self.assertEqual(self.solution_refs(), [])
+        leaf = self.retry_solution("retry", retry)
+        self.assertEqual(self.solution_refs(), [parent, leaf])
+        self.assertEqual((self.root / old).read_bytes(), previous_bytes)
+        self.plan = retry["plan_ref"]
+        proof = self.cli("run", "--receipt", self.receipt, "--plan", self.plan, "--id", "unit",
+                         "--name", "actual")["report"]
+        judgment = {"gate": "PASS", "solution_ref": old, "checks": [proof],
+                    "dispatch_id": self.review_dispatch("tester", "wrong-leaf")}
+        self.verification_report("stale", judgment)
+        self.cli("qa", "--receipt", self.receipt, "--plan", self.plan, "--name", "stale", expected=1)
+        self.verification_report("current", judgment | {"solution_ref": leaf,
+                                  "dispatch_id": self.review_dispatch("tester", "current")})
+        self.assertEqual(self.cli("qa", "--receipt", self.receipt, "--plan", self.plan,
+                                  "--name", "accepted")["gate"], "PASS")
+
+    def test_retry_cannot_replace_a_valid_amendment_or_reduce_coverage(self):
+        parent, old, retry = self.amendment_retry_fixture(early=False)
+        self.assertEqual(self.solution_refs(), [parent, old])
+        self.retry_solution("retry-valid", retry)
+        self.assertEqual(self.solution_refs(), [])
+
+    def test_late_tester_cannot_be_the_early_guardian_for_qa_or_supersession(self):
+        _, _, retry = self.amendment_retry_fixture()
+        leaf = self.retry_solution("new-leaf", retry)
+        self.plan = retry["plan_ref"]
+        old = self.cli("check", "--receipt", self.receipt, "--name", "wrong-fixture-command",
+                       "--scope", "input", "--coverage", "unit", "--", sys.executable, "-B", "-c",
+                       "raise SystemExit(2)", expected=1)["report"]
+        new = self.cli("run", "--receipt", self.receipt, "--plan", self.plan, "--id", "unit",
+                       "--name", "fixed-fixture")["report"]
+        shared = "host-first-amendment"
+        judgment = {"gate": "PASS", "solution_ref": leaf, "checks": [new],
+                    "dispatch_id": self.review_dispatch("tester", "same-host", shared)}
+        self.verification_report("not-independent", judgment)
+        qa = self.cli("qa", "--receipt", self.receipt, "--plan", self.plan, "--name", "declined", expected=1)
+        self.assertIn("dual_review", qa["check_failures"])
+        judgment["supersessions"] = [{"obsolete_ref": old, "replacement_ref": new,
+                                      "reason": "The fixture runner checks the same input with the correct configuration."}]
+        judgment["dispatch_id"] = self.review_dispatch("tester", "new-alias", shared)
+        self.verification_report("same-host-disposition", judgment, expected=2)
+        judgment["dispatch_id"] = self.review_dispatch("tester", "independent-host")
+        self.verification_report("independent-disposition", judgment)
+        self.assertEqual(self.cli("qa", "--receipt", self.receipt, "--plan", self.plan,
+                                  "--name", "approved")["gate"], "PASS")
+
+    def test_early_guardian_with_unconfirmed_high_risk_route_is_ineligible(self):
+        import managed_qa
+        import process_compliance
+        _, old, retry = self.amendment_retry_fixture()
+        self.retry_solution("retry", retry)
+        state = R.status(self.root)["state"]
+        state["run_review_decision"]["risk"] = "high"
+        dispatch = E.read_report(self.root, self.run, old)["payload"]["dispatch_id"]
+        with mock.patch.object(process_compliance, "dispatch_issues", wraps=process_compliance.dispatch_issues) as routes:
+            self.assertEqual(managed_qa.solution_chain(self.root, state), [])
+            checked = routes.call_args.args[2]["scope_guardian"]
+            self.assertEqual([item["id"] for item in checked], [dispatch])
+            self.assertEqual(process_compliance.dispatch_issues(self.root, state, {"scope_guardian": checked}),
+                             {"scope_guardian": "missing_routing_runtime"})
+
+    def test_retry_cannot_drop_parent_check_coverage(self):
+        _, _, retry = self.amendment_retry_fixture(narrower=True)
+        self.retry_solution("loss", retry)
+        self.assertEqual(self.solution_refs(), [])
+
+    def test_retry_rejects_skips_mutations_and_untrusted_reviewers(self):
+        parent, old, retry = self.amendment_retry_fixture()
+        args = self.root, self.run, self.owner
+        alternative = P.save_plan(*args, "other-candidate", {"unit": self.check})
+        state_file = self.root / "tmp/pipeline/runs" / (self.run + ".json")
+        original = state_file.read_bytes()
+        previous = E.read_report(self.root, self.run, old)["payload"]
+        for index, mutation in enumerate((
+                {"amends": old}, {"retries": parent}, {"plan_ref": alternative},
+                {"retries": old.replace(self.run, "0" * 32)}, {"dispatch_id": previous["dispatch_id"]},
+                {"requirement_ref": parent}, {"gate": "CONCERNS"}, {"gate": "FAIL"})):
+            with self.subTest(mutation=mutation):
+                self.retry_solution("bad-" + str(index), retry | mutation)
+                self.assertEqual(self.solution_refs(), [])
+                state_file.write_bytes(original)
+        for gate in ("FAIL", "CONCERNS"):
+            middle = self.retry_solution("middle-" + gate.lower(), previous | {"gate": gate})
+            for index, skipped in enumerate((old, middle)):
+                after = retry | {"retries": skipped, "dispatch_id":
+                                 self.review_dispatch("scope_guardian", gate.lower() + str(index))}
+                self.retry_solution("after-" + gate.lower() + str(index), after)
+                self.assertEqual(self.solution_refs(), [])
+            state_file.write_bytes(original)
+        leaf = self.retry_solution("retry", retry)
+        good_state = json.loads(state_file.read_bytes())
+        for ref in (parent, old, leaf, retry["requirement_ref"]):
+            state = json.loads(json.dumps(good_state))
+            del state["review_digests"][ref]
+            R._atomic(state_file, state)
+            self.assertEqual(self.solution_refs(), [])
+        for index, dispatch_id in enumerate((previous["dispatch_id"], retry["dispatch_id"])):
+            state = json.loads(json.dumps(good_state))
+            target = next(d for d in state["role_dispatches"] if d["id"] == dispatch_id)
+            state["role_dispatches"].append(dict(target, id="fixture-dev", role="developer", executor_id="dev"))
+            R._atomic(state_file, state)
+            self.assertEqual(self.solution_refs(), [])
+        R._atomic(state_file, good_state)
+        original_review = (self.root / old).read_bytes()
+        (self.root / old).write_bytes(original_review + b" ")
+        with self.assertRaisesRegex(ValueError, "changed"):
+            self.solution_refs()
+
     def supersession_fixture(self, *, argv=None, scope="input", coverage="unit", intent="test"):
         def report(kind, name, payload):
             return E.write_report(self.root, self.run, self.owner, kind, name, payload)
