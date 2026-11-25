@@ -431,9 +431,10 @@ class ReleaseChecksTests(unittest.TestCase):
         ready = next_action("activate")
         self.assertTrue(ready["candidate_id"])
         self.assertEqual((self.root / "build-count").read_text(), "1")
-        self.activate()
+        self.execute("activate", "activate", expected_candidate_id=ready["candidate_id"])
         self.assertEqual(next_action("smoke")["missing_after"], ["release_identity", "release_smoke"])
-        self.smoke()
+        self.execute("smoke", "smoke", coverage=["release_identity"], expected_candidate_id=ready["candidate_id"])
+        self.assertEqual((self.root / "build-count").read_text(), "1")
         next_action("closeout")
         sealed = F.closeout(*self.args)
         next_action("finish")
@@ -449,6 +450,36 @@ class ReleaseChecksTests(unittest.TestCase):
         replacement = next_action("inspect_activated_release")
         self.assertNotEqual(replacement["candidate_id"], previous)
         self.assertFalse(replacement["activated"])
+
+    def test_fast_release_rejects_a_replacement_before_launch(self):
+        self.prechecks()
+        self.build()
+        candidate = F.public_status(*self.args)["candidate_id"]
+        self.execute("different-build", "build",
+                     [sys.executable, "-c", "from pathlib import Path; Path('artifact').write_text('other')"],
+                     artifact_paths=["artifact"])
+        before = self.plan()["attempts"]
+        with self.assertRaisesRegex(F.CandidateUnavailable, "accepted release candidate"):
+            self.execute("activate", "activate", expected_candidate_id=candidate)
+        self.assertEqual(self.plan()["attempts"], before)
+
+    def test_fast_release_readback_blocks_a_concurrent_build(self):
+        self.prechecks()
+        self.build()
+        candidate = F.public_status(*self.args)["candidate_id"]
+        self.execute("activate", "activate", expected_candidate_id=candidate)
+        execute_check = C.execute_check
+
+        def readback(*args, **kwargs):
+            with self.assertRaisesRegex(ValueError, "candidate readback already running"):
+                self.build("overlap")
+            return execute_check(*args, **kwargs)
+
+        with patch.object(C, "execute_check", side_effect=readback):
+            result = self.execute("readback", "smoke", expected_candidate_id=candidate,
+                                  coverage=["release_identity"])
+        self.assertTrue(result["release_accepted"])
+        self.assertFalse(any(a["name"] == "overlap" for a in self.plan()["attempts"]))
 
     def test_live_preflight_and_smoke_are_not_cached_from_old_observations(self):
         self.prechecks()
