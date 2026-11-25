@@ -12,6 +12,12 @@
 
 门禁失败时，本次发布停在阻塞状态：简报失败项、线上是否变更及可用回退状态，不自动“修复后再发布”，不换名无限重跑，也不改测试放行。需要业务代码或额外范围修复时，取得针对该问题的授权后单独处理；已明确授权的修复不重复确认。断连等同一候选的恢复仍按下方有界规则，不能借恢复扩展功能。超过该环境已知正常时长或约定窗口时，先报告当前阶段与异常，不自行扩大排查、修改或重试。
 
+## 已验收候选直接发布
+
+收到仅发布指令时，先找到已有验收引用、冻结候选和实际发布入口。三者一致时，沿用原工程验收与专家结论，只补发布环境必需的现场检查，再使用同一候选切换并回读。发布前出现新的适配开发、权限缺失或生产冲突时，明确当前阻塞及已完成项；已有授权覆盖的范围按增量验证，超出范围按原授权边界处理。
+
+分阶段发布一次读取 `release_checks status` 的 `next_action` 和缺项。已有有效候选且预检齐全时进入 `activate`，已切换时只补线上回读或封存。项目声明需要上线前新鲜现场证据时照常执行，真正的切换入口仍核验候选、权限、待处理阻断和复核证据。单体发布沿用项目原入口，已执行的证据走计划 `qa` 收口。
+
 ## 开发前核对发布可行性
 
 本轮同时负责高风险开发与生产上线时，主调度员在首次开发派发前沿现有发布入口做一次短检查，在现有方案记录结果、证据与缺项：
@@ -116,7 +122,7 @@ python3 <release_runner> status --project <root> --receipt <receipt>
 python3 <release_runner> closeout --project <root> --receipt <receipt> --json '{}'
 ```
 
-`release_runner`为本skill实际`scripts/release_checks.py`。execute每次只安排声明的一个phase，依次沿用原preflight/compatibility/build/activate/smoke门禁；build另传`artifact_paths`，smoke声明实际验证的release_identity。允许的执行字段为name、phase、argv、scope、artifact_paths、timeout、cwd、environment、coverage、write_paths、protected_paths；prepare仅接受required_before/required_after，closeout仅接受external_pending。未知字段/旗标拒绝；不自动激活、重试或轮询。退出码0表示本次调用成功，1表示实际命令未被接受，2表示请求或门禁拒绝；命令真实结果与失败详情保留在原检查证据中。status只读返回当前有效候选ID、激活状态、前置缺项、恢复阻塞及尝试状态，不输出receipt内容、命令或环境。它不是线上观察或最终验收结论。
+`release_runner`为本skill实际`scripts/release_checks.py`。execute每次只安排声明的一个phase，依次沿用原preflight/compatibility/build/activate/smoke门禁；build另传`artifact_paths`，smoke声明实际验证的release_identity。允许的执行字段为name、phase、argv、scope、artifact_paths、timeout、cwd、environment、coverage、write_paths、protected_paths；prepare仅接受required_before/required_after，closeout仅接受external_pending。未知字段/旗标拒绝；不自动激活、重试或轮询。退出码0表示本次调用成功，1表示实际命令未被接受，2表示请求或门禁拒绝；命令真实结果与失败详情保留在原检查证据中。status只读返回候选ID、当前观察到的激活状态、缺项、恢复阻塞和建议下一步；激活及最终验收由对应入口实际核验。
 
 - `execute(root, run_id, owner_token, name, phase=..., argv=[...], scope=[...], timeout=..., **check_options)`沿用run_checks，phase为preflight/compatibility/build/activate/smoke。scope声明真实输入与工具/依赖配置，输出目录放write_paths；不能为了缓存删依赖。额外coverage只写命令实际覆盖的类别。
 - preflight执行本轮目标现场快检，权限与生产驱动探针每次正式预检实查。compatibility 首次使用真实运行器执行；同一个 release plan 重试时优先复用最近一次已通过的正式兼容检查，命令、目录、影响范围、输入、环境和日志均须一致，更新的失败仍会使旧证据失效。相关开发单测、E2E等已验证证据继续按原指纹复用。项目有额外必要门禁时，`prepare(..., required_before=[...], required_after=[...])`只能追加要求，不能删除默认门禁或原验收要求。

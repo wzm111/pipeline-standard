@@ -413,6 +413,43 @@ class ReleaseChecksTests(unittest.TestCase):
             self.activate("duplicate")
         self.assertEqual(len([a for a in self.plan()["attempts"] if a["phase"]=="activate"]),1)
 
+    def test_release_status_selects_next_step_without_restarting_valid_phases(self):
+        def next_action(expected):
+            before = R.status(self.root)
+            status = F.public_status(*self.args)
+            self.assertEqual(status["next_action"], expected)
+            self.assertEqual(R.status(self.root), before)
+            return status
+
+        next_action("prepare")
+        F.prepare(*self.args)
+        next_action("fill_missing_prechecks")
+        with patch.object(F, "_coverage", side_effect=AssertionError("premature evidence scan")):
+            self.prechecks()
+        next_action("build")
+        self.build()
+        ready = next_action("activate")
+        self.assertTrue(ready["candidate_id"])
+        self.assertEqual((self.root / "build-count").read_text(), "1")
+        self.activate()
+        self.assertEqual(next_action("smoke")["missing_after"], ["release_identity", "release_smoke"])
+        self.smoke()
+        next_action("closeout")
+        sealed = F.closeout(*self.args)
+        next_action("finish")
+        closeout_file = self.root / sealed["report"]
+        original = closeout_file.read_bytes()
+        closeout_file.write_bytes(original + b" ")
+        next_action("inspect_closeout")
+        closeout_file.write_bytes(original)
+        previous = ready["candidate_id"]
+        self.execute("replacement-build", "build",
+                     [sys.executable, "-c", "from pathlib import Path; Path('artifact').write_text('replacement')"],
+                     artifact_paths=["artifact"])
+        replacement = next_action("inspect_activated_release")
+        self.assertNotEqual(replacement["candidate_id"], previous)
+        self.assertFalse(replacement["activated"])
+
     def test_live_preflight_and_smoke_are_not_cached_from_old_observations(self):
         self.prechecks()
         self.assertFalse(self.execute("fresh-preflight","preflight")["reused"])

@@ -366,7 +366,7 @@ def _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_pat
         import review_control
         review_control.validate_pre_activation(root, state)
     candidate = None
-    if phase != "readiness":
+    if phase in {"build", "activate", "smoke"}:
         coverage = _coverage(root, state, plan["required_before"])
         if phase in {"build", "activate"} and coverage["missing"]:
             raise PreflightIncomplete(coverage["missing"])
@@ -606,13 +606,54 @@ def public_status(root, run_id, owner_token):
     plan = state.get("release_plan", {})
     coverage = _coverage(root, state, plan.get("required_before", []))
     candidate = _candidate(root, state, coverage)
+    activated = _activated(plan, candidate)
+    recovery = _recovery_blocked(root, state)
+    after = set(plan.get("required_after", []))
+    missing_after = sorted(after - set(coverage["covered"])) if activated else []
+    attempts = plan.get("attempts", [])
+    related = [a for a in _effective_attempts(plan)
+               if candidate and a["phase"] == "activate" and a["candidate_id"] == candidate["id"]]
+    from release_blockers import pending
+    if state.get("continuity_wait", {}).get("status") == "waiting":
+        action = "resolve_human_wait"
+    elif recovery:
+        action = "reconcile_release"
+    elif any(a["status"] == "running" for a in attempts):
+        action = "wait_for_running_phase"
+    elif not plan:
+        action = "prepare"
+    elif coverage["missing"]:
+        action = "fill_missing_prechecks"
+    elif not activated and any(a["phase"] == "activate" and a["status"] == "passed" for a in attempts):
+        action = "inspect_activated_release"
+    elif not candidate:
+        action = "build"
+    elif pending(root, state):
+        action = "resolve_release_blocker"
+    elif not activated and len(related) >= 2:
+        action = "inspect_activation_failure"
+    elif not activated:
+        action = "activate"
+    elif missing_after:
+        action = "smoke"
+    elif plan.get("closeout"):
+        try:
+            closeout = D._read_reference(Path(root).resolve(strict=True), plan["closeout"], "qa")
+            action = ("finish" if closeout.get("gate") == "PASS" and closeout.get("candidate_id") == candidate["id"]
+                      else "inspect_closeout")
+        except (OSError, ValueError, KeyError, TypeError):
+            action = "inspect_closeout"
+    else:
+        action = "closeout"
     return {"run_id": run_id, "prepared": bool(plan),
             "candidate_id": candidate["id"] if candidate else None,
-            "activated": _activated(plan, candidate),
+            "activated": activated,
             "missing_before": coverage["missing"],
-            "recovery_blocked": _recovery_blocked(root, state),
+            "missing_after": missing_after,
+            "next_action": action,
+            "recovery_blocked": recovery,
             "attempts": [{k: a[k] for k in ("name", "phase", "status", "reason_code") if k in a}
-                         for a in plan.get("attempts", [])]}
+                         for a in attempts]}
 
 
 def _operation_check(root, state, reference, target, *, phase, current=False):
