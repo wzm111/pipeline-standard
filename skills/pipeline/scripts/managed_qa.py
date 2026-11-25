@@ -124,7 +124,12 @@ def canonical(root, state, payload, *, release_attempts=()):
                             snapshot)
         result = P.inspect_state(root, state["run_id"], state["owner_token"], ref, state,
                                  payload.get("summary", ""), snapshot=snapshot)
-        if any(path not in release_attempts for path in unplanned_checks(root, state, ref, plan, snapshot)):
+        # Registered release phases have their own coverage/failure gates. They
+        # must not become unplanned source tests when source QA is refreshed
+        # after pre-activation or post-release independent review.
+        phase_reports = {attempt.get("report") for attempt in state.get("release_plan", {}).get("attempts", [])}
+        if any(path not in set(release_attempts) | phase_reports
+               for path in unplanned_checks(root, state, ref, plan, snapshot)):
             result["gate"] = "CONCERNS"
             result["check_failures"]["unplanned_checks"] = "current_task_checks_not_in_plan"
         if payload.get("gate") in {"CONCERNS", "FAIL"}:
@@ -191,15 +196,29 @@ def _covered_ancestor(root, state, plan_ref, leaf, plans, snapshot, failures, re
             continue
         binding = snapshot["bindings"].get((plan_ref, key), (None, {}))[1]
         old = binding.get("result", {}).get("report")
+        check = plans[plan_ref]["checks"][key]
+        expected = P.planned_identity(root, state["run_id"], state, check)
+        replacement, _ = P._valid(root, state["run_id"], state["owner_token"], state,
+                                  leaf, key, plans[leaf]["checks"][key], snapshot)
+        if replacement and reason in {"inputs_changed", "check_not_passed", "superseded_observation"}:
+            current = _read(root, state, replacement, "check")["payload"]
+            original = _read(root, state, old, "check")["payload"] if old else None
+            # A reviewed amendment may strengthen coverage while rerunning the
+            # same check against repaired inputs. Keep its failed ancestor, but
+            # accept the leaf's current, fully validated observation.
+            if (original and original["environment"] == current["environment"]
+                    and check.get("environment", {}) == plans[leaf]["checks"][key].get("environment", {})
+                    and expected == P._identity(original) == P._identity(current)
+                    and P._cached_digest(root, original["log_path"], snapshot) == original["log_sha256"]
+                    and R._timestamp(original["finished_at"]) < R._timestamp(current["started_at"])
+                    and E.fingerprint(root, original["scope"], original["environment"]) != original["fingerprint"]
+                    and set(check["coverage"]) <= set(current["coverage"])):
+                continue
         if old not in replacements or reason not in {
                 "check_not_passed", "superseded_observation", "inputs_changed",
                 "inputs_changed_during_check", "command_or_environment_changed"}:
             return False
-        check = plans[plan_ref]["checks"][key]
-        expected = P.planned_identity(root, state["run_id"], state, check)
         proof = _read(root, state, old, "check")["payload"]
-        replacement, _ = P._valid(root, state["run_id"], state["owner_token"], state,
-                                  leaf, key, plans[leaf]["checks"][key], snapshot)
         if expected != P._identity(proof) or replacements[old] != replacement:
             return False
     return True
