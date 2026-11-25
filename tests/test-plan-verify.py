@@ -992,10 +992,28 @@ class VerifyCliTests(unittest.TestCase):
         second = self.verify("second")
         self.assertEqual(first["gate"], "PASS")
         self.assertTrue(second["results"][0]["reused"])
+        self.assertEqual(first["results"][0]["planned_report"], second["results"][0]["planned_report"])
+        self.assertFalse(any("/artifacts/check_reuse/second-" in ref for ref in R.status(self.root)["state"]["artifacts"]))
         self.assertEqual((self.root / "counter").read_text(), "1")
         self.assertEqual(R.status(self.root)["state"]["status"], "running")
         self.assertNotIn("completion", second)
         self.assertFalse((self.root / "tmp/pipeline/delivery/latest.json").exists())
+
+    def test_verify_cannot_keep_binding_with_unverified_executable(self):
+        plan = self.plan
+        actual_environment = P.C._environment
+
+        def unavailable(*args, **kwargs):
+            return actual_environment(*args, **kwargs) | {"executable_sha256": "unavailable"}
+
+        args = self.root, self.run, self.owner, plan, "unit"
+        with mock.patch.object(P.C, "_environment", side_effect=unavailable):
+            first = P.run_planned(*args, "one", impact_covered=True, keep_current=True)
+            second = P.run_planned(*args, "two", impact_covered=True, keep_current=True)
+        self.assertEqual(first["exit_code"], 0)
+        self.assertEqual(second["exit_code"], 0)
+        self.assertFalse(second["reused"])
+        self.assertEqual((self.root / "counter").read_text(), "2")
 
     def test_bind_earlier_actual_result_without_reexecuting_command(self):
         observed = self.verify("original")["results"][0]["report"]

@@ -356,7 +356,7 @@ def _successful_activation(check, binding):
             and binding["result"]["exit_code"] == 0)
 
 
-def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=False):
+def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=False, *, keep_current=False):
     state = _owned(root, run_id, owner)
     R.require_not_waiting(state)
     snapshot = _snapshot(root, run_id, state)
@@ -413,6 +413,15 @@ def run_planned(root, run_id, owner, plan_ref, check_id, name, impact_covered=Fa
             raise ValueError("recorded release activation cannot be rerun; inspect readback evidence: " + reason)
         return {"report": ref, "exit_code": 0, "reused": True, "plan_ref": plan_ref,
                 "check_id": check_id, "planned_report": binding_ref}
+    if keep_current and binding and binding["result"]["exit_code"] == 0:
+        import managed_qa
+        if managed_qa._current(E.read_report(root, run_id, binding_ref, kind="planned_check"), state):
+            ref, _ = _valid(root, run_id, owner, state, plan_ref, check_id, check, snapshot)
+            if ref is not None and ("argv" not in check or
+                    _report(root, run_id, ref, "check", snapshot)["environment"].get("executable_sha256")
+                    not in (None, "unavailable")):
+                return {"report": ref, "exit_code": 0, "reused": True, "plan_ref": plan_ref,
+                        "check_id": check_id, "planned_report": binding_ref}
     if "observed_ref" in check:
         ref, reason = _valid_observed(root, run_id, state, check, snapshot, allow_old=impact_covered is True)
         if ref is None:
@@ -785,7 +794,8 @@ def verify_plan(root, run_id, owner, plan_ref, name, summary=""):
                                                  "check_failures", "environment_diagnostics") if key in payload}}
     results = []
     for check_id, attempt in attempts:
-        result = run_planned(root, run_id, owner, plan_ref, check_id, attempt, impact_covered=True)
+        result = run_planned(root, run_id, owner, plan_ref, check_id, attempt, impact_covered=True,
+                             keep_current=True)
         results.append({key: result[key] for key in ("check_id", "exit_code", "reused", "report", "planned_report")})
         if result["exit_code"] != 0:
             break

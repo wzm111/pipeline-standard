@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -54,6 +55,10 @@ class PreflightIncomplete(ValueError):
     def __init__(self, missing):
         super().__init__("release prechecks missing or invalid: " + ",".join(missing))
         self.missing = missing
+
+
+class CandidateUnavailable(ValueError):
+    pass
 
 
 def _owned(base, run_id, owner):
@@ -329,7 +334,7 @@ def validate_readiness_binding(root, state, binding, *, verify_files=True):
             raise PreflightIncomplete(missing)
 
 
-def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **options):
+def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, expected_candidate_id=None, **options):
     """Precheck first, build once, then at most one automatic activation recovery.
 
     The project must support its actual candidate/activation commands. This
@@ -337,6 +342,9 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
     """
     if phase not in PHASES or phase == "readiness":
         raise ValueError("unknown release phase")
+    if expected_candidate_id is not None and (phase not in {"activate", "smoke"}
+            or not isinstance(expected_candidate_id, str) or not re.fullmatch(r"[a-f0-9]{64}", expected_candidate_id)):
+        raise ValueError("expected_candidate_id requires a candidate ID and an activate or smoke phase")
     E._label(name)
     if phase == "build" and (not isinstance(artifact_paths, list) or not artifact_paths):
         raise ValueError("build requires explicit artifact or verified manifest paths")
@@ -357,20 +365,23 @@ def execute(root, run_id, owner_token, name, *, phase, artifact_paths=None, **op
             return readiness
         readiness_report = readiness["report"]
     return _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_paths, options,
-                             readiness_report=readiness_report)
+                             readiness_report=readiness_report, expected_candidate_id=expected_candidate_id)
 
 
-def _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_paths, options, *, readiness_report=None):
+def _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_paths, options, *, readiness_report=None,
+                      expected_candidate_id=None):
     state = R.status(root, run_id)["state"]
     if phase == "activate":
         import review_control
         review_control.validate_pre_activation(root, state)
     candidate = None
-    if phase != "readiness":
+    if phase in {"build", "activate", "smoke"}:
         coverage = _coverage(root, state, plan["required_before"])
         if phase in {"build", "activate"} and coverage["missing"]:
             raise PreflightIncomplete(coverage["missing"])
         candidate = _candidate(root, state, coverage)
+    if expected_candidate_id is not None and (candidate or {}).get("id") != expected_candidate_id:
+        raise CandidateUnavailable("accepted release candidate missing or changed")
     if phase == "activate" and not candidate:
         raise ValueError("validated candidate missing or changed; do not activate")
     if phase == "smoke" and not _activated(plan, candidate) and not (_held(plan) and candidate):
@@ -412,6 +423,9 @@ def _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_pat
         if phase in {"build", "activate"}:
             if _recovery_blocked(root, current):
                 raise ValueError("release recovery hold unresolved; inspect and reconcile before retry")
+            if any(a["phase"] == "smoke" and a.get("pinned_candidate") and a["status"] == "running"
+                   for a in attempts):
+                raise ValueError("candidate readback already running")
             if any(a["phase"] in {"build", "activate"} and a["status"] == "running" for a in attempts):
                 raise ValueError("build or activation already running")
             current_coverage = _coverage(root, current, current["release_plan"]["required_before"])
@@ -419,12 +433,19 @@ def _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_pat
             # claim. Here we still bind the current build and precheck evidence.
             guarded_activation = phase == "activate" and bool(current["release_plan"].get("project_activation_gate"))
             latest_candidate = _candidate(root, current, current_coverage, verify_assets=not guarded_activation)
+            if expected_candidate_id is not None and (latest_candidate or {}).get("id") != expected_candidate_id:
+                raise CandidateUnavailable("accepted release candidate missing or changed during activation registration")
             if (current_coverage["missing"] or (latest_candidate or {}).get("id") != (candidate or {}).get("id")):
                 if current_coverage["missing"]:
                     raise PreflightIncomplete(current_coverage["missing"])
                 raise ValueError("release prechecks or candidate changed while registering")
             if phase == "activate":
                 readiness_binding = _readiness_binding(root, current, current_coverage, options.get("environment"))
+        if phase == "smoke" and expected_candidate_id is not None:
+            current_plan = current["release_plan"]
+            if current_plan.get("candidate", {}).get("id") != expected_candidate_id or any(
+                    a["phase"] in {"build", "activate"} and a["status"] == "running" for a in attempts):
+                raise CandidateUnavailable("accepted release candidate changed or a rollout is in progress")
         identity = candidate["id"] if candidate else None
         related = [a for a in _effective_attempts(current["release_plan"])
                    if a["phase"] == "activate" and a["candidate_id"] == identity]
@@ -434,6 +455,8 @@ def _execute_prepared(root, run_id, owner_token, name, phase, plan, artifact_pat
             raise ValueError("activation recovery limit reached or activation running; stop and report blocker")
         attempt = {"name": name, "phase": phase, "candidate_id": identity, "status": "running", "report": None,
                    "started_at": R._now()}
+        if phase == "smoke" and expected_candidate_id is not None:
+            attempt["pinned_candidate"] = True
         if readiness_report:
             probe = next((a for a in reversed(attempts) if a["phase"] == "readiness"), None)
             if not probe or probe["status"] != "passed" or probe["report"] != readiness_report:
@@ -606,13 +629,54 @@ def public_status(root, run_id, owner_token):
     plan = state.get("release_plan", {})
     coverage = _coverage(root, state, plan.get("required_before", []))
     candidate = _candidate(root, state, coverage)
+    activated = _activated(plan, candidate)
+    recovery = _recovery_blocked(root, state)
+    after = set(plan.get("required_after", []))
+    missing_after = sorted(after - set(coverage["covered"])) if activated else []
+    attempts = plan.get("attempts", [])
+    related = [a for a in _effective_attempts(plan)
+               if candidate and a["phase"] == "activate" and a["candidate_id"] == candidate["id"]]
+    from release_blockers import pending
+    if state.get("continuity_wait", {}).get("status") == "waiting":
+        action = "resolve_human_wait"
+    elif recovery:
+        action = "reconcile_release"
+    elif any(a["status"] == "running" for a in attempts):
+        action = "wait_for_running_phase"
+    elif not plan:
+        action = "prepare"
+    elif coverage["missing"]:
+        action = "fill_missing_prechecks"
+    elif not activated and any(a["phase"] == "activate" and a["status"] == "passed" for a in attempts):
+        action = "inspect_activated_release"
+    elif not candidate:
+        action = "build"
+    elif pending(root, state):
+        action = "resolve_release_blocker"
+    elif not activated and len(related) >= 2:
+        action = "inspect_activation_failure"
+    elif not activated:
+        action = "activate"
+    elif missing_after:
+        action = "smoke"
+    elif plan.get("closeout"):
+        try:
+            closeout = D._read_reference(Path(root).resolve(strict=True), plan["closeout"], "qa")
+            action = ("finish" if closeout.get("gate") == "PASS" and closeout.get("candidate_id") == candidate["id"]
+                      else "inspect_closeout")
+        except (OSError, ValueError, KeyError, TypeError):
+            action = "inspect_closeout"
+    else:
+        action = "closeout"
     return {"run_id": run_id, "prepared": bool(plan),
             "candidate_id": candidate["id"] if candidate else None,
-            "activated": _activated(plan, candidate),
+            "activated": activated,
             "missing_before": coverage["missing"],
-            "recovery_blocked": _recovery_blocked(root, state),
+            "missing_after": missing_after,
+            "next_action": action,
+            "recovery_blocked": recovery,
             "attempts": [{k: a[k] for k in ("name", "phase", "status", "reason_code") if k in a}
-                         for a in plan.get("attempts", [])]}
+                         for a in attempts]}
 
 
 def _operation_check(root, state, reference, target, *, phase, current=False):
@@ -758,7 +822,7 @@ def main(argv=None):
         allowed = {"early-readiness": {"environment"},
                    "prepare": {"required_before", "required_after"},
                    "execute": {"name", "phase", "argv", "scope", "artifact_paths", "timeout", "cwd",
-                               "environment", "coverage", "write_paths", "protected_paths"},
+                               "environment", "coverage", "write_paths", "protected_paths", "expected_candidate_id"},
                    "closeout": {"external_pending"}, "status": set(),
                    "operation-capture": {"name", "target_environment"},
                    "operation-inspect": {"proof", "target_environment", "readback"}}[args.action]
@@ -809,6 +873,8 @@ def main(argv=None):
     except PreflightIncomplete as error:
         result, code = {"error": "preflight_incomplete", "reason_code": "release_preflight_evidence_missing",
                         "missing": error.missing}, 2
+    except CandidateUnavailable:
+        result, code = {"error": "candidate_unavailable", "reason_code": "release_candidate_missing_or_changed"}, 2
     except (OSError, ValueError, KeyError, TypeError) as error:
         # Exception text can contain submitted argv, paths or environment values.
         result, code = {"error": type(error).__name__, "message": "release request rejected; inspect the declaration and current gate evidence"}, 2
