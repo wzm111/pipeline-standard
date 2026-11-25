@@ -188,7 +188,7 @@ def validate_finish(root, state):
         raise ValueError("QA evidence changed after acceptance; revalidate current evidence before completing")
 
 
-def _covered_ancestor(root, state, plan_ref, leaf, plans, snapshot, failures, replacements):
+def _covered_ancestor(root, state, plan_ref, leaf, plans, snapshot, failures, replacements, retained):
     """A reviewed amendment carries unused slots; an actual failure needs its exact replacement."""
     import check_plan as P
     for key, reason in failures.items():
@@ -198,6 +198,13 @@ def _covered_ancestor(root, state, plan_ref, leaf, plans, snapshot, failures, re
         old = binding.get("result", {}).get("report")
         check = plans[plan_ref]["checks"][key]
         expected = P.planned_identity(root, state["run_id"], state, check)
+        if old in retained:
+            declared = plans[leaf]["checks"][retained[old]]
+            if (reason in {"inputs_changed", "check_not_passed", "superseded_observation"}
+                    and expected == P.planned_identity(root, state["run_id"], state, declared)
+                    and check.get("environment", {}) == declared.get("environment", {})
+                    and set(check["coverage"]) <= set(declared["coverage"])):
+                continue
         replacement, _ = P._valid(root, state["run_id"], state["owner_token"], state,
                                   leaf, key, plans[leaf]["checks"][key], snapshot)
         if replacement and reason in {"inputs_changed", "check_not_passed", "superseded_observation"}:
@@ -264,7 +271,92 @@ def _historical_sources(root, history, plan_ref, plan, qa):
     return qa.get("checks") == refs and qa.get("required_checks") == required and set(required) <= covered
 
 
-def _covered_ancestor_qa(root, state, ref, payload, definitions, solution_ref, latest, replacements):
+def _retained_checks(root, state, reports, leaf, plan, snapshot):
+    """Authenticate explicit same-identity reruns in a pinned independent leaf judgment."""
+    import check_plan as P
+    import check_supersession as S
+    checks, cutoff = S._judgment(root, state, reports, leaf, snapshot, registering=False)
+    rows = reports[-1][1]["payload"]["retained_checks"]
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("retained checks require exact nonempty observation pairs")
+    retained = {}
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {
+                "obsolete_ref", "obsolete_sha256", "replacement_ref", "replacement_sha256"}:
+            raise ValueError("retained checks require exact reference and digest pairs")
+        old, new = row["obsolete_ref"], row["replacement_ref"]
+        if not isinstance(old, str) or old in retained or new not in checks or old in checks:
+            raise ValueError("retained checks require a unique historical observation and a reviewed leaf source")
+        before, _, ended, old_available = S._observation(root, state, old, snapshot)
+        after, started, _, new_available = S._observation(root, state, new, snapshot)
+        if (P._cached_digest(root, old, snapshot) != row["obsolete_sha256"]
+                or P._cached_digest(root, new, snapshot) != row["replacement_sha256"]
+                or ended >= started or max(old_available, new_available) > cutoff
+                or P._identity(before) != P._identity(after)
+                or any(before.get(k) != after.get(k) for k in ("argv", "environment", "observation_kind"))
+                or not set(before["coverage"]) <= set(after["coverage"]) or after["exit_code"] != 0
+                or before.get("inputs_stable") is not True or after.get("inputs_stable") is not True
+                or (before["exit_code"] != 0 and
+                    E.fingerprint(root, before["scope"], before["environment"]) == before["fingerprint"])):
+            raise ValueError("retained checks require a later valid rerun of the exact original check")
+        # Resolve a renamed slot by its declared identity and environment. Ambiguity fails closed.
+        declared_env = (after["environment"] if after.get("observation_kind") else
+                        {k[8:]: v for k, v in after["environment"].items() if k.startswith("context:")})
+        slots = [key for key, check in plan["checks"].items()
+                 if P.planned_identity(root, state["run_id"], state, check) == P._identity(after)
+                 and (check.get("environment") or {"scope": "local"}) == declared_env]
+        if len(slots) != 1:
+            raise ValueError("retained check must match one current leaf slot")
+        key = slots[0]
+        binding_ref, binding = snapshot["bindings"].get((leaf, key), (None, {}))
+        result = binding.get("result", {})
+        if (result.get("report") != new or type(result.get("exit_code")) is not int or result["exit_code"] != 0
+                or binding.get("plan_sha256") != state["check_plans"][leaf]
+                or R._timestamp(_read(root, state, binding_ref, "planned_check")["recorded_at"]) > cutoff
+                or P._valid(root, state["run_id"], state["owner_token"], state, leaf,
+                            key, plan["checks"][key], snapshot)[0] != new):
+            raise ValueError("retained check must bind a valid leaf execution before tester acceptance")
+        retained[old] = key
+    return retained
+
+
+def _historical_attempts(root, history, raw, qa_time, snapshot):
+    """Only completed original release executions at this historical checkpoint are phase obligations."""
+    from pathlib import Path
+    import shlex
+    import check_plan as P
+    import planned_release
+    from release_checks import PHASES
+    official = set()
+    task_start = boundary(history)
+    for attempt in history.get("release_plan", {}).get("attempts", []):
+        ref = attempt.get("report")
+        if ref not in raw or Path(ref).stem != attempt["name"]:
+            continue
+        report = _read(root, history, ref, "check")
+        proof = report["payload"]
+        phase, code = attempt["phase"], proof.get("exit_code")
+        if (phase not in PHASES or PHASES[phase] not in proof.get("coverage", [])
+                or proof.get("inherited_from") or proof.get("observation_kind")
+                or not proof.get("argv") or shlex.join(proof["argv"]) != proof["command"]
+                or type(code) is not int or attempt.get("result", {}).get("exit_code") != code
+                or attempt["result"].get("result_class") != proof.get("result_class")
+                or attempt.get("status") != ("passed" if code == 0 else "failed")
+                or (phase in {"activate", "smoke"} and (not attempt.get("candidate_id") or
+                    proof["environment"].get("context:pipeline_release_candidate") != attempt["candidate_id"]))
+                or P._cached_digest(root, proof["log_path"], snapshot) != proof["log_sha256"]):
+            raise ValueError("historical release attempt conflicts with its original runner evidence")
+        started, _, available = planned_release.executed(
+            history, ref, report, status="executed" if code == 0 else "failed")
+        if ((task_start and started < R._timestamp(task_start))
+                or not R._timestamp(attempt["started_at"]) <= started <= available
+                <= R._timestamp(attempt["finished_at"]) <= qa_time):
+            raise ValueError("historical release attempt did not complete before source QA")
+        official.add(ref)
+    return official
+
+
+def _covered_ancestor_qa(root, state, ref, payload, definitions, solution_ref, latest, replacements, retained, used, snapshot):
     plan_ref = payload["plan_ref"]
     if (payload.get("gate") != "CONCERNS" or payload.get("engineering_gate", "CONCERNS") != "CONCERNS"
             or payload.get("environment_diagnostics") != {} or payload.get("missing_checks") != []
@@ -279,7 +371,12 @@ def _covered_ancestor_qa(root, state, ref, payload, definitions, solution_ref, l
                                                          if path in prefix})
     plan = definitions[plan_ref]
     raw = set(raw_unplanned_checks(root, history, plan))
-    if not raw or not raw <= (replacements.keys() | set(latest["checks"])):
+    remaining = raw - replacements.keys() - set(latest["checks"])
+    if retained:
+        qa_time = R._timestamp(_read(root, state, ref, "qa")["recorded_at"])
+        remaining -= _historical_attempts(root, history, raw, qa_time, snapshot)
+        used.update(remaining)
+    if not raw or not remaining <= retained.keys():
         return False
     expert = _apply_expert_reviews(root, history, {"gate": "PASS", "plan_ref": plan_ref,
                                                    "checks": payload.get("checks", [])})
@@ -354,8 +451,17 @@ def release_source_scope(root, state):
         if chain and chain[-1][1]["payload"]["plan_ref"] == leaf:
             ancestors = {solution["payload"]["plan_ref"]: ref for ref, solution, _ in chain[:-1]}
     results = {ref: P.inspect_state(root, state["run_id"], state["owner_token"], ref, state, snapshot=snapshot) for ref in plans}
-    if replacements:
+    retained, used = {}, set()
+    verdict = {}
+    if latest and latest.get("expert_reviews"):
         verdict = _read(root, state, latest["expert_reviews"][-1], "verification_review")["payload"]
+        if "retained_checks" in verdict:
+            reports = _review_reports(root, state, "verification_review")
+            if (not ancestors or results[leaf]["gate"] != "PASS"
+                    or reports[-1][0] != latest["expert_reviews"][-1]):
+                raise ValueError("retained checks require current independent leaf QA")
+            retained = _retained_checks(root, state, reports, leaf, definitions[leaf], snapshot)
+    if replacements or retained or "ancestor_qa" in verdict:
         bindings = verdict.get("ancestor_qa", [])
         if not isinstance(bindings, list):
             raise ValueError("ancestor QA attestations must be a list")
@@ -372,7 +478,7 @@ def release_source_scope(root, state):
         if attested != {path for path, _ in unresolved}:
             raise ValueError("ancestor QA requires its exact independent digest attestation")
     if unresolved:
-        if not replacements or results[leaf]["gate"] != "PASS" or any(
+        if not (replacements or retained) or results[leaf]["gate"] != "PASS" or any(
                 qa.get("plan_ref") not in ancestors for _, qa in unresolved):
             raise ValueError("current source QA has unresolved concerns or failure")
         tester = next(item for item in state["role_dispatches"] if item["id"] == verdict["dispatch_id"])
@@ -380,10 +486,12 @@ def release_source_scope(root, state):
             when = _read(root, state, path, "qa")["recorded_at"]
             if (R._timestamp(when) > R._timestamp(tester["accepted_at"])
                     or not _covered_ancestor_qa(root, state, path, qa, definitions, ancestors[qa["plan_ref"]],
-                                                latest, replacements)
+                                                latest, replacements, retained, used, snapshot)
                     or not _covered_ancestor(root, state, qa["plan_ref"], leaf, definitions, snapshot,
-                                             results[qa["plan_ref"]]["check_failures"], replacements)):
+                                             results[qa["plan_ref"]]["check_failures"], replacements, retained)):
                 raise ValueError("historical source QA has unresolved concerns or failure")
+    if retained.keys() != used:
+        raise ValueError("retained checks must attest exactly the outstanding historical source observations")
     required_then = set(E.coverage_labels(state.get("inherited_required_checks")))
     for index, ref in enumerate(plans):
         required_then.update(definitions[ref]["required_checks"])
@@ -391,7 +499,7 @@ def release_source_scope(root, state):
             continue
         if (ref in ancestors and results[leaf]["gate"] == "PASS"
                 and _covered_ancestor(root, state, ref, leaf, definitions, snapshot,
-                                      results[ref]["check_failures"], replacements)):
+                                      results[ref]["check_failures"], replacements, retained)):
             continue
         if (replacements and ref not in judged_plans and snapshot["positions"][ref] < snapshot["positions"][leaf]
                 and _executed_subset(definitions[ref], results[ref], definitions[leaf], results[leaf], required_then)):
