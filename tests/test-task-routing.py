@@ -3,6 +3,8 @@ from copy import deepcopy
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -189,6 +191,44 @@ class TaskRoutingTests(unittest.TestCase):
         plan = MODELS.codex_spawn_parameters(selected, host)
         self.assertTrue(plan["fallback"])
         self.assertEqual(plan["parameters"], {})
+
+    def test_routine_release_chooses_one_executor_from_current_model_and_verified_host(self):
+        preference = {"model": "gpt-6.2-sol", "effort": "low", "fallback": "inherit",
+                      "task_routes": {"release_summary": {"model": "gpt-6.1-terra", "effort": "low"}}}
+        host = {"agent_spawn": True, "model_override": True, "effort_override": True,
+                "models": {"gpt-6.2-sol": {"permission": True, "efforts": ["low"]}}}
+        choose = MODELS.routine_release_execution
+        for model, effort in (("gpt-6.2-astra", "medium"), ("gpt-6.1-sol", "high")):
+            plan = choose(preference, current_model=model, current_effort=effort, host=host)
+            self.assertEqual(plan["mode"], "delegate_releaser")
+            self.assertEqual(plan["launch_plan"]["parameters"],
+                             {"model": "gpt-6.2-sol", "reasoning_effort": "low", "fork_turns": "none"})
+        for model, effort, reason in (
+                ("gpt-6.2-sol", "medium", "current_model_already_suitable"),
+                ("gpt-6.1-sol", None, "current_effort_unknown"),
+                ("unknown", "high", "current_model_unknown")):
+            self.assertEqual(choose(preference, current_model=model, current_effort=effort, host=host),
+                             {"mode": "direct", "reason": reason})
+        self.assertEqual(choose({"model": "inherit"}, current_model="gpt-6.2-astra")["reason"],
+                         "lighter_releaser_not_configured")
+        host["models"]["gpt-6.2-sol"]["permission"] = False
+        plan = choose(preference, current_model="gpt-6.2-astra", host=host)
+        self.assertEqual(plan["mode"], "direct")
+        self.assertNotIn("launch_plan", plan)
+
+    def test_routine_release_cli_is_separate_from_summary_and_complex_tasks(self):
+        repository = Path(__file__).resolve().parents[1]
+        cli = repository / "skills/pipeline/scripts/resolve-models.py"
+        with tempfile.TemporaryDirectory() as directory:
+            base = [sys.executable, "-B", str(cli), "--runtime", "codex", "--project", str(repository),
+                    "--personal", str(Path(directory) / "absent.json"), "--role", "releaser"]
+            result = subprocess.run(base + ["--routine-release", "--current-model", "gpt-6.2-astra"],
+                                    text=True, capture_output=True, check=True)
+            plan = json.loads(result.stdout)
+            self.assertEqual(plan["release_execution"]["reason"], "lighter_releaser_unverified")
+            for extra in (["--task-kind", "release_summary"], ["--risk", "high"], ["--complexity", "complex"]):
+                rejected = subprocess.run(base + ["--routine-release", *extra], text=True, capture_output=True)
+                self.assertEqual(rejected.returncode, 1)
 
     def test_skill_personal_project_and_temporary_replace_entire_role(self):
         with tempfile.TemporaryDirectory() as directory:

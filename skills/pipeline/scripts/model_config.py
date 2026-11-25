@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 
 ROLES = {"developer", "planner", "scope_guardian", "tester", "releaser"}
@@ -287,6 +288,34 @@ def codex_spawn_parameters(preference, host):
             parameters["fork_turns"] = "none"
     return {"parameters": parameters, "capability": capability, "fallback": fallback,
             "fallback_reason": capability["reason"] if fallback else None}
+
+
+def routine_release_execution(preference, *, current_model=None, current_effort=None, host=None):
+    """Choose a single executor for an already classified routine Codex release."""
+    validate_preference(preference, role="releaser")
+
+    def direct(reason):
+        return {"mode": "direct", "reason": reason}
+
+    light_efforts = {"low", "medium"}
+    heavy_efforts = {"high", "xhigh", "max", "ultra"}
+    if not current_model or current_model in {"inherit", "unknown"}:
+        return direct("current_model_unknown")
+    if re.fullmatch(r"gpt-\d+(?:\.\d+)?-sol", current_model):
+        if current_effort in light_efforts:
+            return direct("current_model_already_suitable")
+        if current_effort not in heavy_efforts:
+            return direct("current_effort_unknown")
+    elif not re.fullmatch(r"gpt-\d+(?:\.\d+)?-astra", current_model):
+        return direct("no_comparable_current_model")
+    if (not re.fullmatch(r"gpt-\d+(?:\.\d+)?-sol", preference["model"])
+            or preference.get("effort") not in light_efforts):
+        return direct("lighter_releaser_not_configured")
+    capability = assess_capability(preference, host or {})
+    if capability["state"] != "available_precheck":
+        return {**direct("lighter_releaser_unverified"), "capability": capability}
+    return {"mode": "delegate_releaser", "reason": "lighter_releaser_available",
+            "launch_plan": codex_spawn_parameters(preference, host)}
 
 
 def claude_role_parameters(preference, host):

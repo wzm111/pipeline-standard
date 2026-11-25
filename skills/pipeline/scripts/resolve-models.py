@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from model_config import (ROLES, claude_role_parameters, codex_spawn_parameters,
-                          read_document, read_layer, resolve, select_task_route)  # noqa: E402
+                          read_document, read_layer, resolve, routine_release_execution, select_task_route)  # noqa: E402
 
 
 def main():
@@ -23,10 +23,18 @@ def main():
     parser.add_argument("--task-kind", help="task type for an explicitly configured role route")
     parser.add_argument("--risk", choices=("low", "medium", "high", "unknown"), default="unknown")
     parser.add_argument("--complexity", choices=("simple", "moderate", "complex", "unknown"), default="unknown")
+    parser.add_argument("--routine-release", action="store_true", help="plan one executor for a confirmed routine release")
+    parser.add_argument("--current-model", help="observed main-session model for --routine-release")
+    parser.add_argument("--current-effort", help="observed main-session reasoning effort for --routine-release")
     args = parser.parse_args()
     try:
         project = args.project / "pipeline.models.json"
         routing_requested = args.task_kind is not None or args.risk != "unknown" or args.complexity != "unknown"
+        if args.routine_release and (args.runtime != "codex" or args.role != "releaser" or args.read
+                                     or routing_requested or args.temporary is not None):
+            raise ValueError("--routine-release requires Codex releaser without task-route or model overrides")
+        if not args.routine_release and (args.current_model is not None or args.current_effort is not None):
+            raise ValueError("--current-model and --current-effort require --routine-release")
         if routing_requested and (args.role is None or args.task_kind is None):
             raise ValueError("task routing requires both --role and --task-kind")
         if args.host_evidence is not None and args.role is None:
@@ -50,10 +58,16 @@ def main():
                 if routing_requested:
                     result.update(select_task_route(args.role, result["preference"], task_kind=args.task_kind,
                                                     risk=args.risk, complexity=args.complexity))
+                host = None
                 if args.host_evidence is not None:
                     host = json.loads(args.host_evidence.read_text(encoding="utf-8"))
                     if not isinstance(host, dict):
                         raise ValueError("host evidence must be an object")
+                if args.routine_release:
+                    result["release_execution"] = routine_release_execution(
+                        result["preference"], current_model=args.current_model,
+                        current_effort=args.current_effort, host=host)
+                elif host is not None:
                     convert = codex_spawn_parameters if args.runtime == "codex" else claude_role_parameters
                     result["launch_plan"] = convert(result["preference"], host)
     except (OSError, ValueError) as error:
