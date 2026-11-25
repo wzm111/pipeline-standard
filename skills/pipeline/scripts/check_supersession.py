@@ -92,10 +92,17 @@ def _validate(root, state, reports, plan_ref, raw, snapshot, *, registering=Fals
         after, started, _, new_available = _observation(root, state, new, snapshot)
         if max(old_available, new_available) > review_start:
             raise ValueError("both original observations must be registered and completed before independent review")
-        if (ended >= started or before["command"] == after["command"] or P._identity(before) == P._identity(after)
-                or {Path(p) for p in before["scope"]} != {Path(p) for p in after["scope"]}
+        old_scope, new_scope = set(map(Path, before["scope"])), set(map(Path, after["scope"]))
+        if (ended >= started or not old_scope <= new_scope
                 or not set(before["coverage"]) <= set(after["coverage"]) or after["exit_code"] != 0):
-            raise ValueError("supersession requires a later different execution with matching scope and coverage")
+            raise ValueError("supersession requires a later successful execution retaining all original scope and coverage")
+        if before["command"] == after["command"]:
+            if (before.get("observation_kind") or after.get("observation_kind") or old_scope == new_scope
+                    or any(before[key] != after[key] for key in ("argv", "cwd", "intent", "environment"))
+                    or before["fingerprint"] == after["fingerprint"]):
+                raise ValueError("same-command supersession requires matching runner settings and a strictly expanded scope")
+            if E.fingerprint(root, before["scope"], before["environment"]) == before["fingerprint"]:
+                raise ValueError("same-command supersession requires a change within the original input scope")
         for field, path in (("obsolete_sha256", old), ("replacement_sha256", new)):
             digest = P._cached_digest(root, path, snapshot)
             if registering and field not in row:

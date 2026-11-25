@@ -86,7 +86,9 @@ Python对应接口：`check_plan.save_plan`、`run_planned`、`qa_from_plan`、�
 
 高风险任务补跑前先看同一份 `plan-preflight` 的 `review`、`unplanned_checks` 和 `reuse`。它们分别显示方案记录是否对应本计划、哪些当前检查未纳入计划，以及当前环境下各检查的复用判定。方案引用变化时返回已有差量。静态 `ready` 只表示执行入口可用，QA 仍独立核验方案和结果。
 
-已纠正诊断命令并取得新的通过证据时，独立 tester 可以核对原始退出码、日志、执行时间、输入范围和覆盖项，说明旧命令的问题以及新命令如何验证原义务。用本轮新的已完成 tester dispatch，在现有 `report --kind verification_review` 的 PASS JSON 中保留 `dispatch_id`、最新 `solution_ref` 和完整有序的 `checks`，增加逐条映射。例如：
+纠正诊断命令或其输入并取得新的通过证据后，独立 tester 核对原始退出码、日志、执行时间、输入范围和覆盖项，说明新执行如何验证原义务。替代检查须在旧检查结束后执行，保留旧 scope 的每条路径及全部 coverage。命令不同可以扩大 scope。命令相同时，两份证据均须来自原始命令运行器，argv、cwd、intent、完整 environment 均相同，新 scope 严格包含旧 scope，且两次完整指纹不同。工具还会使用旧报告的 scope 和 environment 重算当前指纹，与旧报告比较，确认原范围内的输入整体已发生变化。仅增加声明路径无法证明原范围内有变化。
+
+使用本轮新完成的独立 tester dispatch，在 `report --kind verification_review` 的 PASS JSON 中保留 `dispatch_id`、最新 `solution_ref` 和完整有序的 `checks`，增加逐条映射。例如：
 
 ```json
 {"supersessions":[{"obsolete_ref":"<原始 check 引用>","replacement_ref":"<本计划已验证的 check 引用>","reason":"原命令从错误目录解析夹具配置，修正后的命令对同一批输入运行了完整检查。"}]}

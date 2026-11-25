@@ -279,7 +279,8 @@ class VerifyCliTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "changed"):
             self.solution_refs()
 
-    def supersession_fixture(self, *, argv=None, scope="input", coverage="unit", intent="test"):
+    def supersession_fixture(self, *, argv=None, scope=("input",), coverage="unit", intent="test",
+                             cwd=".", env=None, after_old=None):
         def report(kind, name, payload):
             return E.write_report(self.root, self.run, self.owner, kind, name, payload)
 
@@ -291,8 +292,10 @@ class VerifyCliTests(unittest.TestCase):
                           "dispatch_id": self.review_dispatch("scope_guardian", "planner")})
         argv = argv or [sys.executable, "-B", "-c", "raise SystemExit(3)"]
         old = self.cli("check", "--receipt", self.receipt, "--name", "wrong-command",
-                       "--scope", scope, "--coverage", coverage, "--intent", intent, "--", *argv,
-                       expected=0 if argv == self.check["argv"] else 1)["report"]
+                       "--scope", *scope, "--coverage", coverage, "--intent", intent, "--cwd", cwd,
+                       "--", *argv, expected=1, env=env)["report"]
+        if after_old:
+            after_old()
         new = self.cli("run", "--receipt", self.receipt, "--plan", self.plan, "--id", "unit",
                        "--name", "corrected-command")["report"]
         row = {"obsolete_ref": old, "replacement_ref": new,
@@ -308,7 +311,42 @@ class VerifyCliTests(unittest.TestCase):
         return self.cli("plan-preflight", "--receipt", self.receipt, "--plan", self.plan,
                         "--name", "preview", expected=expected, **kwargs)
 
+    def expanded_runner_fixture(self, *, change_input=True, extra="dependency", **old_options):
+        runner = self.root / "input"
+        fixed = "from pathlib import Path\nraise SystemExit(0 if Path(__file__).with_name('dependency').exists() else 3)\n"
+        runner.write_text("raise SystemExit(3)\n" if change_input else fixed)
+        self.check.update(argv=[sys.executable, "-B", str(runner)], scope=["input", extra])
+
+        def correct_fixture():
+            if change_input:
+                runner.write_text(fixed)
+            (self.root / "dependency").touch()
+
+        return self.supersession_fixture(argv=self.check["argv"], after_old=correct_fixture, **old_options)
+
+    def test_corrected_same_runner_with_expanded_scope_seals(self):
+        payload = self.expanded_runner_fixture()
+        row = payload["supersessions"][0]
+        old = self.root / row["obsolete_ref"]
+        original = old.read_bytes()
+        before = json.loads(original)["payload"]
+        after = E.read_report(self.root, self.run, row["replacement_ref"])["payload"]
+        self.assertEqual([before["exit_code"], after["exit_code"]], [3, 0])
+        for field in ("argv", "cwd", "environment", "intent"):
+            self.assertEqual(before[field], after[field], field)
+        self.assertNotEqual(before["fingerprint"], E.fingerprint(self.root, before["scope"], before["environment"]))
+        self.assertEqual(self.preview(expected=1)["unplanned_checks"], [row["obsolete_ref"]])
+        self.verification_report("corrected-inputs", payload)
+        self.assertEqual(self.cli("qa", "--receipt", self.receipt, "--plan", self.plan,
+                                  "--name", "final")["gate"], "PASS")
+        result = self.cli("finish", "--receipt", self.receipt, "--stopped",
+                          "--stop-evidence", "all fixture executors returned")
+        self.assertTrue(result["delivery_sealed"])
+        self.assertEqual(old.read_bytes(), original)
+
     def test_reviewed_supersession_preserves_evidence_through_finish(self):
+        (self.root / "config").write_text("new dependency")
+        self.check["scope"].append("config")
         payload = self.supersession_fixture()
         row = payload["supersessions"][0]
         old, new = row["obsolete_ref"], row["replacement_ref"]
@@ -338,14 +376,14 @@ class VerifyCliTests(unittest.TestCase):
         self.assertEqual(proof["exit_code"], 3)
         self.assertEqual((self.root / "counter").read_text(), "1")
 
-    def test_authenticated_host_checks_can_share_a_corrected_execution(self):
+    def host_supersession_fixture(self, *, first_command="old-unit"):
         args = self.root, self.run, self.owner
         E.write_report(*args, "progress_feedback", "opening", {"milestone": "start",
                        "messages": [{"text": "🔵 **[进行中]** 核对宿主观察夹具。"}]})
         requirement = E.write_report(*args, "dual_review", "required", {})
         (self.root / "config").write_text("fixture")
-        def observe(name, labels, scope, code):
-            spec = {"command": name, "scope": scope, "coverage": labels,
+        def observe(name, command, labels, scope, code):
+            spec = {"command": command, "scope": scope, "coverage": labels,
                     "environment": {"fixture": "local-host"}, "write_paths": []}
             self.cli("observe-begin", "--receipt", self.receipt, "--id", name, "--json", json.dumps(spec))
             log = name + ".log"
@@ -354,23 +392,31 @@ class VerifyCliTests(unittest.TestCase):
                             "--stop-evidence", "fixture finished", "--log-path", log,
                             "--exit-code", str(code))["report"]
 
-        olds = [observe("old-" + label, [label], ["config", "input"], code)
-                for label, code in (("unit", 1), ("integration", 0))]
-        new = observe("verified", ["integration", "unit"], ["input", "config"], 0)
+        olds = [observe("old-unit", first_command, ["unit"], ["input"], 1),
+                observe("old-integration", "old-integration", ["integration"], ["config", "input"], 0)]
+        (self.root / "input").write_text("corrected")
+        new = observe("verified", "verified", ["integration", "unit"], ["input", "config"], 0)
         proof = E.read_report(self.root, self.run, new)["payload"]
         check = {key: proof[key] for key in ("scope", "coverage", "environment", "intent")}
         self.plan = P.save_plan(*args, "native", {"combined": dict(check, observed_ref=new)})
         solution = E.write_report(*args, "solution_review", "solution", {
             "gate": "PASS", "plan_ref": self.plan, "requirement_ref": requirement,
             "dispatch_id": self.review_dispatch("scope_guardian", "planner")})
-        self.verification_report("combined", {"gate": "PASS", "solution_ref": solution, "checks": [new],
+        return {"gate": "PASS", "solution_ref": solution, "checks": [new],
             "dispatch_id": self.review_dispatch("tester", "tester"), "supersessions": [
                 {"obsolete_ref": old, "replacement_ref": new,
                  "reason": "The corrected host invocation covers both fixture inputs and both checks."}
-                for old in olds]})
+                for old in olds]}
+
+    def test_authenticated_host_checks_can_share_a_corrected_execution(self):
+        self.verification_report("combined", self.host_supersession_fixture())
         self.assertTrue(self.preview()["ready"])
         self.assertEqual(self.cli("qa", "--receipt", self.receipt, "--plan", self.plan,
                                   "--name", "host-final")["gate"], "PASS")
+
+    def test_same_command_host_observation_is_ineligible_for_runner_exception(self):
+        payload = self.host_supersession_fixture(first_command="verified")
+        self.verification_report("host-same-command", payload, expected=2)
 
     def ordinary_release_source(self, *, amendments=True, failed_ancestor=False):
         import release_checks as release
@@ -681,17 +727,44 @@ class VerifyCliTests(unittest.TestCase):
         self.verification_report("recycled-dispatch", payload, expected=2)
         self.assertIn(old, self.preview(expected=1)["unplanned_checks"])
 
-    def test_supersession_requires_same_scope_and_full_old_coverage(self):
+    def test_supersession_rejects_disjoint_scope(self):
         (self.root / "other").write_text("different")
-        payload = self.supersession_fixture(scope="other")
+        payload = self.supersession_fixture(scope=["other"])
         self.verification_report("wrong-scope", payload, expected=2)
+
+    def test_supersession_rejects_narrower_scope(self):
+        (self.root / "config").write_text("old dependency")
+        payload = self.supersession_fixture(scope=["input", "config"])
+        self.verification_report("narrowed", payload, expected=2)
+
+    def test_scope_expansion_alone_cannot_attest_same_runner(self):
+        (self.root / "unrelated").write_text("unchanged")
+        payload = self.expanded_runner_fixture(change_input=False, extra="unrelated")
+        row = payload["supersessions"][0]
+        before = E.read_report(self.root, self.run, row["obsolete_ref"])["payload"]
+        after = E.read_report(self.root, self.run, row["replacement_ref"])["payload"]
+        self.assertEqual([before["exit_code"], after["exit_code"]], [3, 0])
+        self.assertNotEqual(before["fingerprint"], after["fingerprint"])
+        self.assertEqual(before["fingerprint"], E.fingerprint(self.root, before["scope"], before["environment"]))
+        result = self.verification_report("unchanged-input", payload, expected=2)
+        self.assertIn("original input scope", result["message"])
+        self.assertEqual(self.preview(expected=1)["unplanned_checks"], [row["obsolete_ref"]])
+
+    def test_corrected_same_runner_requires_original_cwd(self):
+        (self.root / "other").mkdir()
+        payload = self.expanded_runner_fixture(cwd="other")
+        self.verification_report("changed-cwd", payload, expected=2)
+
+    def test_corrected_same_runner_requires_complete_environment(self):
+        payload = self.expanded_runner_fixture(env=self.env | {"FIXTURE_ORIGINAL_ENV": "yes"})
+        self.verification_report("changed-environment", payload, expected=2)
 
     def test_supersession_cannot_drop_old_coverage(self):
         payload = self.supersession_fixture(coverage="integration")
         self.verification_report("wrong-coverage", payload, expected=2)
 
     def test_supersession_rejects_same_executed_command_with_different_intent(self):
-        payload = self.supersession_fixture(argv=self.check["argv"], intent="check")
+        payload = self.expanded_runner_fixture(intent="check")
         self.verification_report("same-command", payload, expected=2)
 
     def test_supersession_does_not_cover_a_later_observation_of_the_old_command(self):
