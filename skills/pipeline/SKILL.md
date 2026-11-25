@@ -56,6 +56,7 @@ description: 对话式研发流水线：描述需求即可按风险开发、测�
 沿用宿主原生的“执行下一步→观察真实结果→修复受影响项”循环，只补本项目需要的约束。按本次目标选一条入口，不把三条串行执行：简单任务主会话直做；复杂任务仅派能提供独立产物/判断的角色；已有成果的提交发布直接承接。已有明确方案不再创建planner，已有同版审查不因阶段变化再审一次。必要独立验收、完整检查与授权门禁继续保留。
 
 1. 读取项目根 `PIPELINE.md`。不存在或关键字段仍是占位符时，按 interaction.md 自动接入并继续原需求；不把填写模板交给用户。已有契约只补必要缺项，保留用户规则。
+   同时包含常规实现与权限、支付或生产发布等高风险改动时，首次任务定级前按[混合风险工作](references/model-routing.md#混合风险工作先定边界)判断能否独立验收，再确定开发分工与模型。
 2. 若 `tmp/pipeline/.active` 存在或 state 显示未完成，先处理续跑/新开，禁止同项目并行两条流水线。有Python时标准直通优先使用scripts/pipeline_cli.py的paths/start/check/report/finish（例见standard.md），不为调用接口读取内部源码。读契约并确认锁归属后尽早start，再做业务扫描，使准备阶段进入真实计时。保存start返回的私有receipt路径，不打印其内容或自动认领别人的active；新CLI start默认启用规则版本门禁：先读取本轮适用规则，再按返回revision执行policy-ack，确认后才启动检查或派发；当前任务固定已确认的共享skill规则，共享指导更新留到新task前确认；项目契约变化或规则损坏仍立即阻断，不重启run或重做有效检查。旧run的历史采用状态保持unknown，CLI开启新task前也须显式确认升级，详见standard.md。复杂状态/恢复才读[本地状态接口](references/operations.md)。真实状态位于runs/<run_id>.json，不并行维护state.md。无Python保留旧格式；收口确认执行者停止后只清自己的标记。
    `start` 和 `task-start` 返回 `supervision`。本会话调度员在首次正式派发前发送并登记带固定图标和加粗状态标签的开工消息，核对任务分工和角色派发。进入验证以及返回 QA 时查看自动返回的 `supervision`，在本会话处理证据缺口，按宿主实际事件核对派发和型号。只记录实际可核实的事件，无法核实的内容报告为待核实。详见[可见进度](references/progress.md)。
    阶段或执行/测试/人工等待/角色等待/交接实际改变时更新stage/activity，同时更新已知的 pending/next，脚本自动保存状态与事件。跨 Agent 接手用 handoff-read 读取已落盘状态，关键取舍可用 handoff-save 补记，详见运行与恢复；查询和监控不制造事件，不反推旧记录缺失的耗时。

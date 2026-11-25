@@ -19,6 +19,8 @@ python3 -B <runner> allocation-decide --project <root> --receipt <receipt> \
 
 新标记上的developer begin必须关联已决定的`work_item="module-a"`，续用别名须与计划一致；accepted也按该别名登记。未评估、重复派发、依赖未返回或写入归属冲突时拒绝。计划本身不会启动agent；真实调用仍执行下述begin→宿主工具→accepted→complete。旧任务没有标记时保持unknown；直接调用未接入的宿主工具不受此门禁拦截。直接任务的决策是流程要求，此入口不拦截任意文件写入，也不新增QA豁免。
 
+混合风险任务在定级和分工时按[模型路由](model-routing.md#混合风险工作先定边界)判断可独立验收的部分。`work_item`记录开发归属及依赖，已定级的高风险任务仍按任务校验全部开发派发的路由。
+
 ## 记录真实边界
 
 按需专家指导须先按[专家短诊断](expert-advice.md)准备当前case，再给planner/scope_guardian的begin传`advice_case=<case_id>`。它在同一归属锁内检查同根因一次、本任务两次的占位上限；prepare不等于请求，begin不等于宿主已启动。没有该参数的旧派发保持兼容，不能据此宣称所有高阶调用都被机器拦截。
