@@ -372,6 +372,63 @@ class ManagedQaTests(unittest.TestCase):
         self.assertEqual(self.payload(pending)["gate"], "CONCERNS")
         self.assertEqual(self.finish()["status"], "completed")
 
+    def test_reviewed_amendment_keeps_failed_ancestor_and_accepts_current_same_check(self):
+        spec = self.spec | {"argv": [sys.executable, "-B", "-c",
+            "from pathlib import Path; raise SystemExit(Path('input').read_text() != 'fixed')"]}
+        old, solution = self.reviewed_plan({"unit": spec})
+        R.update(*self.args, {"stage": "implementation"})
+        failed = P.run_planned(*self.args, old, "unit", "original-failure")
+        self.assertEqual(failed["exit_code"], 1)
+        (self.root / "input").write_text("fixed")
+        new = P.save_plan(*self.args, "strengthened", {"unit": spec | {"coverage": ["unit", "extra"]}})
+        leaf = self.review_report("solution_review", "amended-same-check", {
+            "gate": "PASS", "dispatch_id": self.review_dispatch("scope_guardian", "amender"),
+            "requirement_ref": self.payload(solution)["requirement_ref"], "amends": solution, "plan_ref": new})
+        P.run_planned(*self.args, new, "unit", "repaired")
+        self.verified_refs(leaf, P.inspect_plan(*self.args, new)["checks"])
+        self.assertEqual(self.payload(P.qa_from_plan(*self.args, new, "repaired-qa"))["gate"], "PASS")
+        required, _ = Q.release_source_scope(self.root, R.status(self.root)["state"])
+        self.assertTrue({"unit", "extra"} <= required)
+        self.assertEqual(self.payload(failed["report"])["exit_code"], 1)
+        self.check("newer-failure", argv=spec["argv"][:-1] + ["raise SystemExit(1)"])
+        with self.assertRaises(ValueError):
+            Q.release_source_scope(self.root, R.status(self.root)["state"])
+
+    def _ancestor_environment_case(self, original_env, leaf_env, repair):
+        (self.root / "source").mkdir()
+        (self.root / "source/main.py").write_text("fixture")
+        (self.root / "source/__pycache__").mkdir()
+        (self.root / "source/__pycache__/main.cpython-313.pyc").write_bytes(b"initial cache")
+        (self.root / "input").write_text("fixture" if repair else "fixed")
+        marker = self.root / "unscoped-marker"
+        marker.touch()
+        spec = self.spec | {"scope": ["input", "source"], "environment": original_env,
+            "argv": [sys.executable, "-B", "-c", "from pathlib import Path; raise SystemExit(Path('unscoped-marker').exists() or Path('input').read_text() != 'fixed')"]}
+        old, solution = self.reviewed_plan({"unit": spec})
+        R.update(*self.args, {"stage": "implementation"})
+        self.assertEqual(P.run_planned(*self.args, old, "unit", "failed")["exit_code"], 1)
+        marker.unlink()
+        if repair:
+            (self.root / "input").write_text("fixed")
+        else:
+            (self.root / "source/__pycache__/main.cpython-313.pyc").write_bytes(b"excluded cache")
+        new = P.save_plan(*self.args, "leaf", {"unit": spec | {"environment": leaf_env}})
+        leaf = self.review_report("solution_review", "leaf-review", {
+            "gate": "PASS", "dispatch_id": self.review_dispatch("scope_guardian", "amender"),
+            "requirement_ref": self.payload(solution)["requirement_ref"], "amends": solution, "plan_ref": new})
+        P.run_planned(*self.args, new, "unit", "leaf-check")
+        self.verified_refs(leaf, P.inspect_plan(*self.args, new)["checks"])
+        self.assertEqual(self.payload(P.qa_from_plan(*self.args, new, "leaf-qa"))["gate"], "PASS")
+        with self.assertRaisesRegex(ValueError, "source plan acceptance is incomplete"):
+            Q.release_source_scope(self.root, R.status(self.root)["state"])
+
+    def test_changed_input_does_not_erase_failed_ancestor_on_different_target(self):
+        self._ancestor_environment_case({"release_target": "production"}, {"release_target": "staging"}, True)
+
+    def test_python_cache_is_not_repaired_declared_source(self):
+        self._ancestor_environment_case({"pipeline_input_profile": "python_source"},
+                                        {"pipeline_input_profile": "python_source"}, False)
+
     def test_amendment_cannot_drop_a_check_even_when_coverage_labels_match(self):
         _, solution = self.reviewed_plan({"unit": self.spec, "independent": self.spec})
         new = P.save_plan(*self.args, "reduced", {"unit": self.spec})
@@ -741,6 +798,20 @@ class ManagedQaTests(unittest.TestCase):
             self.finish()
         P.qa_from_plan(*self.args, plan, "revalidated")
         self.assertEqual(self.finish()["status"], "completed")
+
+    def test_source_qa_refresh_separates_registered_release_phases_from_unplanned_source(self):
+        plan = P.save_plan(*self.args, "source", {"unit": self.spec})
+        P.run_planned(*self.args, plan, "unit", "source-unit")
+        F.prepare(*self.args)
+        phase = F.execute(*self.args, "preflight", phase="preflight", **(self.spec | {
+            "argv": [sys.executable, "-B", "-c", "print('live phase fixture')"], "coverage": []}))
+        self.assertTrue(phase["release_accepted"])
+        refreshed = P.qa_from_plan(*self.args, plan, "refreshed")
+        self.assertEqual(self.payload(refreshed)["gate"], "PASS")
+        self.check("unplanned-source", argv=[sys.executable, "-B", "-c", "print('extra source')"])
+        rejected = P.qa_from_plan(*self.args, plan, "unplanned")
+        self.assertEqual(self.payload(rejected)["gate"], "CONCERNS")
+        self.assertIn("unplanned_checks", self.payload(rejected)["check_failures"])
 
     def test_multiple_identities_or_categories_require_plan(self):
         one = self.check()
