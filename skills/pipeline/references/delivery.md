@@ -18,6 +18,8 @@
 
 分阶段发布一次读取 `release_checks status` 的 `next_action` 和缺项。已有有效候选且预检齐全时进入 `activate`，已切换时只补线上回读或封存。两步都将最终验收时记录的候选 ID 传给 `expected_candidate_id`，直接续用该产物。如果候选缺失或不一致，按 `release_candidate_missing_or_changed` 核对原验收引用与候选状态。项目声明需要上线前新鲜现场证据时照常执行，真正的切换入口仍核验候选、权限、待处理阻断和复核证据。单体发布沿用项目原入口，已执行的证据走计划 `qa` 收口。
 
+切流和线上回读完成后，`status` 会核对当前发布验收证据。`next_action=inspect_closeout` 时读取 `closeout_reason`。首次收口返回 `acceptance_evidence_incomplete` 表示仍缺有效证据；已有收口返回 `closeout_evidence_invalid` 表示原记录未通过当前复核。`closeout_detail` 指出应先核查的部分，如 `source_qa` 对应源码与历史 QA，`release_coverage` 对应发布覆盖项。补齐实际缺项后再查状态。首次具备收口条件时执行 `closeout`，已有 PASS 收口通过当前复核时才建议 `finish`。`status` 仅读取证据。
+
 ## 开发前核对发布可行性
 
 本轮同时负责高风险开发与生产上线时，主调度员在首次开发派发前沿现有发布入口做一次短检查，在现有方案记录结果、证据与缺项：

@@ -11,7 +11,7 @@ import run_state as R
 
 
 def _observation(root, state, ref, snapshot):
-    report = Q._read(root, state, ref, "check")
+    report = Q._read(root, state, ref, "check", snapshot)
     proof = report["payload"]
     labels = E.coverage_labels(proof.get("coverage"))
     if (not Q._current(report, state) or proof.get("inherited_from")
@@ -43,9 +43,9 @@ def _judgment(root, state, reports, plan_ref, snapshot, registering):
     ref, report = reports[-1]
     judgment = report["payload"]
     planners = []
-    chain = Q.solution_chain(root, state, guardians=planners)
+    chain = Q.solution_chain(root, state, guardians=planners, snapshot=snapshot)
     if ("run_policy" not in state or judgment.get("gate") != "PASS" or not chain
-            or Q._plans(root, state)[-1] != plan_ref or chain[-1][1]["payload"]["plan_ref"] != plan_ref
+            or Q._plans(root, state, snapshot)[-1] != plan_ref or chain[-1][1]["payload"]["plan_ref"] != plan_ref
             or judgment.get("solution_ref") != chain[-1][0]):
         raise ValueError("supersession requires the current independent solution and reviewed plan")
     requirement = chain[-1][1]["payload"]["requirement_ref"]
@@ -54,10 +54,10 @@ def _judgment(root, state, reports, plan_ref, snapshot, registering):
         pinned.append(ref)
     if any(state.get("review_digests", {}).get(path) != P._cached_digest(root, path, snapshot) for path in pinned):
         raise ValueError("supersession requires registered digests for the independent reviews")
-    result = P.inspect_state(root, state["run_id"], state["owner_token"], plan_ref, state, snapshot=snapshot)
+    result = P._inspect_snapshot(root, state, plan_ref, snapshot)
     if judgment.get("checks") != result["checks"]:
         raise ValueError("supersession verification must bind the current ordered checks")
-    earliest = max([chain[-1][1]["recorded_at"], *(Q._read(root, state, path, "check")["recorded_at"]
+    earliest = max([chain[-1][1]["recorded_at"], *(Q._read(root, state, path, "check", snapshot)["recorded_at"]
                     for path in result["checks"]), *(prior["recorded_at"] for _, prior in reports[:-1])],
                    key=R._timestamp)
     tester = Q._review_executor(state, reports, "tester", earliest)
@@ -118,7 +118,7 @@ def _validate(root, state, reports, plan_ref, raw, snapshot, *, registering=Fals
             exit_code = binding["result"].get("exit_code")
             if type(exit_code) is not int or exit_code != 0:
                 raise ValueError("replacement binding conflicts with the original successful observation")
-            recorded = Q._read(root, state, path, "planned_check")["recorded_at"]
+            recorded = Q._read(root, state, path, "planned_check", snapshot)["recorded_at"]
             if R._timestamp(recorded) > review_start:
                 raise ValueError("replacement plan binding must be registered before independent review")
             bindings[path] = P._cached_digest(root, path, snapshot)
@@ -143,7 +143,7 @@ def approved(root, state, plan_ref, raw, snapshot):
     registry = state.get("supersession_reviews", {})
     if not registry:
         return {}
-    reports = Q._review_reports(root, state, "verification_review")
+    reports = Q._review_reports(root, state, "verification_review", snapshot)
     if not reports or reports[-1][0] not in registry:
         return {}
     registration = registry[reports[-1][0]]

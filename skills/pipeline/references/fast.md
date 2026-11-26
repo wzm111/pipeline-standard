@@ -4,7 +4,7 @@
 
 仅在父级 `SKILL.md` 的全部 fast 条件满足时使用。
 
-1. 读取项目契约后用现有 CLI start --compact 创建最小 run，保存返回的 receipt；读取本轮规则并 policy-ack 后继续。不另建 state.md、手写计划文档或角色交接文件。
+1. 读取项目契约并核对活动 run 的归属。新建低风险 fast 任务时，按真实判断填写 `reason` 并执行 `python3 "$runner" start --project "$root" --review-risk low --review-reason "$reason" --stage review --compact`。CLI 创建归属标记和最小 run，保存返回的私有 receipt 路径，读取本轮规则并用返回的 `policy.revision` 执行 `policy-ack`。已有 run 按原归属续跑。完整命令见[直通调用](standard.md#直通调用由智能体执行)。
 2. 当前 agent 在会话内明确目标、允许文件、验收、快速命令和禁区；无需变更卡文件、手写 plan 文档或角色交接包；收口入口可内部登记机器检查计划。
 3. 当前 agent 读取 developer 角色规则，直接实现并实际运行定向验证；上下文路径要求仅适用于委派，无需创建 developer 子 agent。
    实际涉及 UI 时先用[UI 设计与现有视觉基线](visual.md)，自动选用适用的已可用设计 skill 并保留真实视觉自查；无需用户补截图、手动配置或额外设计角色。

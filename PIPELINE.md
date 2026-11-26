@@ -10,7 +10,7 @@ Python 标准库、Shell、Markdown；保持 Claude/Codex 双端兼容。配置�
 
 ## ③ 测试命令
 
-在项目根执行受影响 tests/test-*.py（PYTHONDONTWRITEBYTECODE=1），以及相关 Shell 冒烟测试。终验运行全部 Python 测试、bash tests/test-codex-smoke.sh、bash -n install.sh init-project.sh hooks/pipeline-guard.sh、git diff --check。真实模型/外部项目试点与本地测试分开记录，不可相互替代。
+在项目根执行受影响 tests/test-*.py（PYTHONDONTWRITEBYTECODE=1），以及相关 Shell 冒烟测试。终验运行 `bash tests/run-all.sh`，覆盖全部 Python 测试、Codex 隔离冒烟、安装与初始化脚本及两个 hook 的逐文件 Shell 语法检查，以及 `git diff --check`。真实模型/外部项目试点与本地测试分开记录，不可相互替代。
 
 修改 Skill 的触发条件或入口时，选一条应该进入该流程的请求和一条语义相近、应该走其他流程的请求，核对选中的入口、需要读取的指引及用户指定的停止位置。具备宿主试用条件时在新会话实测并记录观察结果。仅完成文档走查时，记录实际宿主触发待验。
 

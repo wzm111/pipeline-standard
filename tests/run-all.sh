@@ -8,5 +8,7 @@ for test_file in tests/test-*.py; do
   PYTHONDONTWRITEBYTECODE=1 python3 "$test_file"
 done
 bash tests/test-codex-smoke.sh
-bash -n install.sh init-project.sh hooks/pipeline-guard.sh
+for script in install.sh init-project.sh hooks/pipeline-guard.sh hooks/pipeline-progress-session.sh; do
+  bash -n "$script"
+done
 git diff --check

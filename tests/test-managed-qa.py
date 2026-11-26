@@ -732,7 +732,7 @@ class ManagedQaTests(unittest.TestCase):
         plan = P.save_plan(*self.args, "plan", {"unit": self.spec})
         solution = report("solution_review", "solution", {
             "gate": "PASS", "requirement_ref": requirement, "plan_ref": plan,
-            "dispatch_id": dispatch("scope_guardian", "expert", "test-expert", "test-expert"),
+            "dispatch_id": dispatch("scope_guardian", "expert", "codex/test-expert", "test-expert"),
         })
         self.assertEqual(PC.assess(self.root, R.status(self.root)["state"])["workflow_issues"]["verification"],
                          "missing_current_verification_stage")
@@ -758,7 +758,7 @@ class ManagedQaTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, issue):
                 T.end(*self.args, "audit")
         report("verification_review", "correct", verification | {
-            "dispatch_id": dispatch("tester", "correct", "test-verifier", None, returned="test-verifier")})
+            "dispatch_id": dispatch("tester", "correct", "codex/test-verifier", None, returned="codex/test-verifier")})
         result = self.cli(*args, "qa-correct")
         self.assertEqual(result["supervision"]["process_compliance"]["gate"], "PASS")
         self.assertEqual(PC.assess(self.root, R.status(self.root)["state"])["gate"], "PASS")
@@ -771,6 +771,46 @@ class ManagedQaTests(unittest.TestCase):
         route["model"] = "test-verifier"
         (self.root / "pipeline.models.json").write_text(json.dumps(configured))
         self.assertEqual(self.finish()["status"], "completed")
+
+    def test_codex_followup_checks_original_native_route_and_current_feedback(self):
+        model = "fixture-model"
+        route = {"scope_guardian": {"model": model, "effort": "high"}}
+        (self.root / "pipeline.models.json").write_text(json.dumps({
+            "schema_version": 1, "runtimes": {"codex": route, "claude": route}}))
+        role = "scope_guardian"
+        native = {"model": "codex/" + model, "reasoning_effort": "high"}
+        create = D.begin(*self.args, role, requested_model=native["model"], requested_effort="high",
+                         native_parameters=native, routing_runtime="codex")
+        D.accepted(*self.args, create["id"], "reviewer", host_executor_id="native-1",
+                   actual_model=model, actual_effort="high")
+        D.complete(*self.args, create["id"], executors_stopped=True, stop_evidence="fixture returned")
+        followup = D.begin(*self.args, role, executor_id="reviewer", requested_model="inherit",
+                           routing_runtime="codex")
+        D.accepted(*self.args, followup["id"], "reviewer", host_executor_id="native-1",
+                   actual_model="codex/" + model, actual_effort="high")
+        D.complete(*self.args, followup["id"], executors_stopped=True, stop_evidence="fixture returned")
+        state = R.status(self.root)["state"]
+        original, current = state["role_dispatches"]
+
+        def issues(source, item):
+            evidence = state | {"role_dispatches": [source, item], "supervision_from": original["requested_at"]}
+            return PC.dispatch_issues(self.root, evidence, {role: [item]})
+
+        self.assertEqual(issues(original, current), {})
+        self.assertEqual(original["native_parameters"], native)
+        self.assertEqual(current["actual_model"], "codex/" + model)
+        for launch_changes, feedback_changes in [
+            ({}, {"actual_model": "other/" + model}), ({}, {"actual_model": "codex/codex/" + model}),
+            ({}, {"actual_model": "codex/different"}), ({}, {"actual_effort": "low"}),
+            ({"native_parameters": native | {"model": model}}, {}), ({"requested_effort": "low"}, {}),
+            ({"host_executor_id": "different"}, {}), ({"routing_runtime": "claude"}, {"routing_runtime": "claude"}),
+        ]:
+            with self.subTest(launch=launch_changes, feedback=feedback_changes):
+                self.assertEqual(issues(original | launch_changes, current | feedback_changes),
+                                 {role: "model_route_mismatch"})
+        for unknown in ("unknown", "codex/unknown", "codex/inherit"):
+            self.assertEqual(issues(original, current | {"actual_model": unknown}),
+                             {role: "missing_actual_model_or_effort"})
 
     def test_plan_canonicalizes_forged_pass_and_keeps_required_union(self):
         other = self.spec | {"coverage": ["other"], "argv": [sys.executable, "-B", "-c", "print('other')"]}

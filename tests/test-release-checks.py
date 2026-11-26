@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -140,7 +141,6 @@ class ReleaseChecksTests(unittest.TestCase):
             "if not Path('permission-ready').exists(): raise SystemExit(22)\n")
 
     def test_early_readiness_runs_only_declared_probe_and_cannot_satisfy_release_gate(self):
-        import subprocess
 
         def early():
             return subprocess.run([sys.executable, "-B", F.__file__, "early-readiness", "--project",
@@ -441,7 +441,9 @@ class ReleaseChecksTests(unittest.TestCase):
         closeout_file = self.root / sealed["report"]
         original = closeout_file.read_bytes()
         closeout_file.write_bytes(original + b" ")
-        next_action("inspect_closeout")
+        invalid = next_action("inspect_closeout")
+        self.assertEqual(invalid["closeout_reason"], "closeout_evidence_invalid")
+        self.assertEqual(invalid["closeout_detail"], "stored_closeout")
         closeout_file.write_bytes(original)
         previous = ready["candidate_id"]
         self.execute("replacement-build", "build",
@@ -450,6 +452,41 @@ class ReleaseChecksTests(unittest.TestCase):
         replacement = next_action("inspect_activated_release")
         self.assertNotEqual(replacement["candidate_id"], previous)
         self.assertFalse(replacement["activated"])
+
+    def test_status_inspects_unreadable_activation_before_and_after_closeout(self):
+        self.prechecks()
+        self.build()
+        activation = self.root / self.activate()["report"]
+        self.smoke()
+        original = activation.read_bytes()
+        candidate = self.plan()["candidate"]["id"]
+        receipt = self.root / "receipt.json"
+        R._atomic(receipt, dict(schema_version=1, project_root=str(self.root),
+                                run_id=self.args[1], owner_token=self.args[2]))
+        for saved in (False, True):
+            if saved:
+                F.closeout(*self.args)
+            for broken in (None, b"{", json.dumps(json.loads(original) | {"payload": []}).encode()):
+                with self.subTest(saved=saved, broken=broken):
+                    if broken is None:
+                        activation.unlink()
+                    else:
+                        activation.write_bytes(broken)
+                    before = R.status(self.root)
+                    result = subprocess.run([sys.executable, "-B", F.__file__, "status", "--project", str(self.root),
+                                             "--receipt", str(receipt)], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    status = json.loads(result.stdout)
+                    self.assertEqual(status["next_action"], "inspect_closeout")
+                    self.assertEqual(status["closeout_reason"], "closeout_evidence_invalid" if saved
+                                     else "acceptance_evidence_incomplete")
+                    self.assertEqual(status["closeout_detail"], "release_coverage")
+                    self.assertTrue(status["activated"])
+                    self.assertEqual(status["candidate_id"], candidate)
+                    self.assertEqual(status["missing_before"], [])
+                    self.assertEqual(R.status(self.root), before)
+                    self.assertEqual(activation.read_bytes() if activation.exists() else None, broken)
+                    activation.write_bytes(original)
 
     def test_fast_release_rejects_a_replacement_before_launch(self):
         self.prechecks()

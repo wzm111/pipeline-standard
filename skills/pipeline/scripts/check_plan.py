@@ -135,11 +135,22 @@ def read_plan(root, run_id, owner, plan_ref):
                       {"reports": {}, "digests": {}})
 
 
+def _cached_report(root, run_id, ref, kind, snapshot):
+    if snapshot is None:
+        return E.read_report(root, run_id, ref, kind=kind)
+    if "positions" in snapshot and ref not in snapshot["positions"]:
+        raise ValueError("report is outside this artifact snapshot")
+    reports = snapshot["reports"]
+    if ref not in reports:
+        reports[ref] = E.read_report(root, run_id, ref, kind=kind)
+    report = reports[ref]
+    if kind is not None and report["kind"] != kind:
+        raise ValueError("report kind mismatch")
+    return report
+
+
 def _report(root, run_id, ref, kind, snapshot):
-    key = (ref, kind)
-    if key not in snapshot["reports"]:
-        snapshot["reports"][key] = E.read_report(root, run_id, ref, kind=kind)["payload"]
-    return snapshot["reports"][key]
+    return _cached_report(root, run_id, ref, kind, snapshot)["payload"]
 
 
 def _cached_digest(root, ref, snapshot):
@@ -281,14 +292,17 @@ def _ordered(checks):
     return ordered
 
 
-def _snapshot(root, run_id, state):
+def _snapshot(root, run_id, state, *, share_files=None):
     # One operation-local index; never reuse across a later execution or QA.
-    snapshot = {"reports": {}, "digests": {}, "bindings": {}, "observations": {},
+    positions = {ref: i for i, ref in enumerate(state["artifacts"])}
+    snapshot = {"reports": {} if share_files is None else share_files["reports"],
+                "digests": {} if share_files is None else share_files["digests"],
+                "bindings": {}, "observations": {},
                 "release_bindings": {(plan, key): ref
                                      for plan, bindings in state.get("planned_release_bindings", {}).items()
-                                     for key, ref in bindings.items()},
-                "release_observations": {},
-                "positions": {ref: i for i, ref in enumerate(state["artifacts"])}}
+                                     for key, ref in bindings.items()
+                                     if share_files is None or ref["path"] in positions},
+                "release_observations": {}, "positions": positions}
     for ref in state["artifacts"]:
         if "/artifacts/planned_check/" in ref:
             p = _report(root, run_id, ref, "planned_check", snapshot)
@@ -555,6 +569,17 @@ def inspect_plan(root, run_id, owner, plan_ref, summary=""):
         result["gate"] = "CONCERNS"
         result["check_failures"]["snapshot"] = "evidence_changed_during_qa"
     return result
+
+
+def _inspect_snapshot(root, state, plan_ref, snapshot):
+    # Only release-source validation opts into sharing a plan inspection.
+    results = snapshot.get("plan_results")
+    if results is None or plan_ref not in results:
+        result = inspect_state(root, state["run_id"], state["owner_token"], plan_ref, state, snapshot=snapshot)
+        if results is None:
+            return result
+        results[plan_ref] = result
+    return results[plan_ref]
 
 
 def inspect_state(root, run_id, owner, plan_ref, state, summary="", *, snapshot=None):

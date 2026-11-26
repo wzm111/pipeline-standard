@@ -4,8 +4,10 @@ import hashlib
 import json
 from pathlib import Path
 import runpy
+import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 fixture = runpy.run_path(str(Path(__file__).with_name("test-plan-verify.py")))
 import check_plan as P
@@ -118,7 +120,14 @@ class RetainedChecksTests(unittest.TestCase):
         self.prepare()
         c = self.case
         state = self.publish("leaf-tester")
-        required, replaced = Q.release_source_scope(c.root, state)
+        with (patch.object(E, "read_report", wraps=E.read_report) as reads,
+              patch.object(P, "_snapshot", wraps=P._snapshot) as snapshots,
+              patch.object(P, "inspect_state", wraps=P.inspect_state) as inspections):
+            required, replaced = Q.release_source_scope(c.root, state)
+        distinct = {call.args[2] for call in reads.call_args_list}
+        self.assertLessEqual(reads.call_count, 2 * len(distinct))
+        self.assertEqual(snapshots.call_count, 2)  # current state and the independent historical prefix
+        self.assertEqual(sum(call.args[3] == self.leaf for call in inspections.call_args_list), 1)
         self.assertIn("unit", required)
         self.assertEqual(replaced, {})
         F.execute(*self.args, "build", phase="build", scope=["input"], artifact_paths=["artifact"],
@@ -126,8 +135,39 @@ class RetainedChecksTests(unittest.TestCase):
         F.execute(*self.args, "activate", phase="activate", scope=["input"], argv=[sys.executable, "-c", "print(1)"])
         F.execute(*self.args, "smoke", phase="smoke", scope=["input"], coverage=["release_identity"],
                   argv=[sys.executable, "-c", "print(2)"])
+        def status(action, reason=None, detail=None):
+            def files():
+                return {path: path.read_bytes() for path in c.root.rglob("*") if path.is_file()}
+            before = files()
+            outcome = subprocess.run([sys.executable, "-B", F.__file__, "status", "--receipt", c.receipt],
+                                     cwd=c.root, env=c.env, capture_output=True, text=True, check=True)
+            actual = json.loads(outcome.stdout)
+            self.assertTrue(actual["activated"])
+            self.assertEqual((actual["next_action"], actual.get("closeout_reason"), actual.get("closeout_detail")),
+                             (action, reason, detail))
+            self.assertEqual(before, files())
+
+        self.publish("missing-attestation", ancestor_qa=[])
+        status("inspect_closeout", "acceptance_evidence_incomplete", "source_qa")
+        self.publish("complete-attestation")
+        status("closeout")
+
+        write = E.write_report
+        def change_after_qa_write(*args, **kwargs):
+            report = write(*args, **kwargs)
+            (c.root / self.qa).write_bytes(self.original + b" ")
+            return report
+        with patch.object(E, "write_report", side_effect=change_after_qa_write):
+            with self.assertRaisesRegex(ValueError, "ancestor QA"):
+                F.closeout(*self.args)
+        self.assertNotIn("closeout", R.status(c.root)["state"]["release_plan"])
+        (c.root / self.qa).write_bytes(self.original)
         closed = F.closeout(*self.args)
         self.assertEqual(E.read_report(c.root, c.run, closed["report"])["payload"]["gate"], "PASS")
+        status("finish")
+        (c.root / self.qa).write_bytes(self.original + b" ")
+        status("inspect_closeout", "closeout_evidence_invalid", "source_qa")
+        (c.root / self.qa).write_bytes(self.original)
         self.assertTrue(c.cli("finish", "--receipt", c.receipt, "--stopped",
                               "--stop-evidence", "fixture returned")["delivery_sealed"])
         self.assertEqual((c.root / self.qa).read_bytes(), self.original)

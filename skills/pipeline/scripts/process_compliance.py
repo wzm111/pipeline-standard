@@ -12,6 +12,15 @@ def _current_dispatches(state):
             if item.get("accepted_at") and R._timestamp(item["requested_at"]) >= since]
 
 
+def _model_id(runtime, model):
+    # Codex can return a single provider prefix. Keep the recorded evidence intact.
+    if runtime == "codex" and isinstance(model, str) and model.startswith("codex/"):
+        name = model[len("codex/"):]
+        if name and "/" not in name:
+            return name
+    return model
+
+
 def dispatch_issues(root, state, required):
     dispatches = _current_dispatches(state)
     issues = {}
@@ -41,7 +50,8 @@ def dispatch_issues(root, state, required):
             except (OSError, ValueError, TypeError, KeyError):
                 issues[role] = "invalid_host_observation"
                 break
-            if actual[0] in {None, "unknown", "inherit"} or (
+            actual_model = _model_id(runtime, actual[0])
+            if actual_model in {None, "unknown", "inherit"} or (
                     expected.get("effort") and actual[1] in {None, "unknown", "inherit"}):
                 issues[role] = "missing_actual_model_or_effort"
                 break
@@ -62,8 +72,10 @@ def dispatch_issues(root, state, required):
                                and R._timestamp(prior["completed_at"]) <= R._timestamp(item["accepted_at"])), {})
             native = source.get("native_parameters", {})
             native_effort = native.get("reasoning_effort", native.get("effort"))
-            if (source.get("requested_model") != expected["model"] or native.get("model") != expected["model"]
-                    or actual[0] != expected["model"] or (expected.get("effort") and
+            requested = source.get("requested_model")
+            expected_model = _model_id(runtime, expected["model"])
+            if (requested != native.get("model") or _model_id(runtime, requested) != expected_model
+                    or actual_model != expected_model or (expected.get("effort") and
                     any(value != expected["effort"] for value in
                         (source.get("requested_effort"), native_effort, actual[1])))):
                 issues[role] = "model_route_mismatch"

@@ -30,7 +30,7 @@
 
 以下启动/清理规则仅用于研发 run；设置、帮助与状态查询按 interaction.md，不创建或移除已有锁。
 
-1. 开始前读取项目根 `PIPELINE.md` 并创建 `.active` 标记；只有 standard/thorough 初始化完整 state.md，fast 正常运行不创建。base 来源指纹未变时复用，不重复总结。
+1. 读取项目根 `PIPELINE.md` 并核对活动 run 的归属。新任务通过 `python3 "$runner" start --project "$root" --review-risk "$risk" --review-reason "$reason" --stage review --compact` 登记真实风险及依据。CLI 管理 `.active` 与 `runs/<run_id>.json`。保存返回的私有 receipt 路径，读完适用规则后用返回的 `policy.revision` 执行 `policy-ack`。已有 run 按原归属续跑。完整命令见[直通调用](standard.md#直通调用由智能体执行)。base 来源指纹未变时复用。
 2. 每次写入前对照已读的 `PIPELINE.md` ⑤ 节校验范围；契约变化或上下文缺失时重读，不必每次从磁盘重读。不在允许范围内时停下交由用户裁决。
    高风险任务写项目文件前，按[实施门禁](review.md#记录与门禁)调用 `write-preflight`。撰写方案和只读审查继续使用各自入口。
 3. Codex 没有本仓库 Claude hook 的 `PreToolUse` 等价配置。新CLI规则版本及检查/验收门禁由已接入脚本执行，旧run采用未知；项目写边界和聊天反馈仍是强制流程步骤，不是不可绕过的工具级阻断；在最终报告中如实说明该差异。

@@ -2,6 +2,7 @@
 
 Callers supply authorized project commands. Live observations are never cached.
 """
+from contextlib import contextmanager
 from copy import deepcopy
 import argparse
 import hashlib
@@ -59,6 +60,16 @@ class PreflightIncomplete(ValueError):
 
 class CandidateUnavailable(ValueError):
     pass
+
+
+@contextmanager
+def _closeout_detail(category):
+    """Keep the original gate error and provide a fixed category to read-only status."""
+    try:
+        yield
+    except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError) as error:
+        error.closeout_detail = category
+        raise
 
 
 def _owned(base, run_id, owner):
@@ -217,7 +228,7 @@ def _coverage_identity(payload):
     return json.dumps([payload.get("command"), payload.get("scope"), payload.get("intent")], sort_keys=True)
 
 
-def _coverage(root, state, required, *, identities=None, excluded=()):
+def _coverage(root, state, required, *, identities=None, excluded=(), status_only=False):
     """Newest failed command blocks older PASS even if its labels differ."""
     sources, seen, blocked = {}, set(), set()
     plan = state.get("release_plan", {})
@@ -234,8 +245,16 @@ def _coverage(root, state, required, *, identities=None, excluded=()):
                    and a["candidate_id"] == candidate_id and a["status"] == "passed"]
     activated_at = None
     if activations:
-        activation = E.read_report(root, state["run_id"], activations[-1]["report"], kind="check")["payload"]
-        activated_at = R._timestamp(activation["finished_at"])
+        try:
+            activation = E.read_report(root, state["run_id"], activations[-1]["report"], kind="check")["payload"]
+            activated_at = R._timestamp(activation["finished_at"])
+        except (OSError, ValueError, KeyError, TypeError):
+            if not status_only:
+                raise
+            # Keep independent precheck/build evidence visible. The activation
+            # and observations ordered after it cannot be confirmed.
+            excluded = {*excluded, activations[-1].get("report")}
+            failed_labels.update(post_labels)
     for path in reversed(state["artifacts"]):
         if "/artifacts/check/" not in path or path in excluded:
             continue
@@ -556,12 +575,14 @@ def _acceptance(root, state, pending):
     replaced = {}
     if "run_policy" in state:
         import managed_qa
-        source_required, replaced = managed_qa.release_source_scope(root, state)
+        with _closeout_detail("source_qa"):
+            source_required, replaced = managed_qa.release_source_scope(root, state)
         required = sorted(set(required) | source_required)
-    coverage = _coverage(root, state, required, excluded=replaced)
-    candidate = _candidate(root, state, coverage)
-    if not _activated(plan, candidate) or not coverage["complete"]:
-        raise ValueError("release acceptance incomplete; fill only missing or invalid checks")
+    with _closeout_detail("release_coverage"):
+        coverage = _coverage(root, state, required, excluded=replaced)
+        candidate = _candidate(root, state, coverage)
+        if not _activated(plan, candidate) or not coverage["complete"]:
+            raise ValueError("release acceptance incomplete; fill only missing or invalid checks")
     if (plan.get("project_activation_gate") or {}).get("readiness_probe"):
         activation = next(a for a in reversed(_effective_attempts(plan))
                           if a["phase"] == "activate" and a["candidate_id"] == candidate["id"])
@@ -576,20 +597,29 @@ def _acceptance(root, state, pending):
               "candidate_id": candidate["id"], "external_pending": pending,
               "scope": "engineering_release; pending external outcomes are not passed"}
     if "run_policy" in state:
-        managed_qa.validate_release_sources(root, state, coverage)
+        with _closeout_detail("release_coverage"):
+            managed_qa.validate_release_sources(root, state, coverage)
         packet["machine_validation"] = {"schema": 1, "mode": "release", "task_started_at": managed_qa.boundary(state)}
     import visual_evidence
     return visual_evidence.apply(root, state, packet)
 
 
 def validate_closeout(root, state):
-    """Called by finish only for an explicitly adopted release plan."""
+    """Recheck the saved release judgment against current acceptance evidence."""
     reference = state.get("release_plan", {}).get("closeout")
     if not reference:
         raise ValueError("release requires one validated closeout before finishing")
-    packet = D._read_reference(Path(root).resolve(strict=True), reference, "qa")
-    if packet.get("gate") != "PASS" or packet != _acceptance(root, state, packet["external_pending"]):
-        raise ValueError("release changed after closeout; revalidate affected evidence")
+    with _closeout_detail("stored_closeout"):
+        if reference["run_id"] != state["run_id"] or reference["path"] not in state["artifacts"]:
+            raise ValueError("release closeout must be registered in this run")
+        packet = D._read_reference(Path(root).resolve(strict=True), reference, "qa")
+        if not isinstance(packet, dict) or packet.get("gate") != "PASS":
+            raise ValueError("release requires a passing closeout")
+        pending = E.coverage_labels(packet["external_pending"])
+    current = _acceptance(root, state, pending)
+    with _closeout_detail("stored_closeout"):
+        if packet != current:
+            raise ValueError("release changed after closeout; revalidate affected evidence")
 
 
 def closeout(root, run_id, owner_token, *, external_pending=None):
@@ -627,7 +657,7 @@ def public_status(root, run_id, owner_token):
     _, base = R._paths(root)
     _, state = _owned(base, run_id, owner_token)
     plan = state.get("release_plan", {})
-    coverage = _coverage(root, state, plan.get("required_before", []))
+    coverage = _coverage(root, state, plan.get("required_before", []), status_only=True)
     candidate = _candidate(root, state, coverage)
     activated = _activated(plan, candidate)
     recovery = _recovery_blocked(root, state)
@@ -636,6 +666,7 @@ def public_status(root, run_id, owner_token):
     attempts = plan.get("attempts", [])
     related = [a for a in _effective_attempts(plan)
                if candidate and a["phase"] == "activate" and a["candidate_id"] == candidate["id"]]
+    detail = None
     from release_blockers import pending
     if state.get("continuity_wait", {}).get("status") == "waiting":
         action = "resolve_human_wait"
@@ -645,6 +676,9 @@ def public_status(root, run_id, owner_token):
         action = "wait_for_running_phase"
     elif not plan:
         action = "prepare"
+    elif activated and not any(ref["path"] == related[-1].get("report")
+                               for ref in coverage["sources"].get("release_activation", [])):
+        action, detail = "inspect_closeout", "release_coverage"
     elif coverage["missing"]:
         action = "fill_missing_prechecks"
     elif not activated and any(a["phase"] == "activate" and a["status"] == "passed" for a in attempts):
@@ -659,21 +693,34 @@ def public_status(root, run_id, owner_token):
         action = "activate"
     elif missing_after:
         action = "smoke"
-    elif plan.get("closeout"):
-        try:
-            closeout = D._read_reference(Path(root).resolve(strict=True), plan["closeout"], "qa")
-            action = ("finish" if closeout.get("gate") == "PASS" and closeout.get("candidate_id") == candidate["id"]
-                      else "inspect_closeout")
-        except (OSError, ValueError, KeyError, TypeError):
-            action = "inspect_closeout"
     else:
-        action = "closeout"
+        saved = "closeout" in plan
+        try:
+            if saved:
+                validate_closeout(root, state)
+                action = "finish"
+            else:
+                current = _acceptance(root, state, [])
+                with _closeout_detail("visual_evidence"):
+                    if current["gate"] != "PASS":
+                        raise ValueError("release visual acceptance incomplete")
+                action = "closeout"
+        except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError) as error:
+            action = "inspect_closeout"
+            detail = getattr(error, "closeout_detail", None)
+            if detail not in ("source_qa", "release_coverage", "stored_closeout", "visual_evidence"):
+                detail = "acceptance_evidence"
+    diagnostic = {}
+    if detail:
+        diagnostic = {"closeout_reason": "closeout_evidence_invalid" if "closeout" in plan else "acceptance_evidence_incomplete",
+                      "closeout_detail": detail}
     return {"run_id": run_id, "prepared": bool(plan),
             "candidate_id": candidate["id"] if candidate else None,
             "activated": activated,
             "missing_before": coverage["missing"],
             "missing_after": missing_after,
             "next_action": action,
+            **diagnostic,
             "recovery_blocked": recovery,
             "attempts": [{k: a[k] for k in ("name", "phase", "status", "reason_code") if k in a}
                          for a in attempts]}

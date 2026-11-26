@@ -96,9 +96,27 @@ Python对应接口：`check_plan.save_plan`、`run_planned`、`qa_from_plan`、�
 
 登记会固定两份报告的 SHA-256。每次预检、QA、激活和收尾都重新核对当前计划与评审、报告、日志及替代检查的可复用性。每条映射只解除所指的旧检查义务，原报告和失败记录仍可查阅。tester 接单前，两次原始执行和替代检查的计划绑定都须已完成登记。重新绑定同一份检查也需新的独立评审。已有绑定可直接用 `qa --plan` 核验。
 
-若已签核的祖先计划曾留下仅含 `unplanned_checks` 的机器 QA `CONCERNS`，当前 tester 可在同一份带有 `supersessions` 的验证报告中，使用 `"ancestor_qa":[{"ref":"<原 QA 完整引用>","sha256":"<原 QA 文件摘要>"}]` 确认已审阅的原件。发布收尾复核原记录当时的检查、专家签核、覆盖项及每项诊断的去向，并要求当前叶子计划 QA 通过。原始 QA 的结论保留。若更早的中间计划从未登记 QA 或方案评审，发布收尾可核对其每个已通过的检查是否按原顺序、相同定义和同一执行引用纳入新计划。只有旧计划当时已满足全部既有要求、缺项全部来自后续新增要求，且新计划已独立验收通过时，才能据此收尾。
+若已签核的祖先计划仅因 `unplanned_checks` 留下机器 QA `CONCERNS`，当前独立 tester 在叶子计划的验证报告中用 `ancestor_qa` 逐份确认涉及的原 QA。命令或范围已纠正时按上文填写 `supersessions`。原检查在相同身份下重跑时用 `retained_checks`，逐项指向原观察和叶子计划中唯一匹配的有效重跑。两次原始执行的命令、范围、环境和观察类型须一致，前一次须已结束，重跑成功且覆盖原要求。两次执行期间输入均须稳定，若原执行失败，还须证明原范围的输入指纹已经变化。两份观察、祖先 QA 与当前计划绑定都须在 tester 接单前登记。
 
+下例对应一个遗留观察、一份祖先 QA 和一个叶子检查。从项目根目录对每份被引用的**原报告文件**执行 `shasum -a 256 "$ref"`，用所得的完整 SHA-256 和运行返回的完整项目相对引用替换示例值。若叶子计划包含多项检查，`checks` 按计划顺序列全。使用当前已完成的独立 tester 派发 ID 和最新方案评审引用。
 
+```sh
+python3 "$runner" report --project "$root" --receipt "$receipt" --kind verification_review --name "$review_name" --json '{
+  "gate": "PASS",
+  "dispatch_id": "<tester dispatch ID>",
+  "solution_ref": "<最新 solution_review 引用>",
+  "checks": ["<叶子计划的重跑 check 引用>"],
+  "retained_checks": [{
+    "obsolete_ref": "<原 check 引用>",
+    "obsolete_sha256": "<原 check 文件摘要>",
+    "replacement_ref": "<叶子计划的重跑 check 引用>",
+    "replacement_sha256": "<重跑 check 文件摘要>"
+  }],
+  "ancestor_qa": [{"ref": "<祖先 QA 引用>", "sha256": "<祖先 QA 文件摘要>"}]
+}'
+```
+
+随后执行当前叶子计划的 `qa --plan`。发布收口按每份祖先 QA 当时已有的检查、绑定和专家签核重新核验，要求独立验收过的叶子计划仍为 PASS。留存配对须恰好覆盖遗留观察，`ancestor_qa` 须恰好覆盖未解决的原 QA，原结论保留。更早的中间计划若从未登记 QA 或方案评审，发布收口可核对其每个已通过的检查是否按原顺序、相同定义和同一执行引用纳入新计划。只有旧计划当时已满足全部既有要求、缺项全部来自后续新增要求，且新计划已独立验收通过时，才能据此收尾。
 
 ## 计划化单体发布的跨进程封存
 
