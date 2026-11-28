@@ -6,7 +6,7 @@
 
 1. 读取项目契约并核对活动 run 的归属。新建低风险 fast 任务时，按真实判断填写 `reason` 并执行 `python3 "$runner" start --project "$root" --review-risk low --review-reason "$reason" --stage review --compact`。CLI 创建归属标记和最小 run，保存返回的私有 receipt 路径，读取本轮规则并用返回的 `policy.revision` 执行 `policy-ack`。已有 run 按原归属续跑。完整命令见[直通调用](standard.md#直通调用由智能体执行)。
 2. 当前 agent 在会话内明确目标、允许文件、验收、快速命令和禁区；无需变更卡文件、手写 plan 文档或角色交接包；收口入口可内部登记机器检查计划。
-3. 当前 agent 读取 developer 角色规则，直接实现并实际运行定向验证；上下文路径要求仅适用于委派，无需创建 developer 子 agent。
+3. 修复现有症状时先走用户实际入口确认当前行为。若当前版本已满足目标并取得所需证据，直接走定向验收收口。发现根因是配置、缓存或旧产物时按当前授权处理对应原因，必要时按原风险条件升级。需要改代码时，当前 agent 读取 developer 角色规则，直接实现并实际运行定向验证；上下文路径要求仅适用于委派，无需创建 developer 子 agent。
    实际涉及 UI 时先用[UI 设计与现有视觉基线](visual.md)，自动选用适用的已可用设计 skill 并保留真实视觉自查；无需用户补截图、手动配置或额外设计角色。
 4. 调度员核对文件范围、验收和自测证据。单项检查沿用下方轻量机器验收，不创建独立 QA 角色或手写 QA 文档；不省略 managed run 的验收记录。符合后输出不超过 8 行的完成摘要与一条 Conventional Commits 建议；不另建 acceptance、release-notes 或 retro。
 5. 发现范围扩张、跨模块耦合/多入口一致性等复杂度信号、依赖/API/安全/部署/自动提交需求，或定向自测失败且不能在原范围内修复时，升级standard（高风险升级thorough）：保留当前run与已有改动，按standard规则自动选择必要角色，不从头重做。
