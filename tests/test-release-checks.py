@@ -431,13 +431,21 @@ class ReleaseChecksTests(unittest.TestCase):
         ready = next_action("activate")
         self.assertTrue(ready["candidate_id"])
         self.assertEqual((self.root / "build-count").read_text(), "1")
-        self.execute("activate", "activate", expected_candidate_id=ready["candidate_id"])
+        self.execute("activate", "activate", [sys.executable, "-c",
+                     "from pathlib import Path; p=Path('activations'); "
+                     "p.write_text((p.read_text() if p.exists() else '') + Path('artifact').read_text() + '\\n')"],
+                     expected_candidate_id=ready["candidate_id"])
         self.assertEqual(next_action("smoke")["missing_after"], ["release_identity", "release_smoke"])
-        self.execute("smoke", "smoke", coverage=["release_identity"], expected_candidate_id=ready["candidate_id"])
+        readback = self.execute("smoke", "smoke", [sys.executable, "-c",
+                                "from pathlib import Path; "
+                                "assert Path('activations').read_text().splitlines() == [Path('artifact').read_text()]"],
+                                coverage=["release_identity"], expected_candidate_id=ready["candidate_id"])
+        self.assertTrue(readback["release_accepted"])
         self.assertEqual((self.root / "build-count").read_text(), "1")
         next_action("closeout")
         sealed = F.closeout(*self.args)
         next_action("finish")
+        self.assertEqual((self.root / "activations").read_text().splitlines(), ["verified-output"])
         closeout_file = self.root / sealed["report"]
         original = closeout_file.read_bytes()
         closeout_file.write_bytes(original + b" ")
